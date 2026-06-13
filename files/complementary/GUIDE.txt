@@ -1,0 +1,653 @@
+================================================================================
+  QEMU/KVM + OLLAMA VM MANAGER  —  COMPLETE GUIDE  (v5)
+================================================================================
+
+FILES IN THIS PROJECT
+─────────────────────
+  qemu_config.py      Configuration dataclasses, hardware profiles, OVMF detection
+  qemu_manager.py     VM lifecycle engine: create, launch, monitor, QMP, networking
+  ollama_wrapper.py   AI interface, sanitiser, pre-flight validator, HTTP validator
+  test_api.py         5-layer automated test suite (v5)
+  install.sh          One-command installer / uninstaller
+  requirements.txt    Python dependencies (requests, psutil, rich)
+  GUIDE.txt           This file
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — QUICK START
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1.1  ONE-COMMAND INSTALL
+─────────────────────────
+  cd ~/path/to/qemu-api
+  bash install.sh
+
+  Handles automatically:
+  - apt packages    qemu-kvm, qemu-utils, ovmf, virt-viewer, socat, cpu-checker
+  - KVM group membership
+  - Python venv     ~/qemu-env  with requests, psutil, rich
+  - Ollama install + qwen2.5:7b model pull
+  - systemd user service  (Ollama auto-starts on login)
+  - Bridge networking config   /etc/qemu/bridge.conf
+  - zsh alias       qemu-api
+  - Self-test
+
+  To uninstall:  bash install.sh --uninstall
+
+1.2  MANUAL SETUP
+──────────────────
+  sudo apt install qemu-kvm qemu-utils ovmf virt-viewer socat python3-venv
+  python3 -m venv ~/qemu-env
+  source ~/qemu-env/bin/activate
+  pip install requests psutil rich
+
+  Add to ~/.zshrc:
+    source ~/qemu-env/bin/activate
+    export OLLAMA_MODEL=qwen2.5:7b
+    alias qemu-api='python3 ~/path/to/ollama_wrapper.py'
+
+  Start Ollama:
+    curl -fsSL https://ollama.com/install.sh | sh
+    ollama serve &
+    ollama pull qwen2.5:7b
+
+1.3  RUN
+─────────
+  qemu-api               AI chat mode
+  qemu-api -v            Verbose (shows raw tool calls and sanitised args)
+  qemu-api -cu           Custom machine mode (skip product verification)
+  qemu-api list          Direct CLI, no AI
+  qemu-api system        Check system capabilities
+  qemu-api -tf <name>    Fingerprint report on a VM
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — ARCHITECTURE OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every request passes through five protection layers before QEMU sees it:
+
+  User Input
+      │
+      ▼
+  qwen2.5:7b (Ollama)        Selects tool, builds args
+      │
+      ▼
+  _sanitise_args()           Type coercion, enum normalisation, path fixing,
+                             placeholder removal, resource caps, arch checks
+      │
+      ▼
+  _preflight_check()         Reality check: ok / auto_fix / ask_user / abort
+  + _validate_with_internet  QEMU binary check, CPU arch check, product lookup
+  + _validate_profile_for_host  Profile vs host capability check
+      │
+      ▼
+  execute_tool()             Hard guards: arch mismatch, name validation,
+                             Windows UEFI enforcement, clarify responses
+      │
+      ▼
+  QemuManager                Actual QEMU/KVM operations
+
+Even if the AI hallucinates bad args, they are caught and either silently
+corrected or the user is asked before anything dangerous happens.
+
+Current test results (213 tests, seed=42):
+  Layer 1 — Sanitiser:       55/55  (100%)
+  Layer 2 — Executor:        23/23  (100%)
+  Layer 3 — AI Integration:  17/19  ( 89%) — 2 known test expectation issues
+  Layer 4 — Profile + HTTP:  98/100 ( 98%) — 2 edge cases in broken profiles
+  Layer 5 — Property-Based:   5/5   (100%)
+  Overall:                  207/213 ( 97.2%)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — NEW FLAGS  (-cu  and  -tf)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3.1  -cu  CUSTOM MACHINE MODE
+───────────────────────────────
+  Usage:  qemu-api -cu
+
+  Starts the AI chat with product verification disabled. Allows you to create
+  VMs with any manufacturer/product_name combination — including fictional
+  hardware that doesn't exist in the real world.
+
+  What it disables:
+  - DuckDuckGo product lookup (manufacturer + product_name no longer verified)
+  - Memory plausibility check (no warning if RAM exceeds product's real max)
+
+  What still runs:
+  - QEMU machine type and CPU model checks (local binary queries)
+  - ARM/x86 architecture consistency checks
+  - All other pre-flight validators
+  - Sanitiser (still corrects bad args)
+
+  Use cases:
+  - Creating test environments with fictional hardware names
+  - Research VMs that don't need to match real product specs
+  - Avoiding DuckDuckGo API calls in air-gapped environments
+
+  Example:
+    qemu-api -cu
+    You: create a VM called lab-01 with manufacturer "AcmeCorp" and
+         product "SuperServer 9000", 16GB RAM
+
+  The AI's system prompt also notes custom mode is active so it won't
+  warn you about unverifiable hardware names.
+
+3.2  -tf  FINGERPRINT REPORT
+───────────────────────────────
+  Usage:  qemu-api -tf <vmname>
+
+  Read-only analysis of a VM's configuration. Simulates exactly what
+  inxi -M -N -C -D -A -G would report from inside the guest OS, then
+  checks each field against known VM fingerprint signatures.
+
+  What inxi sections it simulates:
+    inxi -M  System manufacturer, product name, BIOS vendor, BIOS version,
+             serial number, chassis type (all from SMBIOS/DMI tables)
+    inxi -N  MAC address OUI prefix, NIC driver type
+    inxi -C  Hypervisor flag in /proc/cpuinfo, CPU model string
+    inxi -D  Disk interface name (vda/vdb), disk model string
+    inxi -A  Audio chip device ID
+    inxi -G  GPU driver type
+
+  Each field is rated:
+    clean      — looks like real hardware, not a VM indicator
+    detectable — some fingerprinting tools may flag this
+    VM tell    — immediately identifies this as a virtual machine
+
+  Output includes:
+  - Per-section table matching inxi output format
+  - Score: percentage of fields that look like real hardware
+  - Recommendations panel listing what to fix first
+
+  Example output:
+    inxi -M  System manufacturer  Dell Inc.         clean
+             System product        XPS 15 9520       clean
+             BIOS vendor           (not set)         detectable
+             BIOS version          (not set)         detectable
+             Serial number         (not set)         detectable
+             Chassis type          (not set)         detectable
+    inxi -N  MAC OUI prefix        52:54:00          VM tell
+             NIC driver            virtio-net-pci    detectable
+    inxi -C  Hypervisor flag       KVM (kvm=True)    detectable
+             CPU model string      host (real CPU)   clean
+    inxi -D  Disk interface        virtio-blk        detectable
+             Disk model string     QEMU HARDDISK     VM tell
+    inxi -A  Audio chip            Intel HDA (hda)   detectable
+    inxi -G  GPU driver            virtio-gpu        VM tell
+
+    Score: 28% look like real hardware (2 clean · 6 detectable · 5 VM tells)
+
+  This tool INFORMS only — it never modifies the VM config.
+  Use it to understand what a detection tool would see inside your VM.
+
+  Known VM tells and how to reduce them:
+  - MAC OUI 52:54:00   → set mac_address to a non-QEMU OUI
+  - QEMU HARDDISK      → add model= and serial= to extra_args
+  - virtio-gpu         → use vga or std display instead
+  - virtio-net         → use e1000 network model (less detectable)
+  - BIOS vendor/ver    → set bios_vendor and bios_version in config
+  - KVM flags          → set kvm=False (loses performance)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — qemu_config.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4.1  OVMF AUTO-DETECTION
+─────────────────────────
+  Searches all known install paths across distros.
+  On modern Mint/Ubuntu the only VARS file is OVMF_VARS_4M.fd.
+  Search order now prefers _4M variants first:
+    /usr/share/OVMF/OVMF_VARS_4M.fd    searched FIRST on Mint
+    /usr/share/OVMF/OVMF_VARS.fd
+    /usr/share/edk2-ovmf/x64/OVMF_VARS.fd
+    (and more across Fedora/Arch/openSUSE)
+
+  If OVMF is not found, SeaBIOS fallback is applied automatically.
+
+4.2  HARDWARE PROFILES
+────────────────────────
+  Built-in:
+    dell_g15_5520    Dell G15 Gaming Laptop (16GB, battery, hda audio)
+    gaming_desktop   High-performance desktop (32GB, virtio-vga-gl)
+    office_laptop    ThinkPad-style office (8GB, qxl, battery)
+    server           EPYC headless (64GB, hugepages, iommu)
+    mac_mini         macOS-style (8GB, vmware-svga)
+    minimal          2-core 2GB headless (CI/testing)
+    raspberry_pi_4   ARM64 emulated Pi 4 (cortex-a72, 4GB)
+    raspberry_pi_3b  ARM64 emulated Pi 3B (cortex-a53, 1GB, serial only)
+
+  Custom profiles stored at: ~/.qemu_vms/_profiles/<name>.json
+  Every custom profile is validated against your host on first use.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — qemu_manager.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5.1  KEY FIXES IN THIS VERSION
+─────────────────────────────────
+  RTC clock: 'utc' with driftfix=slew — fixes "invalid datetime format" crash
+  OVMF VARS: 4M variant searched first, copied to VM dir on create
+  State persistence: PIDs saved to .state.json, survive terminal restart
+  ARM/raspi: skip KVM, display, SMBIOS, hugepages automatically
+
+5.2  ALL PUBLIC METHODS
+─────────────────────────
+  VM lifecycle:
+    list_vms / create_vm / clone_vm / launch_vm / stop_vm / stop_all / delete_vm
+
+  Status / monitoring:
+    vm_status / monitor_vm / monitor_all / get_vm_logs
+
+  Configuration:
+    show_config / update_config / print_command
+
+  Storage:
+    resize_disk / scan_isos
+    snapshot_create / snapshot_list / snapshot_restore / snapshot_delete
+
+  Display / shell:
+    open_display / open_shell
+
+  Resources:
+    set_resource_limits
+
+  Isolated networking:
+    create_network / delete_network / list_networks / add_vm_to_network
+
+  Monitor:
+    send_monitor_cmd
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6 — ollama_wrapper.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+6.1  THE 31 AI TOOLS
+──────────────────────
+  VM:         list_vms, create_vm, launch_vm, stop_vm, vm_status, monitor_vm,
+              show_config, update_config, delete_vm, clone_vm, get_vm_logs,
+              print_command, send_monitor_cmd
+  Storage:    resize_disk, scan_isos, snapshot_create, snapshot_list,
+              snapshot_restore, snapshot_delete
+  Profiles:   create_profile, delete_profile, check_profile_compatibility,
+              list_profiles
+  Display:    open_display, open_shell
+  Networking: create_network, delete_network, list_networks, add_vm_to_network,
+              set_resource_limits
+  System:     check_system
+  Meta:       clarify
+
+6.2  THE SANITISER  (_sanitise_args)
+──────────────────────────────────────
+  Runs on every tool call. Silently fixes:
+
+  VM names:
+    Spaces → underscores
+    Placeholder names cleared (all hyphen AND underscore variants):
+      windows-vm, linux-vm, ubuntu-vm, my-vm, new-vm, test-vm,
+      vm, myvm, testvm, unnamed, virtual-machine, vm-1, vm-2, etc.
+
+  OS type aliases:
+    ubuntu/debian/fedora/mint → linux
+    win10/win11/win64/windows11 → windows
+    osx/darwin/mac → macos
+
+  Enum normalisation (case-insensitive):
+    NAT→nat, BRIDGE→bridge, SDL→sdl, VNC→vnc
+    Invalid → safe default: x11→sdl, alsa→hda, wifi→nat
+
+  Machine type:
+    Profile names stripped and profile field auto-set:
+      dell_g15_5520 → profile=dell_g15_5520 (machine_type removed)
+      office_laptop → profile=office_laptop (machine_type removed)
+      gaming_desktop → profile=gaming_desktop (machine_type removed)
+
+  CPU models:
+    ARM CPUs on x86_64 VMs → 'host':
+      cortex-a53, cortex-a72, cortex-a15, neoverse-n1 etc.
+
+  Bridge interfaces:
+    eth0, ens33, enp3s0, wlan0 → virbr0
+
+  MAC addresses:
+    7-octet MACs → removed
+
+  Resource limits:
+    memory_mb: min 512MB, max 95% of host RAM
+    cpu_cores: max = host logical core count
+    disk_size_gb: min 8GB
+
+  ISO paths:
+    scan_isos()[0] literal → removed FIRST (before username fix)
+    /home/user/ → real home dir
+    /path/to/  → removed
+    <path>, <iso>, $HOME → removed
+
+  ARM/raspi enforcement:
+    machine_type=raspi* or machine_arch=aarch64/arm → kvm=False, hugepages=False
+
+6.3  THE PRE-FLIGHT VALIDATOR  (_preflight_check)
+───────────────────────────────────────────────────
+  Four possible actions:
+    ok        proceed
+    auto_fix  silently correct and proceed
+    ask_user  show yellow warning panel, wait for user response
+    abort     block tool, feed error message back to AI
+
+  create_vm triggers:
+    ask_user  — placeholder VM name
+    ask_user  — VM already exists
+    ask_user  — ARM64 ISO + x86_64 VM
+    ask_user  — profile has blocking compatibility issues
+    ask_user  — ISO file not found
+    auto_fix  — profile name used as machine_type
+    auto_fix  — Windows without UEFI
+    auto_fix  — Windows disk < 40GB → 64GB
+    auto_fix  — internet validator catches CPU/machine type issues
+
+  launch_vm:  abort if VM doesn't exist
+  delete_vm:  ask_user always (confirmation)
+  resize_disk: abort if VM doesn't exist OR if shrinking
+  monitor_cmd: ask_user for dangerous commands
+  snapshot restore/delete: ask_user always
+
+6.4  THE INTERNET VALIDATOR  (_validate_with_internet)
+────────────────────────────────────────────────────────
+  Non-blocking, 4s timeout, graceful offline skip.
+  Skipped entirely when -cu flag is active.
+
+  Local QEMU machine type check (instant):
+    qemu-system-x86_64 -machine help
+
+  Local QEMU CPU model check (instant):
+    qemu-system-x86_64 -cpu help
+
+  CPU arch consistency (local knowledge, instant):
+    ARM cpu on x86_64 → error / x86 cpu on aarch64 → error
+
+  Product verification (DuckDuckGo API, ~1-2s):
+    Checks manufacturer + product_name is a real product.
+    SKIPPED when -cu flag is active.
+
+  ISO architecture (filename check, instant):
+    arm64/Arm64/aarch64 in ISO name + x86_64 VM → blocked
+
+6.5  MODEL RECOMMENDATIONS
+────────────────────────────
+  Benchmark results (19 Layer 3 tests):
+
+    qwen2.5:7b    18/19  ~6.5s avg   2 sanitiser fixes   RECOMMENDED
+    llama3.1:8b   18/19  ~3.5s avg  34 sanitiser fixes   fast fallback
+    qwen2.5:14b   12/19  ~40s avg    5 sanitiser fixes   too slow on CPU
+    mistral-nemo  6/19   ~40s avg    —                   poor tool use
+
+  qwen2.5:7b is the default. It sends correct args natively far more often
+  than llama (2 fixes vs 34 per run), reducing reliance on the sanitiser.
+
+  Change model:
+    OLLAMA_MODEL=llama3.1 qemu-api          temporary
+    export OLLAMA_MODEL=llama3.1            permanent in ~/.zshrc
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7 — test_api.py  (v5)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+7.1  FIVE LAYERS
+─────────────────
+  Layer 1  Sanitiser         58 tests   No AI, no Ollama, ~1ms each
+  Layer 2  Executor          23 tests   No AI, no Ollama, ~10ms each
+  Layer 3  AI Integration    19 tests   Needs Ollama, ~4-11s each (qwen)
+  Layer 4  Profile + HTTP    8 fixed + N random, ~0.5s each
+  Layer 5  Property-Based    5 invariant checks, 50 iterations each
+
+7.2  USAGE
+────────────
+  python3 test_api.py                        All layers (5 random profiles)
+  python3 test_api.py -l 1                   Sanitiser only (no Ollama, fast)
+  python3 test_api.py -l 1,2                 No Ollama needed, ~2s total
+  python3 test_api.py -l 3                   AI tests only
+  python3 test_api.py -l 4 -n 100           100 random profiles
+  python3 test_api.py -l 5                   Property tests only
+  python3 test_api.py -l 4 -s 123           Different seed for variety
+  python3 test_api.py -t hallucination       Filter by tag
+  python3 test_api.py -v                     Verbose (raw args + issues)
+  python3 test_api.py --quick                L1+L2+L5, skip L3 (fast CI)
+  python3 test_api.py --fuzz                 L5 with 500 iterations
+  python3 test_api.py --benchmark llama3.1 qwen2.5:7b
+                                             Side-by-side model comparison
+
+7.3  LAYER 3 — RANDOMISED PROMPTS
+────────────────────────────────────
+  Every AI test has a prompt_pool — a list of phrasings that say the same
+  thing differently. Each run picks one randomly based on the seed.
+
+  Vagueness levels (1-5):
+    1  precise:  "create a Linux VM called dev-box with exactly 4096MB RAM"
+    2  normal:   "create a Linux VM called dev-box with 4GB RAM"
+    3  casual:   "make me a linux box called dev-box, 4 gigs"
+    4  vague:    "I need a dev box, linux, not much RAM"
+    5  minimal:  "linux vm, dev-box"
+
+  Change seed with -s to get different prompt variations:
+    python3 test_api.py -l 3 -s 999
+
+7.4  LAYER 5 — PROPERTY INVARIANTS
+─────────────────────────────────────
+  Five invariants checked across 50 random inputs each (500 with --fuzz):
+
+    prop_sanitiser_never_crashes
+      _sanitise_args() must never raise an exception for any input combination.
+
+    prop_preflight_never_crashes
+      _preflight_check() must never raise, always return dict with 'action' key.
+
+    prop_sanitiser_idempotent
+      Running sanitiser twice must give same result as running once.
+
+    prop_placeholders_always_cleared
+      All known placeholder names must always produce empty name after sanitising.
+
+    prop_profile_always_auto_set
+      All known profile names used as machine_type must always set profile field.
+
+7.5  BENCHMARK MODE
+─────────────────────
+  python3 test_api.py --benchmark llama3.1 qwen2.5:7b mistral-nemo
+
+  For each model:
+  1. Checks tool call format compatibility (quick sanity test)
+  2. If compatible, runs all 19 Layer 3 AI tests
+  3. Produces side-by-side comparison table
+
+  Table shows per-test: pass/fail, fix count, response time
+  Summary row shows: total score, total fixes, average response time
+
+  Note: only model names go after --benchmark. Flags like -s and -n
+  must appear BEFORE --benchmark in the command line:
+    python3 test_api.py -s 123 --benchmark llama3.1 qwen2.5:7b
+
+7.6  READING RESULTS
+──────────────────────
+  ✓ (7f) [8.1s]  passed, sanitiser applied 7 fixes, took 8.1 seconds
+  ✗ (2f) [3.1s]  failed, 2 fixes applied but assertion still failed
+  ✓ [1.5s]       passed, sanitiser had nothing to fix (AI sent correct args)
+
+  High fix count = normal for llama3.1. It means sanitiser is doing its job.
+  Low fix count = qwen2.5:7b is sending correct args natively.
+  Results saved to test_report.json after every run.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8 — DIRECT CLI REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Add -v to any command for verbose/raw JSON output.
+
+  Global flags (before command):
+    qemu-api -cu <command>         Custom mode — skip product verification
+    qemu-api -v <command>          Verbose output
+
+  VMs:
+    qemu-api list                  List all VMs
+    qemu-api status <name>         Status
+    qemu-api monitor <name|all>    Activity report
+    qemu-api launch <name>         Start VM
+    qemu-api stop <name>           Stop VM
+    qemu-api clone <src> <new>     Clone VM
+    qemu-api config <name>         Show config JSON
+    qemu-api resize <name> <gb>    Resize primary disk
+    qemu-api delete <name>         Delete VM (asks confirmation)
+    qemu-api logs <name>           Failure diagnosis
+    qemu-api show-cmd <name>       Print QEMU launch command
+    qemu-api -tf <name>            Fingerprint report (inxi simulation)
+
+  Snapshots:
+    qemu-api snapshot list <vm>
+    qemu-api snapshot create <vm> <snap>
+    qemu-api snapshot restore <vm> <snap>
+    qemu-api snapshot delete <vm> <snap>
+
+  Networks:
+    qemu-api network list
+    qemu-api network create <name>
+    qemu-api network delete <name>
+    qemu-api network add <net> <vm>
+    qemu-api limit <vm> <cpu%> [mem_mb]
+
+  Info:
+    qemu-api profiles
+    qemu-api check-profile <name>
+    qemu-api system
+    qemu-api isos
+    qemu-api cmd <vm> "<qemu cmd>"
+
+  Session:
+    qemu-api clear-session
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9 — AI CHAT REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Built-in shortcuts (no AI, instant):
+    list / profiles / system / clear session / exit
+
+  Example prompts covering all features:
+
+  Basic VM creation:
+    "create a Linux VM called dev-box with 4GB RAM and launch it"
+    "create a Windows 11 VM called win-test, ISO from Desktop Images, 8GB RAM"
+    "create a headless Ubuntu server called ci-runner, 2 cores, 2GB RAM"
+
+  Hardware profiles:
+    "create a VM modelled after a Dell G15 5520 called gaming-rig, 16GB RAM"
+    "use the office laptop profile, Windows 11, call it work-vm"
+    "create a profile for a Raspberry Pi 4 and save it as my-rpi4"
+
+  Custom machines (with -cu flag active):
+    "create a VM called lab-01 with manufacturer AcmeCorp, product SuperServer"
+    "make a fictional workstation called test-rig with 32GB RAM"
+
+  Raspberry Pi / ARM:
+    "can I run a Raspberry Pi 3B on this machine?"
+    "create a Raspberry Pi 3B VM called rpi-test"
+
+  Monitoring and diagnosis:
+    "list all my VMs and tell me which are running"
+    "check vm 1 and report its activity"
+    "why did dev-box fail? check its logs"
+
+  Snapshot management:
+    "take a snapshot of win-test called before-update"
+    "restore win-test to snapshot before-update"
+
+  Resource management:
+    "limit win-test to 50% CPU and 2GB RAM"
+    "resize dev-box disk to 100GB"
+    "clone dev-box into dev-box-staging"
+
+  Networking:
+    "create an isolated network between dev-box and ci-runner"
+
+  Teardown:
+    "stop all VMs, delete dev-box and win-test with disk files"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10 — DIRECTORY STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ~/.qemu_vms/
+  ├── .state.json          Running PID tracking (survives terminal restart)
+  ├── .session.json        AI conversation history (last 40 messages)
+  ├── _profiles/           Custom hardware profiles
+  │   └── my-profile.json
+  ├── _networks/           Isolated network definitions
+  │   └── networks.json
+  └── <vm-name>/
+      ├── config.json      Full MachineConfig serialised
+      ├── disk0.qcow2      Primary disk image
+      ├── OVMF_VARS.fd     Per-VM UEFI variable store (writable copy)
+      ├── vm.pid           PID of running QEMU process
+      ├── qmp.sock         QMP control socket
+      ├── monitor.sock     Human monitor socket
+      ├── serial.sock      Serial console socket
+      └── launch.log       stdout/stderr from last launch
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11 — KNOWN ISSUES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  VM crashes with no log (OVMF_VARS.fd missing):
+    cp /usr/share/OVMF/OVMF_VARS_4M.fd ~/.qemu_vms/<name>/OVMF_VARS.fd
+
+  "invalid datetime format" crash:
+    python3 -c "
+    import json, os
+    p = os.path.expanduser('~/.qemu_vms/<name>/config.json')
+    d = json.load(open(p))
+    d['rtc_clock'] = 'utc'
+    json.dump(d, open(p,'w'), indent=2)
+    "
+
+  raspi3b has no display — serial console only:
+    qemu-api open-shell <name>
+    For graphical ARM64: use machine_type=virt with Ubuntu ARM64 ISO.
+
+  Windows 11 ARM64 ISO on x86 VM:
+    Will not boot. Download x64 edition from microsoft.com/software-download/windows11
+
+  Hugepages (server profile):
+    echo 2048 | sudo tee /proc/sys/vm/nr_hugepages
+
+  Bridge networking:
+    sudo nmcli con add type bridge ifname br0 con-name br0
+    sudo nmcli con add type ethernet ifname ens33 master br0
+    sudo nmcli con up br0
+    echo "allow br0" | sudo tee -a /etc/qemu/bridge.conf
+
+  --benchmark flag parsing:
+    Flags like -s and -n must come BEFORE --benchmark:
+      python3 test_api.py -s 123 -n 10 --benchmark llama3.1 qwen2.5:7b
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 12 — WHAT COMES NEXT (PART 2)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  vm_shell.py — direct shell access to VMs from host terminal.
+
+  SSH (Linux guests):
+    vm_shell.py ssh dev-box              interactive
+    vm_shell.py ssh dev-box "uptime"     single command
+    vm_shell.py ssh all "df -h"          run on all VMs
+
+  Serial console:
+    vm_shell.py serial dev-box
+
+  QEMU Guest Agent:
+    vm_shell.py agent dev-box "cat /etc/os-release"
+
+  WinRM (Windows guests):
+    vm_shell.py winrm win-test "Get-Process"
+
+  File transfer:
+    vm_shell.py copy dev-box ~/file.txt /tmp/
+    vm_shell.py copy dev-box /tmp/output.log .
+
+================================================================================
