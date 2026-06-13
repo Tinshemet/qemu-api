@@ -1,0 +1,369 @@
+"""
+sanitizer.py — Input Sanitization and Resolution Layer
+
+Cleans AI tool call arguments before dispatch: fixes hallucinated
+paths, coerces types, rejects invalid enum values, and resolves
+vague VM name / ISO path references to real values.
+"""
+
+import os
+import re
+from typing import Any, Dict, List, Optional
+
+from qemu_config import get_all_profiles
+
+REAL_HOME = os.path.expanduser("~")
+
+# ── Validation constants ───────────────────────────────────────────────────────
+
+PLACEHOLDER_VM_NAMES: set = {
+    "windows-vm", "linux-vm", "ubuntu-vm", "my-vm", "vm", "myvm",
+    "new-vm", "unnamed", "windows_vm", "linux_vm", "ubuntu_vm",
+    "my_vm", "new_vm", "virtual-machine", "virtual_machine",
+}
+
+PLACEHOLDER_ISO_PATTERNS: set = {
+    "/path/to/", "scan_isos()[0]", "<iso>", "<path>", "<file>",
+    "your_iso", "your-iso", "example.iso",
+}
+
+VALID_MACHINE_TYPES: set = {
+    "q35", "pc", "pc-i440fx", "microvm", "virt",
+    "raspi3b", "raspi2b", "raspi0",
+}
+
+VALID_DISPLAY_MODES: set = {"sdl", "gtk", "vnc", "spice", "none", "cocoa"}
+VALID_GPU_TYPES:     set = {"virtio", "qxl", "vga", "vmware", "none", "bochs"}
+VALID_AUDIO_TYPES:   set = {"hda", "ich9", "ac97", "sb16", "none"}
+VALID_NETWORK_MODES: set = {"nat", "bridge", "none", "user"}
+VALID_DISK_FORMATS:  set = {"qcow2", "raw", "vmdk", "vdi"}
+VALID_BIOS:          set = {"ovmf", "ovmf_ms", "seabios"}
+VALID_MACHINE_ARCH:  set = {"x86_64", "aarch64", "arm", "armhf", "i386"}
+VALID_MACHINE_CLASS: set = {"desktop", "laptop", "server", "custom", "embedded"}
+VALID_OS_TYPES:      set = {"linux", "windows", "macos", "other"}
+
+OS_TYPE_ALIASES: dict = {
+    "ubuntu": "linux", "debian": "linux", "fedora": "linux",
+    "mint": "linux", "arch": "linux", "kali": "linux",
+    "centos": "linux", "rhel": "linux", "suse": "linux",
+    "win": "windows", "win7": "windows", "win10": "windows",
+    "win11": "windows", "win32": "windows", "win64": "windows",
+    "windows10": "windows", "windows11": "windows", "windows7": "windows",
+    "osx": "macos", "darwin": "macos", "mac": "macos", "macosx": "macos",
+}
+
+_QEMU_OUI_PREFIXES: set = {"52:54:00", "00:1a:4a"}
+
+
+# ── Path fixer ─────────────────────────────────────────────────────────────────
+
+def _fix_path(p: str) -> str:
+    """Fix hallucinated paths — wrong username, relative paths, placeholder text."""
+    if not p or not isinstance(p, str):
+        return p
+    # Reject literal placeholder patterns before any path manipulation
+    p_lower = p.lower()
+    for pat in PLACEHOLDER_ISO_PATTERNS:
+        if pat.lower() in p_lower:
+            return ""
+    # Fix wrong username: /home/anyname/ → real home
+    p = re.sub(r"^/home/[^/]+/", REAL_HOME + "/", p)
+    p = p.replace("~/", REAL_HOME + "/")
+    # Fix Windows-style paths
+    p = p.replace("\\", "/")
+    p = p.replace("C:/", REAL_HOME + "/")
+    return p
+
+
+# ── VM name resolver ───────────────────────────────────────────────────────────
+
+def _resolve_vm_name(vms: List[Dict], ref: str) -> Optional[str]:
+    if ref == "all":
+        return "all"
+    for vm in vms:
+        if vm["name"] == ref:
+            return vm["name"]
+    if re.match(r"^\d+$", ref.strip()):
+        idx = int(ref.strip()) - 1
+        if 0 <= idx < len(vms):
+            return vms[idx]["name"]
+    lower = ref.lower()
+    for vm in vms:
+        if lower in vm["name"].lower() or lower in vm.get("os", "").lower():
+            return vm["name"]
+    return None
+
+
+# ── ISO resolver ───────────────────────────────────────────────────────────────
+
+def _resolve_iso(iso_hint: str) -> Optional[str]:
+    """
+    Resolve an ISO path from a vague hint or hallucinated path.
+    Strategy:
+      1. Exact path — use directly
+      2. Fix wrong username in path
+      3. Fuzzy keyword scoring across all search dirs
+      4. OS-keyword scan
+      5. Last resort — first ISO found in Desktop/Images
+    """
+    if not iso_hint:
+        return None
+
+    # Step 1: exact path
+    for candidate in [iso_hint, os.path.expanduser(iso_hint)]:
+        if os.path.exists(candidate):
+            return candidate
+
+    # Step 2: fix wrong username
+    fixed = re.sub(r"^/home/[^/]+/", REAL_HOME + "/", iso_hint)
+    if os.path.exists(fixed):
+        return fixed
+
+    # Build search dirs
+    desktop = os.path.join(REAL_HOME, "Desktop")
+    search_dirs: List[str] = []
+    if os.path.isdir(desktop):
+        for entry in os.listdir(desktop):
+            full = os.path.join(desktop, entry)
+            if os.path.isdir(full) and entry.lower() in ("images", "iso", "isos", "vms"):
+                search_dirs.append(full)
+        search_dirs.append(desktop)
+    for d in ["Downloads", "iso", "ISOs", "images", "Images"]:
+        p = os.path.join(REAL_HOME, d)
+        if os.path.isdir(p):
+            search_dirs.append(p)
+    search_dirs.append("/tmp")
+
+    all_isos: List[str] = []
+    for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if f.lower().endswith(".iso"):
+                all_isos.append(os.path.join(d, f))
+
+    if not all_isos:
+        return iso_hint
+
+    # Step 3: keyword scoring
+    stopwords = {
+        "iso", "the", "from", "file", "image", "images", "img",
+        "folder", "desktop", "home", "user", "and", "my", "v2",
+        "v1", "x64", "x86", "arm", "arm64", "amd64", "bit",
+    }
+    raw_words = re.split(r"[\s/\\-_.]+", iso_hint.lower())
+    keywords  = [w for w in raw_words if len(w) > 2 and w not in stopwords]
+
+    os_keywords = {
+        "win":     ["win", "windows"],
+        "ubuntu":  ["ubuntu"],
+        "debian":  ["debian"],
+        "fedora":  ["fedora"],
+        "mint":    ["mint", "linuxmint"],
+        "arch":    ["arch"],
+        "kali":    ["kali"],
+        "raspios": ["raspios", "raspberry", "raspi"],
+        "macos":   ["macos", "osx", "darwin"],
+    }
+    hint_lower = iso_hint.lower()
+    for key, variants in os_keywords.items():
+        if any(v in hint_lower for v in variants):
+            keywords += variants
+    keywords = list(dict.fromkeys(keywords))
+
+    best_match, best_score = None, -1
+    for full_path in all_isos:
+        f_lower = os.path.basename(full_path).lower()
+        score   = sum(1 for kw in keywords if kw in f_lower)
+        ai_base = os.path.basename(iso_hint).lower().replace(".iso", "").strip()
+        if ai_base and len(ai_base) > 3 and ai_base in f_lower:
+            score += 10
+        if score > best_score:
+            best_score, best_match = score, full_path
+
+    if best_match and best_score > 0:
+        return best_match
+
+    # Step 4: return first ISO found
+    if all_isos:
+        return all_isos[0]
+
+    return iso_hint
+
+
+# ── Main sanitiser ─────────────────────────────────────────────────────────────
+
+def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Sanitise all args before dispatch.
+    Silently corrects what it can, removes what it can't fix.
+    """
+    # Type coercion
+    int_fields  = {"cpu_cores", "cpu_threads", "memory_mb", "disk_size_gb",
+                   "new_size_gb", "disk_index", "cpu_percent", "lines", "vnc_port", "spice_port"}
+    bool_fields = {"kvm", "uefi", "battery", "hugepages", "force", "delete_disks", "dry_run", "balloon"}
+
+    for f in int_fields:
+        if f in args and args[f] is not None:
+            try:
+                args[f] = int(str(args[f]).replace("GB","").replace("gb","")
+                                          .replace("mb","").replace("MB","").strip())
+            except (ValueError, TypeError):
+                args.pop(f, None)
+
+    for f in bool_fields:
+        if f in args and isinstance(args[f], str):
+            args[f] = args[f].lower() in ("true", "yes", "1", "on")
+
+    # VM name: strip special chars, reject placeholders
+    if "name" in args and args["name"]:
+        args["name"] = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(args["name"]).strip())
+        if args["name"].lower() in PLACEHOLDER_VM_NAMES:
+            args["name"] = ""
+
+    # machine_type: reject profile names used as machine type
+    if "machine_type" in args and args["machine_type"]:
+        mt = str(args["machine_type"]).lower().split(",")[0].strip()
+        if mt not in VALID_MACHINE_TYPES and not mt.startswith("pc-"):
+            if not args.get("profile"):
+                all_p = get_all_profiles()
+                if mt in all_p:
+                    args["profile"] = mt
+                else:
+                    for pname in all_p:
+                        if mt in pname or pname in mt:
+                            args["profile"] = pname
+                            break
+            args.pop("machine_type", None)
+
+    # OS type aliases
+    if "os_type" in args and args["os_type"]:
+        alias = OS_TYPE_ALIASES.get(str(args["os_type"]).lower().strip())
+        if alias:
+            args["os_type"] = alias
+
+    # Enum field validation
+    enum_map = {
+        "display":       (VALID_DISPLAY_MODES, "sdl"),
+        "gpu":           (VALID_GPU_TYPES,      "virtio"),
+        "audio":         (VALID_AUDIO_TYPES,    "hda"),
+        "network_mode":  (VALID_NETWORK_MODES,  "nat"),
+        "disk_format":   (VALID_DISK_FORMATS,   "qcow2"),
+        "bios":          (VALID_BIOS,           "ovmf"),
+        "machine_arch":  (VALID_MACHINE_ARCH,   "x86_64"),
+        "machine_class": (VALID_MACHINE_CLASS,  "desktop"),
+        "os_type":       (VALID_OS_TYPES,       "linux"),
+    }
+    for field, (valid_set, default) in enum_map.items():
+        if field in args and args[field] is not None:
+            val = str(args[field]).lower().strip()
+            args[field] = val if val in valid_set else default
+
+    # Path fields
+    for path_field in ("iso_path", "kernel_path", "initrd_path"):
+        if path_field in args and args[path_field]:
+            args[path_field] = _fix_path(str(args[path_field]))
+
+    # ARM/raspi: force kvm=False
+    mt_lower   = str(args.get("machine_type", "")).lower()
+    arch_lower = str(args.get("machine_arch", "")).lower()
+    bin_lower  = str(args.get("qemu_binary", "")).lower()
+    if (any(arm in mt_lower for arm in ("raspi", "raspi3b", "raspi2b", "virt"))
+            or arch_lower in ("aarch64", "arm", "armhf")
+            or "aarch64" in bin_lower):
+        args["kvm"]       = False
+        args["hugepages"] = False
+
+    # CPU model: reject ARM CPUs on x86 VMs
+    if "cpu_model" in args and args["cpu_model"]:
+        cpu = str(args["cpu_model"]).lower().strip()
+        arm_cpus = {"cortex-a15","cortex-a53","cortex-a57","cortex-a72","cortex-a76",
+                    "arm1176","arm926","cortex-m","cortex-r"}
+        if any(arm in cpu for arm in arm_cpus) and str(args.get("machine_arch","x86_64")).lower() == "x86_64":
+            args["cpu_model"] = "host"
+
+    # MAC address validation
+    if "mac_address" in args and args["mac_address"]:
+        mac = str(args["mac_address"]).strip()
+        if not re.match(r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$", mac):
+            args.pop("mac_address", None)
+
+    # Bridge interface: reject raw ethernet/wifi interfaces
+    if "bridge_iface" in args and args["bridge_iface"]:
+        br = str(args["bridge_iface"]).strip()
+        bad_ifaces = {"bridge","br","network","<bridge>","your_bridge","",
+                      "eth0","eth1","ens33","ens3","enp","wlan0","wlan1","wifi0"}
+        is_raw = any(br.startswith(p) for p in ("eth","ens","enp","wlan","wlp"))
+        if br in bad_ifaces or is_raw:
+            args["bridge_iface"] = "virbr0"
+
+    # Memory: cap at 95% of host RAM, minimum 512 MB
+    if "memory_mb" in args and args["memory_mb"]:
+        try:
+            host_mb = 0
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal"):
+                        host_mb = int(line.split()[1]) // 1024
+                        break
+            max_allowed = max(int(host_mb * 0.95), 4096)
+            args["memory_mb"] = max(512, min(args["memory_mb"], max_allowed))
+        except Exception:
+            args["memory_mb"] = max(512, args["memory_mb"])
+
+    # CPU cores: cap at host logical core count
+    if "cpu_cores" in args and args["cpu_cores"]:
+        try:
+            import psutil
+            args["cpu_cores"] = max(1, min(args["cpu_cores"], psutil.cpu_count(logical=True)))
+        except Exception:
+            args["cpu_cores"] = max(1, args["cpu_cores"])
+
+    # Disk size: 8 GB minimum, 2 TB maximum
+    if "disk_size_gb" in args and args["disk_size_gb"]:
+        args["disk_size_gb"] = max(8, min(int(args["disk_size_gb"]), 2048))
+
+    # Port numbers: valid range
+    for port_field in ("vnc_port", "spice_port"):
+        if port_field in args and args[port_field]:
+            p = int(args[port_field])
+            if not (1024 <= p <= 65535):
+                args.pop(port_field, None)
+
+    # extra_args: must be list of short strings
+    if "extra_args" in args and args["extra_args"]:
+        if not isinstance(args["extra_args"], list):
+            args["extra_args"] = []
+        else:
+            args["extra_args"] = [
+                str(a) for a in args["extra_args"]
+                if isinstance(a, (str, int)) and len(str(a)) < 500
+            ]
+
+    # Snapshot / network names: alphanumeric only
+    for field in ("snap_name", "snapshot_name"):
+        if field in args and args[field]:
+            args[field] = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(args[field]))
+    if "net_name" in args and args["net_name"]:
+        args["net_name"] = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(args["net_name"]))
+    if "profile_name" in args and args["profile_name"]:
+        args["profile_name"] = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(args["profile_name"]).lower())
+
+    # Text fields: strip path-like content
+    for text_field in ("os_name", "description", "hostname"):
+        if text_field in args and args[text_field]:
+            val = str(args[text_field])
+            if "/" in val or chr(92) in val or "`" in val or "$(" in val:
+                args[text_field] = re.sub(r"[/\\`$()]", "", val)
+
+    # Remove empty optional fields
+    optional_removable = {
+        "bridge_iface","mac_address","iso_path","kernel_path",
+        "initrd_path","bios_version","bios_vendor","serial_number",
+        "product_name","manufacturer","hostname",
+    }
+    for f in optional_removable:
+        if f in args and (args[f] is None or args[f] == ""):
+            args.pop(f, None)
+
+    return args
