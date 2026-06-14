@@ -11,8 +11,8 @@ Bug fixes vs original ollama_wrapper.py:
 
 from typing import Dict
 
-from qemu_config import MachineConfig
-from display     import console
+from api.qemu_config import MachineConfig
+from .display     import console
 from rich        import box
 from rich.panel  import Panel
 from rich.table  import Table

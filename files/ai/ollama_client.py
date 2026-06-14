@@ -12,10 +12,10 @@ from typing import Dict, List
 
 import requests
 
-from qemu_config  import OVMF, list_profiles
-from tools        import TOOLS
-from display      import console
-import validator as _validator
+from api.qemu_config  import OVMF, list_profiles
+from .tools        import TOOLS
+from .display      import console
+import preflight.validator as _validator
 
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")

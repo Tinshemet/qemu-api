@@ -14,17 +14,17 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-from qemu_config  import OVMF, check_profile_compatibility, check_system_capabilities, list_profiles
-from session      import clear_session, load_session, save_session
-from display      import (
+from api.qemu_config  import OVMF, check_profile_compatibility, check_system_capabilities, list_profiles
+from .session      import clear_session, load_session, save_session
+from .display      import (
     console,
     _print_banner, _render_compat, _render_monitor, _render_profiles,
     _render_snapshots, _render_status, _render_system, _render_vm_list,
 )
-from fingerprint  import _tf_report
-from ollama_client import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
-from tool_executor import execute_tool, manager
-from validator    import set_custom_mode
+from .fingerprint  import _tf_report
+from .ollama_client import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
+from executioner.tool_executor import execute_tool, manager
+from preflight.validator    import set_custom_mode
 
 
 # ── Chat loop ──────────────────────────────────────────────────────────────────

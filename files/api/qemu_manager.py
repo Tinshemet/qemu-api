@@ -15,16 +15,16 @@ from typing import Any, Dict, List, Optional
 
 import psutil
 
-from qemu_config import (
+from .qemu_config import (
     DiskConfig, MachineConfig, NetworkConfig, OVMF, apply_os_hints,
 )
-from qemu_arg_builder import (
+from .qemu_arg_builder import (
     QemuArgBuilder, _build_iso_search_dirs, _next_free_port, _qemu_version_warn,
     SPICE_PORT_START, VNC_PORT_START,
 )
-from qmp_client      import QMPClient
-from network_manager import IsolatedNetManager
-from vm_state        import VMState, _PsutilProcWrapper
+from .qmp_client      import QMPClient
+from .network_manager import IsolatedNetManager
+from .vm_state        import VMState, _PsutilProcWrapper
 
 VM_BASE_DIR = os.path.expanduser("~/.qemu_vms")
 

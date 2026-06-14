@@ -11,18 +11,18 @@ import os
 import re
 from typing import Any, Dict
 
-from qemu_config import (
+from api.qemu_config import (
     MachineConfig, DiskConfig, NetworkConfig,
     OVMF, apply_profile, check_profile_compatibility,
     check_system_capabilities, delete_custom_profile,
     get_all_profiles, list_profiles, save_custom_profile,
 )
-from qemu_manager import QemuManager
-from sanitizer   import (
+from api.qemu_manager import QemuManager
+from sanitizer.sanitizer import (
     PLACEHOLDER_VM_NAMES,
     _resolve_iso, _resolve_vm_name, _sanitise_args,
 )
-from display import (
+from ai.display import (
     console,
     _render_compat, _render_monitor, _render_profiles,
     _render_snapshots, _render_status, _render_system,
