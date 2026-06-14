@@ -1,0 +1,31 @@
+{
+  "net_timeout":   4,
+  "qemu_timeout":  5,
+  "user_agent":    "qemu-api/1.0",
+  "ms_windows_iso_page": "https://www.microsoft.com/software-download/windows11",
+  "arm_cpu_prefixes": [
+    "cortex-a", "cortex-m", "cortex-r",
+    "arm1", "arm7", "arm9", "arm11",
+    "neoverse", "ampere", "apple m",
+    "qualcomm", "snapdragon"
+  ],
+  "x86_cpu_names": [
+    "haswell", "broadwell", "skylake", "kabylake", "coffeelake",
+    "cannonlake", "icelake", "tigerlake", "alderlake", "raptorlake",
+    "sandybridge", "ivybridge", "westmere", "nehalem", "penryn",
+    "opteron", "epyc", "zen", "zen2", "zen3", "zen4",
+    "kvm64", "host", "qemu64", "qemu32"
+  ],
+  "thresholds": {
+    "max_laptop_memory_mb":   65536,
+    "min_disk_free_gb_error": 10,
+    "min_disk_free_gb_warn":  60,
+    "min_windows_disk_gb":    40,
+    "auto_windows_disk_gb":   64,
+    "profile_memory_ratio":   0.8,
+    "profile_cores_overcommit": 2
+  },
+  "laptop_product_keywords": ["g15", "thinkpad", "inspiron"],
+  "arm_iso_keywords":  ["arm64", "aarch64", "arm_"],
+  "arm_arch_values":   ["aarch64", "arm"]
+}

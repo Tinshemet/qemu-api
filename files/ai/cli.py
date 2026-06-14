@@ -7,6 +7,7 @@ for both modes; ollama_wrapper.py is a thin shim that re-exports from here.
 """
 
 import json
+import os
 import sys
 from typing import List
 
@@ -26,9 +27,32 @@ from .ollama_client import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from executioner.tool_executor import execute_tool, manager
 from preflight.validator    import set_custom_mode
 
+_CFG         = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_EXIT_CMDS   = set(_CFG["exit_commands"])
+_SHORTCUTS   = _CFG["shortcut_commands"]
+_LOOP_MAX    = _CFG["chat"]["tool_loop_max"]
+_ACTION_WORDS = set(_CFG["action_words"])
+
+# Tools that require explicit user confirmation before execution.
+# Maps tool_name → (arg_field_to_confirm, human-readable verb).
+_CONFIRM_REQUIRED: dict = {
+    "create_vm":           ("name",         "create VM"),
+    "delete_vm":           ("name",         "delete VM"),
+    "clone_vm":            ("new_name",     "clone to new VM"),
+    "update_config":       ("name",         "update config for VM"),
+    "resize_disk":         ("name",         "resize disk for VM"),
+    "snapshot_restore":    ("name",         "restore snapshot for VM"),
+    "snapshot_delete":     ("name",         "delete snapshot of VM"),
+    "delete_network":      ("net_name",     "delete network"),
+    "delete_profile":      ("profile_name", "delete profile"),
+    "set_resource_limits": ("name",         "set resource limits for VM"),
+}
+
 
 # ── Chat loop ──────────────────────────────────────────────────────────────────
 
+# Runs the interactive Ollama chat REPL: reads input, drives the agentic tool loop (up to 15 rounds), handles clarifications, and saves session.
+# In: bool verbose → Out: nothing (blocks until exit)
 def chat_loop(verbose: bool = False):
     _print_banner(
         verbose=verbose,
@@ -51,28 +75,23 @@ def chat_loop(verbose: bool = False):
 
         _ui = user_input.lower().strip()
 
-        if _ui in (
-            "exit", "quit", "bye", "goodbye", "q", ":q", ":q!",
-            "stop", "leave", "close", "done", "end", "out",
-            "exit()", "quit()", "i want to exit", "i want to quit",
-            "please exit", "please quit",
-        ):
+        if _ui in _EXIT_CMDS:
             console.print("[dim]Goodbye.[/dim]")
             break
 
-        if _ui in ("list", "vms"):
+        if _ui in _SHORTCUTS["list"]:
             result = execute_tool("list_vms", {}, verbose)
             continue
 
-        if _ui == "system":
+        if _ui in _SHORTCUTS["system"]:
             execute_tool("check_system", {}, verbose)
             continue
 
-        if _ui == "profiles":
+        if _ui in _SHORTCUTS["profiles"]:
             execute_tool("list_profiles", {}, verbose)
             continue
 
-        if _ui in ("clear session", "forget"):
+        if _ui in _SHORTCUTS["clear_session"]:
             clear_session()
             messages = []
             console.print("[dim]Session cleared.[/dim]")
@@ -80,8 +99,12 @@ def chat_loop(verbose: bool = False):
 
         messages.append({"role": "user", "content": user_input})
 
-        # Agentic tool loop — up to 15 rounds per user turn
-        for _ in range(15):
+        _user_wants_action = bool(set(_ui.split()) & _ACTION_WORDS)
+        _tools_called_this_turn = False
+        _just_clarified_fields: set = set()  # persists across all iterations for this user turn
+
+        # Agentic tool loop — up to _LOOP_MAX rounds per user turn
+        for _loop_iter in range(_LOOP_MAX):
             response = _call_ollama(messages)
             if not response:
                 console.print("[warn]No response from Ollama.[/warn]")
@@ -98,9 +121,44 @@ def chat_loop(verbose: bool = False):
             tool_calls = msg.get("tool_calls", [])
             if not tool_calls:
                 text = msg.get("content", "").strip()
+                # Empty response (no tool calls, no text) — nudge the AI to respond.
+                if not text and _loop_iter < _LOOP_MAX - 1:
+                    messages.pop()
+                    messages.append({
+                        "role":    "user",
+                        "content": (
+                            "_INTERNAL_ Your last response was empty. "
+                            "Please call the appropriate tool or provide a text response now."
+                        ),
+                    })
+                    continue
+                # If the model gave a text-only response for an action request
+                # without ever calling a tool, it hallucinated — force a retry.
+                if _user_wants_action and not _tools_called_this_turn and _loop_iter < _LOOP_MAX - 1:
+                    # Remove the bad assistant message so the model doesn't
+                    # anchor on its own hallucinated success in the next attempt.
+                    # Use _INTERNAL_ prefix so save_session filters it out.
+                    messages.pop()
+                    messages.append({
+                        "role":    "user",
+                        "content": (
+                            "_INTERNAL_ You responded with text but did not call any tool. "
+                            "You cannot perform actions by text alone — you MUST call "
+                            "the appropriate tool (e.g. create_vm, launch_vm, list_vms). "
+                            "Call the tool now."
+                        ),
+                    })
+                    continue
                 if text:
                     console.print(f"\n[bold green]Assistant:[/bold green] {text}\n")
                 break
+
+            _tools_called_this_turn = True
+
+            _clarify_happened = False
+            _clarify_answer   = ""
+            _clarify_field    = ""
+            _op_cancelled     = False
 
             for tc in tool_calls:
                 fn        = tc.get("function", {})
@@ -117,6 +175,70 @@ def chat_loop(verbose: bool = False):
                         f"  [tool]→ {tool_name}[/tool]  [dim]{json.dumps(raw_args)}[/dim]"
                     )
 
+                # ── os_type guard ──────────────────────────────────────────
+                # Strip AI-inferred os_type when the user didn't mention an OS
+                # in their message — unless they already answered it via the
+                # gate this turn (in which case keep what they said).
+                if tool_name == "create_vm" \
+                        and "os_type" in raw_args \
+                        and "os_type" not in _just_clarified_fields:
+                    _OS_KEYWORDS = {
+                        "linux", "windows", "win", "ubuntu", "debian", "fedora",
+                        "arch", "kali", "mint", "centos", "rhel", "macos", "mac",
+                        "osx", "android", "freebsd", "openbsd", "other",
+                    }
+                    if not (_OS_KEYWORDS & set(_ui.split())):
+                        raw_args.pop("os_type")
+                # ──────────────────────────────────────────────────────────
+
+                # ── Safety confirmation gate ───────────────────────────────
+                # Skip if the key field was answered via the clarify gate this
+                # turn — the user just confirmed the value moments ago.
+                if tool_name in _CONFIRM_REQUIRED and \
+                        _CONFIRM_REQUIRED[tool_name][0] not in _just_clarified_fields:
+                    field, verb = _CONFIRM_REQUIRED[tool_name]
+                    proposed = raw_args.get(field, "")
+
+                    try:
+                        vm_names = [v["name"] for v in manager.list_vms()]
+                    except Exception:
+                        vm_names = []
+                    opts_str = "  ".join(f"[{n}]" for n in vm_names[:6])
+
+                    hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
+                    console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
+                    if opts_str:
+                        console.print(f"   Available: {opts_str}")
+                    console.print(
+                        "[dim]Type the name to confirm, a different name to redirect,"
+                        " or press Enter to cancel.[/dim]"
+                    )
+                    try:
+                        confirmed = console.input("[bold cyan]Confirm:[/bold cyan] ").strip()
+                    except (KeyboardInterrupt, EOFError):
+                        console.print("\n[dim]Cancelled.[/dim]")
+                        return
+
+                    if not confirmed:
+                        messages.append({
+                            "role":    "tool",
+                            "content": json.dumps(
+                                {"success": False, "error": "Operation cancelled by user."},
+                                default=str,
+                            ),
+                        })
+                        messages.append({
+                            "role":    "user",
+                            "content": "_INTERNAL_ The user cancelled this operation. Ask what they would like to do instead.",
+                        })
+                        _op_cancelled = True
+                        break
+
+                    if confirmed != proposed:
+                        raw_args[field] = confirmed
+                    _just_clarified_fields.add(field)  # don't ask again this turn
+                # ──────────────────────────────────────────────────────────
+
                 result = execute_tool(tool_name, raw_args, verbose)
                 messages.append({
                     "role":    "tool",
@@ -124,28 +246,64 @@ def chat_loop(verbose: bool = False):
                 })
 
                 if isinstance(result, dict) and result.get("clarify"):
-                    q    = result.get("question", "Please provide more detail.")
-                    opts = result.get("options", [])
-                    if opts:
-                        console.print(
-                            f"[yellow]?[/yellow] {q}  "
-                            + "  ".join(f"[{o}]" for o in opts)
-                        )
-                    else:
-                        console.print(f"[yellow]?[/yellow] {q}")
-                    try:
-                        clarified = console.input("[bold cyan]You:[/bold cyan] ").strip()
-                    except (KeyboardInterrupt, EOFError):
-                        console.print("\n[dim]Goodbye.[/dim]")
-                        return
-                    if clarified:
-                        messages.append({"role": "user", "content": clarified})
+                    # Drain ALL missing fields in one pass — no Ollama round-trip per field.
+                    filled: dict = {}
+                    missing_fields = result.get("missing") or [{
+                        "field":    result.get("needs_clarification", ""),
+                        "question": result.get("question", "Please provide more detail."),
+                        "options":  result.get("options", []),
+                    }]
+                    for mf in missing_fields:
+                        q    = mf["question"]
+                        opts = mf["options"]
+                        f    = mf["field"]
+                        if opts:
+                            console.print(
+                                f"[yellow]?[/yellow] {q}  "
+                                + "  ".join(f"[{o}]" for o in opts)
+                            )
+                        else:
+                            console.print(f"[yellow]?[/yellow] {q}")
+                        try:
+                            clarified = console.input("[bold cyan]You:[/bold cyan] ").strip()
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[dim]Goodbye.[/dim]")
+                            return
+                        if clarified:
+                            filled[f] = clarified
+                            messages.append({"role": "user", "content": clarified})
+                    _just_clarified_fields.update(filled.keys())
+                    _clarify_happened = True
+                    _clarify_answer   = str(filled)
+                    _clarify_field    = ", ".join(filled.keys())
+                    break  # Don't process further tool calls until AI re-plans with the answers
+
+            if _op_cancelled:
+                continue  # let AI ask what the user wants to do instead
+
+            if _clarify_happened:
+                hint = (
+                    f" The user provided: {_clarify_answer} (for fields: {_clarify_field})."
+                    if _clarify_field else ""
+                )
+                messages.append({
+                    "role":    "user",
+                    "content": (
+                        f"_INTERNAL_{hint}"
+                        " Now call the appropriate tool again using only what the user has"
+                        " explicitly provided in this conversation — do not reuse names or"
+                        " values from earlier sessions."
+                    ),
+                })
+                continue
 
         save_session(messages)
 
 
 # ── Direct sub-command CLI ─────────────────────────────────────────────────────
 
+# Dispatches direct sub-commands (list, launch, stop, snapshot, network, etc.) to the manager and renders output.
+# In: List[str] args, bool verbose → Out: nothing
 def cli_direct(args: List[str], verbose: bool = False):
     def pp(data):
         if verbose:

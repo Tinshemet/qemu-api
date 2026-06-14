@@ -4,13 +4,46 @@
 
 FILES IN THIS PROJECT
 ─────────────────────
-  qemu_config.py      Configuration dataclasses, hardware profiles, OVMF detection
-  qemu_manager.py     VM lifecycle engine: create, launch, monitor, QMP, networking
-  ollama_wrapper.py   AI interface, sanitiser, pre-flight validator, HTTP validator
-  test_api.py         5-layer automated test suite (v5)
-  install.sh          One-command installer / uninstaller
-  requirements.txt    Python dependencies (requests, psutil, rich)
-  GUIDE.txt           This file
+  ai/
+    cli.py            Chat loop + direct sub-command CLI (main entry point)
+    display.py        Rich console rendering (banners, tables, panels)
+    fingerprint.py    -tf fingerprint report (inxi simulation)
+    ollama_client.py  Ollama HTTP client + system prompt builder
+    session.py        Conversation history (load/save/clear)
+    tools.py          TOOLS list — the 31 AI tool definitions
+
+  api/
+    qemu_config.py    Configuration dataclasses, hardware profiles, OVMF detection
+    qemu_manager.py   VM lifecycle engine: create, launch, monitor, QMP, networking
+    qemu_arg_builder.py  Builds the QEMU command-line argument list
+    qmp_client.py     QMP (QEMU Machine Protocol) socket client
+    network_manager.py   Isolated network (bridge) management
+    vm_state.py       State persistence (PID tracking, .state.json)
+
+  executioner/
+    tool_executor.py  execute_tool() — hard guards, dispatch to QemuManager
+
+  preflight/
+    validator.py      _preflight_check(), internet validator, profile host-check
+
+  sanitizer/
+    sanitizer.py      _sanitise_args() — all coercion, normalisation, cap logic
+
+  tests/
+    shared.py         Common imports and TestResult dataclass for all layers
+    layer1_sanitizer.py  Layer 1 unit tests (sanitiser)
+    layer2_executor.py   Layer 2 unit tests (executor + preflight)
+    layer3_ai.py         Layer 3 AI integration tests (needs Ollama)
+    layer4_profiles.py   Layer 4 random profile + HTTP tests
+    layer5_property.py   Layer 5 property-based invariant tests
+    renderer.py          Test result rendering (tables, benchmark output)
+
+  ollama_wrapper.py   Backward-compatibility shim — re-exports from layer modules
+  test_api.py         5-layer test suite entry point (v5)
+  complementary/
+    install.sh          One-command installer / uninstaller
+    requirements.txt    Python dependencies (requests, psutil, rich)
+    GUIDE.txt           This file
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 1 — QUICK START
@@ -43,7 +76,7 @@ SECTION 1 — QUICK START
   Add to ~/.zshrc:
     source ~/qemu-env/bin/activate
     export OLLAMA_MODEL=qwen2.5:7b
-    alias qemu-api='python3 ~/path/to/ollama_wrapper.py'
+    alias qemu-api='python3 ~/path/to/files/ollama_wrapper.py'
 
   Start Ollama:
     curl -fsSL https://ollama.com/install.sh | sh
@@ -68,23 +101,28 @@ Every request passes through five protection layers before QEMU sees it:
   User Input
       │
       ▼
-  qwen2.5:7b (Ollama)        Selects tool, builds args
+  qwen2.5:7b (Ollama)           ai/ollama_client.py
+  Selects tool, builds args
       │
       ▼
-  _sanitise_args()           Type coercion, enum normalisation, path fixing,
-                             placeholder removal, resource caps, arch checks
+  _sanitise_args()              sanitizer/sanitizer.py
+  Type coercion, enum normalisation, path fixing,
+  placeholder removal, resource caps, arch checks
       │
       ▼
-  _preflight_check()         Reality check: ok / auto_fix / ask_user / abort
-  + _validate_with_internet  QEMU binary check, CPU arch check, product lookup
-  + _validate_profile_for_host  Profile vs host capability check
+  _preflight_check()            preflight/validator.py
+  + _validate_with_internet     Reality check: ok / auto_fix / ask_user / abort
+  + _validate_profile_for_host  QEMU binary check, CPU arch check, product lookup,
+                                profile vs host capability check
       │
       ▼
-  execute_tool()             Hard guards: arch mismatch, name validation,
-                             Windows UEFI enforcement, clarify responses
+  execute_tool()                executioner/tool_executor.py
+  Hard guards: arch mismatch, name validation,
+  Windows UEFI enforcement, clarify responses
       │
       ▼
-  QemuManager                Actual QEMU/KVM operations
+  QemuManager                   api/qemu_manager.py
+  Actual QEMU/KVM operations
 
 Even if the AI hallucinates bad args, they are caught and either silently
 corrected or the user is asked before anything dangerous happens.
@@ -189,7 +227,7 @@ SECTION 3 — NEW FLAGS  (-cu  and  -tf)
   - KVM flags          → set kvm=False (loses performance)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 4 — qemu_config.py
+SECTION 4 — api/qemu_config.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 4.1  OVMF AUTO-DETECTION
@@ -220,7 +258,7 @@ SECTION 4 — qemu_config.py
   Every custom profile is validated against your host on first use.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 5 — qemu_manager.py
+SECTION 5 — api/qemu_manager.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 5.1  KEY FIXES IN THIS VERSION
@@ -258,7 +296,7 @@ SECTION 5 — qemu_manager.py
     send_monitor_cmd
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 6 — ollama_wrapper.py
+SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 6.1  THE 31 AI TOOLS
@@ -388,16 +426,16 @@ SECTION 6 — ollama_wrapper.py
     export OLLAMA_MODEL=llama3.1            permanent in ~/.zshrc
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 7 — test_api.py  (v5)
+SECTION 7 — test_api.py + tests/  (v5)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 7.1  FIVE LAYERS
 ─────────────────
-  Layer 1  Sanitiser         58 tests   No AI, no Ollama, ~1ms each
-  Layer 2  Executor          23 tests   No AI, no Ollama, ~10ms each
-  Layer 3  AI Integration    19 tests   Needs Ollama, ~4-11s each (qwen)
-  Layer 4  Profile + HTTP    8 fixed + N random, ~0.5s each
-  Layer 5  Property-Based    5 invariant checks, 50 iterations each
+  Layer 1  Sanitiser         tests/layer1_sanitizer.py    No AI, no Ollama, ~1ms each
+  Layer 2  Executor          tests/layer2_executor.py     No AI, no Ollama, ~10ms each
+  Layer 3  AI Integration    tests/layer3_ai.py           Needs Ollama, ~4-11s each (qwen)
+  Layer 4  Profile + HTTP    tests/layer4_profiles.py     8 fixed + N random, ~0.5s each
+  Layer 5  Property-Based    tests/layer5_property.py     5 invariant checks, 50 iterations each
 
 7.2  USAGE
 ────────────

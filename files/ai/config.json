@@ -1,0 +1,40 @@
+{
+  "ollama": {
+    "url": "http://localhost:11434",
+    "model": "qwen2.5:7b",
+    "temperature": 0.1,
+    "num_ctx": 8192,
+    "timeout": 120
+  },
+  "session": {
+    "file": "~/.qemu_vms/.session.json",
+    "max_history": 40
+  },
+  "chat": {
+    "tool_loop_max": 15
+  },
+  "exit_commands": [
+    "exit", "quit", "bye", "goodbye", "q", ":q", ":q!",
+    "stop", "leave", "close", "done", "end", "out",
+    "exit()", "quit()", "i want to exit", "i want to quit",
+    "please exit", "please quit"
+  ],
+  "shortcut_commands": {
+    "list":          ["list", "vms"],
+    "system":        ["system"],
+    "profiles":      ["profiles"],
+    "clear_session": ["clear session", "forget"]
+  },
+  "action_words": [
+    "create", "make", "build", "launch", "start", "run",
+    "stop", "kill", "delete", "remove", "destroy",
+    "clone", "resize", "snapshot", "update", "list"
+  ],
+  "fingerprint": {
+    "vm_bios_vendors":   ["seabios", "ovmf", "tianocore", "edk ii", "bochs"],
+    "vm_chassis_types":  ["other", "unspecified", ""],
+    "qemu_oui_prefixes": ["52:54:00", "00:1a:4a"],
+    "score_good": 80,
+    "score_warn": 50
+  }
+}

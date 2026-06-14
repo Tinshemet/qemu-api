@@ -6,57 +6,50 @@ paths, coerces types, rejects invalid enum values, and resolves
 vague VM name / ISO path references to real values.
 """
 
+import json
 import os
 import re
+import tempfile
 from typing import Any, Dict, List, Optional
 
 from api.qemu_config import get_all_profiles
+
+_CFG    = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_BOUNDS = _CFG["bounds"]
 
 REAL_HOME = os.path.expanduser("~")
 
 # ── Validation constants ───────────────────────────────────────────────────────
 
-PLACEHOLDER_VM_NAMES: set = {
-    "windows-vm", "linux-vm", "ubuntu-vm", "my-vm", "vm", "myvm",
-    "new-vm", "unnamed", "windows_vm", "linux_vm", "ubuntu_vm",
-    "my_vm", "new_vm", "virtual-machine", "virtual_machine",
-}
+PLACEHOLDER_VM_NAMES:    set = set(_CFG["placeholder_vm_names"])
+PLACEHOLDER_ISO_PATTERNS:set = set(_CFG["placeholder_iso_patterns"])
 
-PLACEHOLDER_ISO_PATTERNS: set = {
-    "/path/to/", "scan_isos()[0]", "<iso>", "<path>", "<file>",
-    "your_iso", "your-iso", "example.iso",
-}
+VALID_MACHINE_TYPES:  set = set(_CFG["valid_machine_types"])
+VALID_DISPLAY_MODES:  set = set(_CFG["valid_display_modes"])
+VALID_GPU_TYPES:      set = set(_CFG["valid_gpu_types"])
+VALID_AUDIO_TYPES:    set = set(_CFG["valid_audio_types"])
+VALID_NETWORK_MODES:  set = set(_CFG["valid_network_modes"])
+VALID_DISK_FORMATS:   set = set(_CFG["valid_disk_formats"])
+VALID_BIOS:           set = set(_CFG["valid_bios"])
+VALID_MACHINE_ARCH:   set = set(_CFG["valid_machine_arch"])
+VALID_MACHINE_CLASS:  set = set(_CFG["valid_machine_class"])
+VALID_OS_TYPES:       set = set(_CFG["valid_os_types"])
 
-VALID_MACHINE_TYPES: set = {
-    "q35", "pc", "pc-i440fx", "microvm", "virt",
-    "raspi3b", "raspi2b", "raspi0",
-}
+OS_TYPE_ALIASES: dict = _CFG["os_type_aliases"]
 
-VALID_DISPLAY_MODES: set = {"sdl", "gtk", "vnc", "spice", "none", "cocoa"}
-VALID_GPU_TYPES:     set = {"virtio", "qxl", "vga", "vmware", "none", "bochs"}
-VALID_AUDIO_TYPES:   set = {"hda", "ich9", "ac97", "sb16", "none"}
-VALID_NETWORK_MODES: set = {"nat", "bridge", "none", "user"}
-VALID_DISK_FORMATS:  set = {"qcow2", "raw", "vmdk", "vdi"}
-VALID_BIOS:          set = {"ovmf", "ovmf_ms", "seabios"}
-VALID_MACHINE_ARCH:  set = {"x86_64", "aarch64", "arm", "armhf", "i386"}
-VALID_MACHINE_CLASS: set = {"desktop", "laptop", "server", "custom", "embedded"}
-VALID_OS_TYPES:      set = {"linux", "windows", "macos", "other"}
-
-OS_TYPE_ALIASES: dict = {
-    "ubuntu": "linux", "debian": "linux", "fedora": "linux",
-    "mint": "linux", "arch": "linux", "kali": "linux",
-    "centos": "linux", "rhel": "linux", "suse": "linux",
-    "win": "windows", "win7": "windows", "win10": "windows",
-    "win11": "windows", "win32": "windows", "win64": "windows",
-    "windows10": "windows", "windows11": "windows", "windows7": "windows",
-    "osx": "macos", "darwin": "macos", "mac": "macos", "macosx": "macos",
-}
-
-_QEMU_OUI_PREFIXES: set = {"52:54:00", "00:1a:4a"}
+_QEMU_OUI_PREFIXES:   set   = set(_CFG["qemu_oui_prefixes"])
+_BAD_BRIDGE_IFACES:   set   = set(_CFG["bad_bridge_ifaces"])
+_BAD_BRIDGE_PREFIXES: tuple = tuple(_CFG["bad_bridge_prefixes"])
+_DEFAULT_BRIDGE:      str   = _CFG["default_bridge"]
+_ARM_CPU_MODELS:      set   = set(_CFG["arm_cpu_models"])
+_ARM_MACHINE_TYPES:   tuple = tuple(_CFG["arm_machine_types"])
+_ARM_MACHINE_ARCHS:   tuple = tuple(_CFG["arm_machine_archs"])
 
 
 # ── Path fixer ─────────────────────────────────────────────────────────────────
 
+# Rejects placeholder text, corrects wrong Linux usernames in paths, converts Windows paths to Linux.
+# In: str → Out: str
 def _fix_path(p: str) -> str:
     """Fix hallucinated paths — wrong username, relative paths, placeholder text."""
     if not p or not isinstance(p, str):
@@ -66,8 +59,8 @@ def _fix_path(p: str) -> str:
     for pat in PLACEHOLDER_ISO_PATTERNS:
         if pat.lower() in p_lower:
             return ""
-    # Fix wrong username: /home/anyname/ → real home
-    p = re.sub(r"^/home/[^/]+/", REAL_HOME + "/", p)
+    # Fix wrong username: /home/anyname/ or /Users/anyname/ → real home
+    p = re.sub(r"^(?:/home/|/Users/)[^/]+/", REAL_HOME + "/", p)
     p = p.replace("~/", REAL_HOME + "/")
     # Fix Windows-style paths
     p = p.replace("\\", "/")
@@ -77,6 +70,8 @@ def _fix_path(p: str) -> str:
 
 # ── VM name resolver ───────────────────────────────────────────────────────────
 
+# Resolves a vague VM reference (number, partial name, OS name) to a real VM name.
+# In: List[dict] vms, str ref → Out: str | None
 def _resolve_vm_name(vms: List[Dict], ref: str) -> Optional[str]:
     if ref == "all":
         return "all"
@@ -96,6 +91,8 @@ def _resolve_vm_name(vms: List[Dict], ref: str) -> Optional[str]:
 
 # ── ISO resolver ───────────────────────────────────────────────────────────────
 
+# Resolves a hallucinated or vague ISO path to a real file via exact match → username fix → keyword scoring → first ISO fallback.
+# In: str iso_hint → Out: str | None
 def _resolve_iso(iso_hint: str) -> Optional[str]:
     """
     Resolve an ISO path from a vague hint or hallucinated path.
@@ -122,17 +119,18 @@ def _resolve_iso(iso_hint: str) -> Optional[str]:
     # Build search dirs
     desktop = os.path.join(REAL_HOME, "Desktop")
     search_dirs: List[str] = []
+    _iso_dirs = set(_CFG["iso_search_dirs"])
     if os.path.isdir(desktop):
         for entry in os.listdir(desktop):
             full = os.path.join(desktop, entry)
-            if os.path.isdir(full) and entry.lower() in ("images", "iso", "isos", "vms"):
+            if os.path.isdir(full) and entry.lower() in _iso_dirs:
                 search_dirs.append(full)
         search_dirs.append(desktop)
     for d in ["Downloads", "iso", "ISOs", "images", "Images"]:
         p = os.path.join(REAL_HOME, d)
         if os.path.isdir(p):
             search_dirs.append(p)
-    search_dirs.append("/tmp")
+    search_dirs.append(tempfile.gettempdir())
 
     all_isos: List[str] = []
     for d in search_dirs:
@@ -193,6 +191,8 @@ def _resolve_iso(iso_hint: str) -> Optional[str]:
 
 # ── Main sanitiser ─────────────────────────────────────────────────────────────
 
+# Coerces types, validates enums, caps resource values, cleans paths, rejects bad MACs/bridges, and removes empty optional fields.
+# In: str tool_name, dict args → Out: dict
 def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """
     Sanitise all args before dispatch.
@@ -268,8 +268,8 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     mt_lower   = str(args.get("machine_type", "")).lower()
     arch_lower = str(args.get("machine_arch", "")).lower()
     bin_lower  = str(args.get("qemu_binary", "")).lower()
-    if (any(arm in mt_lower for arm in ("raspi", "raspi3b", "raspi2b", "virt"))
-            or arch_lower in ("aarch64", "arm", "armhf")
+    if (any(arm in mt_lower for arm in _ARM_MACHINE_TYPES)
+            or arch_lower in _ARM_MACHINE_ARCHS
             or "aarch64" in bin_lower):
         args["kvm"]       = False
         args["hugepages"] = False
@@ -277,9 +277,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     # CPU model: reject ARM CPUs on x86 VMs
     if "cpu_model" in args and args["cpu_model"]:
         cpu = str(args["cpu_model"]).lower().strip()
-        arm_cpus = {"cortex-a15","cortex-a53","cortex-a57","cortex-a72","cortex-a76",
-                    "arm1176","arm926","cortex-m","cortex-r"}
-        if any(arm in cpu for arm in arm_cpus) and str(args.get("machine_arch","x86_64")).lower() == "x86_64":
+        if any(arm in cpu for arm in _ARM_CPU_MODELS) and str(args.get("machine_arch","x86_64")).lower() == "x86_64":
             args["cpu_model"] = "host"
 
     # MAC address validation
@@ -291,25 +289,19 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     # Bridge interface: reject raw ethernet/wifi interfaces
     if "bridge_iface" in args and args["bridge_iface"]:
         br = str(args["bridge_iface"]).strip()
-        bad_ifaces = {"bridge","br","network","<bridge>","your_bridge","",
-                      "eth0","eth1","ens33","ens3","enp","wlan0","wlan1","wifi0"}
-        is_raw = any(br.startswith(p) for p in ("eth","ens","enp","wlan","wlp"))
-        if br in bad_ifaces or is_raw:
-            args["bridge_iface"] = "virbr0"
+        is_raw = any(br.startswith(p) for p in _BAD_BRIDGE_PREFIXES)
+        if br in _BAD_BRIDGE_IFACES or is_raw:
+            args["bridge_iface"] = _DEFAULT_BRIDGE
 
-    # Memory: cap at 95% of host RAM, minimum 512 MB
+    # Memory: cap at memory_max_ratio of host RAM, minimum memory_min_mb
     if "memory_mb" in args and args["memory_mb"]:
         try:
-            host_mb = 0
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if line.startswith("MemTotal"):
-                        host_mb = int(line.split()[1]) // 1024
-                        break
-            max_allowed = max(int(host_mb * 0.95), 4096)
-            args["memory_mb"] = max(512, min(args["memory_mb"], max_allowed))
+            import psutil
+            host_mb = psutil.virtual_memory().total // (1024 * 1024)
+            max_allowed = max(int(host_mb * _BOUNDS["memory_max_ratio"]), 4096)
+            args["memory_mb"] = max(_BOUNDS["memory_min_mb"], min(args["memory_mb"], max_allowed))
         except Exception:
-            args["memory_mb"] = max(512, args["memory_mb"])
+            args["memory_mb"] = max(_BOUNDS["memory_min_mb"], args["memory_mb"])
 
     # CPU cores: cap at host logical core count
     if "cpu_cores" in args and args["cpu_cores"]:
@@ -319,15 +311,15 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             args["cpu_cores"] = max(1, args["cpu_cores"])
 
-    # Disk size: 8 GB minimum, 2 TB maximum
+    # Disk size: bounded by config
     if "disk_size_gb" in args and args["disk_size_gb"]:
-        args["disk_size_gb"] = max(8, min(int(args["disk_size_gb"]), 2048))
+        args["disk_size_gb"] = max(_BOUNDS["disk_min_gb"], min(int(args["disk_size_gb"]), _BOUNDS["disk_max_gb"]))
 
     # Port numbers: valid range
     for port_field in ("vnc_port", "spice_port"):
         if port_field in args and args[port_field]:
             p = int(args[port_field])
-            if not (1024 <= p <= 65535):
+            if not (_BOUNDS["port_min"] <= p <= _BOUNDS["port_max"]):
                 args.pop(port_field, None)
 
     # extra_args: must be list of short strings
@@ -337,7 +329,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         else:
             args["extra_args"] = [
                 str(a) for a in args["extra_args"]
-                if isinstance(a, (str, int)) and len(str(a)) < 500
+                if isinstance(a, (str, int)) and len(str(a)) < _BOUNDS["extra_arg_max_len"]
             ]
 
     # Snapshot / network names: alphanumeric only

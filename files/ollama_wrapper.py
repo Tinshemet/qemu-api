@@ -19,3 +19,19 @@ from preflight.validator import (                                               
     _validate_with_internet, _validate_profile_for_host,
     _preflight_check, _show_preflight_warning,
 )
+
+if __name__ == "__main__":
+    import sys
+    argv    = sys.argv[1:]
+    verbose = "-v" in argv or "--verbose" in argv
+    argv    = [a for a in argv if a not in ("-v", "--verbose")]
+
+    if "-cu" in argv:
+        set_custom_mode(True)
+        argv = [a for a in argv if a != "-cu"]
+        console.print("[dim]Custom mode active — product verification disabled[/dim]")
+
+    if argv:
+        cli_direct(argv, verbose=verbose)
+    else:
+        chat_loop(verbose=verbose)

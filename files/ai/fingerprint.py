@@ -9,6 +9,8 @@ Bug fixes vs original ollama_wrapper.py:
   - cfg.network_mode → cfg.networks[0].mode (MachineConfig has no network_mode attr)
 """
 
+import json
+import os
 from typing import Dict
 
 from api.qemu_config import MachineConfig
@@ -17,11 +19,18 @@ from rich        import box
 from rich.panel  import Panel
 from rich.table  import Table
 
-_VM_BIOS_VENDORS  = {"seabios", "ovmf", "tianocore", "edk ii", "bochs"}
-_VM_CHASSIS_TYPES = {"other", "unspecified", ""}
-_QEMU_OUI_PREFIXES = {"52:54:00", "00:1a:4a"}
+_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_FP  = _CFG["fingerprint"]
+
+_VM_BIOS_VENDORS   = set(_FP["vm_bios_vendors"])
+_VM_CHASSIS_TYPES  = set(_FP["vm_chassis_types"])
+_QEMU_OUI_PREFIXES = set(_FP["qemu_oui_prefixes"])
+_SCORE_GOOD        = _FP["score_good"]
+_SCORE_WARN        = _FP["score_warn"]
 
 
+# Simulates what inxi -M -N -C -D -A -G would report from inside the guest, scoring each field and printing a recommendation panel.
+# In: str VM name → Out: nothing (console output)
 def _tf_report(name: str) -> None:
     """
     Simulate inxi -M -N -C -D -A -G output for a VM config.
@@ -217,7 +226,7 @@ def _tf_report(name: str) -> None:
     }
 
     # ── Render ────────────────────────────────────────────────────────────────
-    score_colour = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
+    score_colour = "green" if pct >= _SCORE_GOOD else "yellow" if pct >= _SCORE_WARN else "red"
     console.print()
     header = (
         f"[bold]Fingerprint Report: {name}[/bold]\n"

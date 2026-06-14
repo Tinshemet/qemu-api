@@ -9,9 +9,15 @@ resource limits, network, display, shell, config, and log analysis.
 import json
 import os
 import shutil
+import socket
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List, Optional
+
+_CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_TIMEOUTS = _CFG["timeouts"]
+_BUFFERS  = _CFG["buffers"]
 
 import psutil
 
@@ -26,10 +32,12 @@ from .qmp_client      import QMPClient
 from .network_manager import IsolatedNetManager
 from .vm_state        import VMState, _PsutilProcWrapper
 
-VM_BASE_DIR = os.path.expanduser("~/.qemu_vms")
+VM_BASE_DIR = os.path.expanduser(_CFG["dirs"]["vm_base"])
 
 
 class QemuManager:
+    # Creates the VM base dir, initializes state and net managers, reconnects to surviving VMs.
+    # In: nothing → Out: nothing
     def __init__(self):
         os.makedirs(VM_BASE_DIR, exist_ok=True)
         self._state   = VMState()
@@ -39,6 +47,8 @@ class QemuManager:
 
     # ── Reconnect ──────────────────────────────────────────────────────────────
 
+    # For each PID in state, attaches a _PsutilProcWrapper or cleans up dead entries.
+    # In: nothing → Out: nothing
     def _reconnect_running(self):
         """Reconnect to VMs that survived a terminal restart."""
         for name, pid in self._state.all_running().items():
@@ -50,6 +60,8 @@ class QemuManager:
 
     # ── Discovery ──────────────────────────────────────────────────────────────
 
+    # Scans ~/.qemu_vms/ and returns status info for every VM directory.
+    # In: nothing → Out: List[dict]
     def list_vms(self) -> List[Dict[str, Any]]:
         vms = []
         if not os.path.isdir(VM_BASE_DIR):
@@ -79,6 +91,8 @@ class QemuManager:
             })
         return vms
 
+    # Walks common directories to find .iso files and returns their names, paths, and sizes.
+    # In: nothing → Out: List[dict]
     def scan_isos(self) -> List[Dict[str, str]]:
         """Scan common directories for ISO files."""
         found = []
@@ -102,6 +116,8 @@ class QemuManager:
 
     # ── Create ─────────────────────────────────────────────────────────────────
 
+    # Creates VM directory, copies OVMF VARS, assigns ports, runs qemu-img create for each disk.
+    # In: MachineConfig, bool force → Out: dict with success
     def create_vm(self, config: MachineConfig, force: bool = False) -> Dict[str, Any]:
         vm_dir = config.get_vm_dir()
         if os.path.exists(vm_dir) and not force:
@@ -117,6 +133,14 @@ class QemuManager:
                 code_path = OVMF.get("code", "")
                 prefer_4m = "4M" in (code_path or "")
 
+                _MACOS_OVMF = [
+                    "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
+                    "/usr/local/share/qemu/edk2-x86_64-vars.fd",
+                ]
+                _WIN_OVMF = [
+                    "C:/Program Files/qemu/share/edk2-x86_64-vars.fd",
+                    "C:/Program Files (x86)/QEMU/share/edk2-x86_64-vars.fd",
+                ]
                 if config.bios == "ovmf_ms":
                     search = [
                         OVMF.get("ms_vars"),
@@ -124,6 +148,9 @@ class QemuManager:
                         "/usr/share/OVMF/OVMF_VARS_4M.snakeoil.fd",
                         "/usr/share/OVMF/OVMF_VARS.ms.fd",
                         "/usr/share/edk2-ovmf/x64/OVMF_VARS.secboot.fd",
+                        "/opt/homebrew/share/qemu/edk2-x86_64-secure-vars.fd",
+                        "/usr/local/share/qemu/edk2-x86_64-secure-vars.fd",
+                        "C:/Program Files/qemu/share/edk2-x86_64-secure-vars.fd",
                     ]
                 elif prefer_4m:
                     search = [
@@ -134,6 +161,7 @@ class QemuManager:
                         "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
                         "/usr/share/ovmf/x64/OVMF_VARS.fd",
                         "/usr/share/qemu/ovmf-x86_64-vars.bin",
+                        *_MACOS_OVMF, *_WIN_OVMF,
                     ]
                 else:
                     search = [
@@ -144,6 +172,7 @@ class QemuManager:
                         "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
                         "/usr/share/ovmf/x64/OVMF_VARS.fd",
                         "/usr/share/qemu/ovmf-x86_64-vars.bin",
+                        *_MACOS_OVMF, *_WIN_OVMF,
                     ]
 
                 vars_template = next((p for p in search if p and os.path.exists(p)), None)
@@ -191,6 +220,8 @@ class QemuManager:
 
     # ── Clone ──────────────────────────────────────────────────────────────────
 
+    # Creates a CoW qcow2 clone of each disk and copies the config under a new name/UUID.
+    # In: str source_name, str new_name → Out: dict with success
     def clone_vm(self, source_name: str, new_name: str) -> Dict[str, Any]:
         """Clone an existing VM — copies config and disk images."""
         if self._is_running(source_name):
@@ -237,6 +268,8 @@ class QemuManager:
 
     # ── Launch ─────────────────────────────────────────────────────────────────
 
+    # Builds the QEMU command, starts the process via Popen, records PID, applies CPU pinning.
+    # In: str name, str? display, bool dry_run → Out: dict with success and pid
     def launch_vm(self, name: str, display: Optional[str] = None,
                   dry_run: bool = False) -> Dict[str, Any]:
         _qemu_version_warn()
@@ -259,12 +292,15 @@ class QemuManager:
 
         log_path = os.path.join(config.get_vm_dir(), "launch.log")
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=open(log_path, "a"),
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            _popen_kwargs: Dict[str, Any] = {
+                "stdout": open(log_path, "a"),
+                "stderr": subprocess.STDOUT,
+            }
+            if sys.platform == "win32":
+                _popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                _popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen(cmd, **_popen_kwargs)
         except FileNotFoundError:
             return {"success": False, "error": f"{config.qemu_binary} not found. Check QEMU installation."}
         except Exception as e:
@@ -274,7 +310,7 @@ class QemuManager:
         self._state.set_running(name, proc.pid)
 
         if config.cpu_pinning:
-            time.sleep(1)
+            time.sleep(_TIMEOUTS["cpu_pinning_delay"])
             self._apply_cpu_pinning(proc.pid, config.cpu_pinning)
 
         return {"success": True, "name": name, "pid": proc.pid, "display": config.display,
@@ -282,6 +318,8 @@ class QemuManager:
 
     # ── Stop ───────────────────────────────────────────────────────────────────
 
+    # Tries graceful QMP system_powerdown, then terminates/kills the process.
+    # In: str name, bool force → Out: dict with success
     def stop_vm(self, name: str, force: bool = False) -> Dict[str, Any]:
         if not self._is_running(name):
             return {"success": False, "error": f"VM '{name}' is not running."}
@@ -289,11 +327,11 @@ class QemuManager:
         if not force:
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.qmp_socket)
+                qmp = QMPClient(cfg.get_qmp_socket())
                 qmp.connect()
                 qmp.execute("system_powerdown")
                 qmp.close()
-                for _ in range(30):
+                for _ in range(_TIMEOUTS["stop_graceful"]):
                     if not self._is_running(name):
                         break
                     time.sleep(1)
@@ -317,11 +355,15 @@ class QemuManager:
         self._state.set_stopped(name)
         return {"success": True, "name": name, "message": f"VM '{name}' stopped."}
 
+    # Calls stop_vm on every tracked running VM.
+    # In: nothing → Out: dict of results keyed by name
     def stop_all(self) -> Dict[str, Any]:
         return {name: self.stop_vm(name) for name in list(self._procs.keys())}
 
     # ── Status ─────────────────────────────────────────────────────────────────
 
+    # Returns state, PID, CPU%, RSS, uptime, and QMP internal status for a VM.
+    # In: str name → Out: dict
     def vm_status(self, name: str) -> Dict[str, Any]:
         running = self._is_running(name)
         pid     = self._state.get_pid(name) if running else None
@@ -338,7 +380,7 @@ class QemuManager:
                 pass
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.qmp_socket)
+                qmp = QMPClient(cfg.get_qmp_socket())
                 qmp.connect(timeout=2)
                 info = qmp.execute("query-status")
                 status["qemu_status"] = info.get("return", {}).get("status", "unknown")
@@ -350,6 +392,8 @@ class QemuManager:
 
     # ── Monitoring ─────────────────────────────────────────────────────────────
 
+    # Deep resource report: CPU times, IO counters, open files, and QMP block stats.
+    # In: str name → Out: dict
     def monitor_vm(self, name: str) -> Dict[str, Any]:
         status = self.vm_status(name)
         if status["state"] != "running":
@@ -382,7 +426,7 @@ class QemuManager:
 
         try:
             cfg = MachineConfig.load(name)
-            qmp = QMPClient(cfg.qmp_socket)
+            qmp = QMPClient(cfg.get_qmp_socket())
             qmp.connect(timeout=2)
             bs = qmp.execute("query-blockstats")
             if "return" in bs:
@@ -398,6 +442,8 @@ class QemuManager:
 
         return report
 
+    # Returns monitor_vm results for all running VMs.
+    # In: nothing → Out: dict keyed by VM name
     def monitor_all(self) -> Dict[str, Any]:
         results = {name: self.monitor_vm(name) for name in list(self._procs.keys())}
         for vm in self.list_vms():
@@ -407,6 +453,8 @@ class QemuManager:
 
     # ── Display / Shell ────────────────────────────────────────────────────────
 
+    # Launches remote-viewer (SPICE) or vncviewer for the VM's display.
+    # In: str name → Out: dict with success
     def open_display(self, name: str) -> Dict[str, Any]:
         try:
             cfg = MachineConfig.load(name)
@@ -421,6 +469,9 @@ class QemuManager:
                 if shutil.which(viewer):
                     subprocess.Popen([viewer, f"spice://localhost:{port}"])
                     return {"success": True, "message": f"Opened SPICE display on port {port}."}
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", f"spice://localhost:{port}"])
+                return {"success": True, "message": f"SPICE on port {port}. Install virt-viewer for full support: brew install virt-viewer"}
             return {"success": False, "error": "Install virt-viewer: sudo apt install virt-viewer"}
         elif cfg.display == "vnc":
             port = cfg.vnc_port or 5900
@@ -428,10 +479,20 @@ class QemuManager:
                 if shutil.which(viewer):
                     subprocess.Popen([viewer, f"localhost:{port}"])
                     return {"success": True, "message": f"Opened VNC display on port {port}."}
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", f"vnc://localhost:{port}"])
+                return {"success": True, "message": f"Opening VNC in Screen Sharing on port {port}."}
+            if sys.platform == "win32":
+                for viewer in ["tvnviewer", "vncviewer"]:
+                    if shutil.which(viewer):
+                        subprocess.Popen([viewer, f"localhost:{port}"])
+                        return {"success": True, "message": f"Opened VNC display on port {port}."}
             return {"success": False, "error": "Install VNC viewer: sudo apt install tigervnc-viewer"}
         else:
             return {"success": True, "message": f"VM uses {cfg.display} — window should already be open."}
 
+    # Opens a socat serial console in the first available terminal emulator.
+    # In: str name → Out: dict with success
     def open_shell(self, name: str) -> Dict[str, Any]:
         try:
             cfg = MachineConfig.load(name)
@@ -440,9 +501,21 @@ class QemuManager:
         if not self._is_running(name):
             return {"success": False, "error": f"VM '{name}' is not running."}
 
+        if sys.platform == "win32":
+            port = cfg.serial_tcp_port
+            if not port:
+                return {"success": False, "error": "Serial TCP port not configured — launch the VM first."}
+            subprocess.Popen(["cmd", "/c", "start", "telnet", "127.0.0.1", str(port)])
+            return {"success": True, "message": f"Opened serial console via telnet on port {port}."}
+
         serial_sock = os.path.join(cfg.get_vm_dir(), "serial.sock")
         if not os.path.exists(serial_sock):
             return {"success": False, "error": f"Serial socket not found: {serial_sock}"}
+
+        if sys.platform == "darwin":
+            script = f'tell app "Terminal" to do script "socat - UNIX-CONNECT:{serial_sock}"'
+            subprocess.Popen(["osascript", "-e", script])
+            return {"success": True, "message": "Opened serial console in Terminal.app."}
 
         for term in ["gnome-terminal", "xterm", "konsole", "lxterminal", "xfce4-terminal"]:
             if shutil.which(term):
@@ -451,10 +524,12 @@ class QemuManager:
                        else [term, "-e", f"socat - UNIX-CONNECT:{serial_sock}"])
                 subprocess.Popen(cmd)
                 return {"success": True, "message": f"Opened serial console in {term}."}
-        return {"success": False, "error": "No terminal emulator found."}
+        return {"success": False, "error": "No terminal emulator found. Install: sudo apt install xterm"}
 
     # ── Disk ───────────────────────────────────────────────────────────────────
 
+    # Runs qemu-img resize on a stopped VM's disk and saves the updated config.
+    # In: str name, int disk_index, int new_size_gb → Out: dict with success
     def resize_disk(self, name: str, disk_index: int, new_size_gb: int) -> Dict[str, Any]:
         if self._is_running(name):
             return {"success": False, "error": "Stop the VM before resizing."}
@@ -479,12 +554,14 @@ class QemuManager:
 
     # ── Snapshots ──────────────────────────────────────────────────────────────
 
+    # Sends savevm to a running VM via QMP.
+    # In: str name, str snap_name → Out: dict with success
     def snapshot_create(self, name: str, snap_name: str) -> Dict[str, Any]:
         if not self._is_running(name):
             return {"success": False, "error": f"VM '{name}' must be running for a live snapshot."}
         try:
             cfg = MachineConfig.load(name)
-            qmp = QMPClient(cfg.qmp_socket)
+            qmp = QMPClient(cfg.get_qmp_socket())
             qmp.connect()
             qmp.execute("savevm", {"tag": snap_name})
             qmp.close()
@@ -492,6 +569,8 @@ class QemuManager:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # Runs qemu-img snapshot -l and parses the output table.
+    # In: str name → Out: dict with snapshots list
     def snapshot_list(self, name: str) -> Dict[str, Any]:
         try:
             cfg = MachineConfig.load(name)
@@ -511,11 +590,13 @@ class QemuManager:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # Restores live via QMP loadvm or offline via qemu-img snapshot -a.
+    # In: str name, str snap_name → Out: dict with success
     def snapshot_restore(self, name: str, snap_name: str) -> Dict[str, Any]:
         if self._is_running(name):
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.qmp_socket)
+                qmp = QMPClient(cfg.get_qmp_socket())
                 qmp.connect()
                 qmp.execute("loadvm", {"tag": snap_name})
                 qmp.close()
@@ -536,6 +617,8 @@ class QemuManager:
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
+    # Runs qemu-img snapshot -d to delete a snapshot from disk.
+    # In: str name, str snap_name → Out: dict with success
     def snapshot_delete(self, name: str, snap_name: str) -> Dict[str, Any]:
         try:
             cfg       = MachineConfig.load(name)
@@ -552,6 +635,8 @@ class QemuManager:
 
     # ── Resource limits ────────────────────────────────────────────────────────
 
+    # Caps CPU via cpulimit or cgroups; adjusts balloon memory via QMP.
+    # In: str name, int? cpu_percent, int? memory_mb → Out: dict with results
     def set_resource_limits(self, name: str,
                              cpu_percent: Optional[int] = None,
                              memory_mb:   Optional[int] = None) -> Dict[str, Any]:
@@ -562,7 +647,9 @@ class QemuManager:
         pid = self._state.get_pid(name)
 
         if cpu_percent is not None:
-            if shutil.which("cpulimit"):
+            if sys.platform != "linux":
+                results["cpu_limit_error"] = f"CPU limiting via cpulimit/cgroups is Linux-only (current platform: {sys.platform})."
+            elif shutil.which("cpulimit"):
                 subprocess.Popen(
                     ["cpulimit", "-p", str(pid), "-l", str(cpu_percent), "-b"],
                     start_new_session=True,
@@ -585,7 +672,7 @@ class QemuManager:
         if memory_mb is not None:
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.qmp_socket)
+                qmp = QMPClient(cfg.get_qmp_socket())
                 qmp.connect()
                 qmp.execute("balloon", {"value": memory_mb * 1024 * 1024})
                 qmp.close()
@@ -597,6 +684,8 @@ class QemuManager:
 
     # ── Config ─────────────────────────────────────────────────────────────────
 
+    # Loads and returns the VM's config dict.
+    # In: str name → Out: dict with config
     def show_config(self, name: str) -> Dict[str, Any]:
         try:
             cfg = MachineConfig.load(name)
@@ -604,6 +693,8 @@ class QemuManager:
         except FileNotFoundError as e:
             return {"success": False, "error": str(e)}
 
+    # Applies a dict of field updates to a stopped VM's config and saves.
+    # In: str name, dict updates → Out: dict with success
     def update_config(self, name: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         if self._is_running(name):
             return {"success": False, "error": "Stop the VM before updating config."}
@@ -622,6 +713,8 @@ class QemuManager:
         cfg.save()
         return {"success": True, "message": f"Updated {changed} for '{name}'."}
 
+    # Removes the VM directory; optionally deletes disk image files too.
+    # In: str name, bool delete_disks → Out: dict with success
     def delete_vm(self, name: str, delete_disks: bool = False) -> Dict[str, Any]:
         if self._is_running(name):
             return {"success": False, "error": "Stop the VM before deleting."}
@@ -641,7 +734,9 @@ class QemuManager:
         self._state.set_stopped(name)
         return {"success": True, "message": f"VM '{name}' deleted."}
 
-    def get_vm_logs(self, name: str, lines: int = 50) -> Dict[str, Any]:
+    # Reads the launch log, pattern-matches 30+ known error strings, returns diagnosis and fix suggestions.
+    # In: str name, int lines → Out: dict with errors, diagnosis, suggestions
+    def get_vm_logs(self, name: str, lines: int = _CFG["log_default_lines"]) -> Dict[str, Any]:
         """Read the VM launch log and return a structured failure report."""
         vm_dir   = os.path.join(VM_BASE_DIR, name)
         log_path = os.path.join(vm_dir, "launch.log")
@@ -718,7 +813,7 @@ class QemuManager:
                     "line": "kvm=True on ARM guest",
                     "meaning": "KVM cannot be used for ARM guests on an x86 host"
                 })
-            if cfg.hugepages:
+            if cfg.hugepages and sys.platform == "linux":
                 try:
                     with open("/proc/sys/vm/nr_hugepages") as f:
                         if int(f.read().strip()) == 0:
@@ -791,25 +886,35 @@ class QemuManager:
 
         return result
 
+    # Sends a raw command string to the QEMU human monitor socket.
+    # In: str name, str cmd → Out: dict with output
     def send_monitor_cmd(self, name: str, cmd: str) -> Dict[str, Any]:
         try:
             cfg       = MachineConfig.load(name)
-            sock_path = cfg.monitor_socket
-            if not os.path.exists(sock_path):
-                return {"success": False, "error": "Monitor socket not found."}
-            s = __import__("socket").socket(__import__("socket").AF_UNIX, __import__("socket").SOCK_STREAM)
-            s.settimeout(5)
-            s.connect(sock_path)
-            time.sleep(0.3)
-            s.recv(4096)
+            sock_path = cfg.get_monitor_socket()
+            if sock_path.startswith("tcp:"):
+                host, port = sock_path[4:].rsplit(":", 1)
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(_TIMEOUTS["qmp_connect"])
+                s.connect((host, int(port)))
+            else:
+                if not os.path.exists(sock_path):
+                    return {"success": False, "error": "Monitor socket not found."}
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(_TIMEOUTS["qmp_connect"])
+                s.connect(sock_path)
+            time.sleep(_TIMEOUTS["monitor_recv_sleep"])
+            s.recv(_BUFFERS["monitor_send"])
             s.sendall((cmd + "\n").encode())
-            time.sleep(0.3)
-            response = s.recv(8192).decode()
+            time.sleep(_TIMEOUTS["monitor_recv_sleep"])
+            response = s.recv(_BUFFERS["monitor_recv"]).decode()
             s.close()
             return {"success": True, "output": response}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # Builds and returns the full QEMU command string without running it.
+    # In: str name → Out: dict with command
     def print_command(self, name: str) -> Dict[str, Any]:
         try:
             cfg = MachineConfig.load(name)
@@ -827,6 +932,8 @@ class QemuManager:
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
+    # Checks Popen.poll() or psutil liveness; cleans up stale state if dead.
+    # In: str name → Out: bool
     def _is_running(self, name: str) -> bool:
         proc = self._procs.get(name)
         if proc:
@@ -852,6 +959,8 @@ class QemuManager:
         self._state.set_stopped(name)
         return False
 
+    # Scans all VM configs and collects already-assigned VNC or SPICE ports.
+    # In: str kind ("vnc"|"spice") → Out: List[int]
     def _used_ports(self, kind: str) -> List[int]:
         ports = []
         for name in os.listdir(VM_BASE_DIR):
@@ -868,5 +977,9 @@ class QemuManager:
                     pass
         return ports
 
+    # Calls taskset to pin a process to specific host CPU cores (Linux only).
+    # In: int pid, List[int] cpus → Out: nothing
     def _apply_cpu_pinning(self, pid: int, cpus: List[int]):
+        if sys.platform != "linux":
+            return
         subprocess.run(["taskset", "-cp", ",".join(map(str, cpus)), str(pid)], capture_output=True)

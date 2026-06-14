@@ -6,6 +6,7 @@ blocking chat API call. OLLAMA_URL and OLLAMA_MODEL are the two
 tuneable globals for this layer.
 """
 
+import json
 import os
 import sys
 from typing import Dict, List
@@ -17,10 +18,15 @@ from .tools        import TOOLS
 from .display      import console
 import preflight.validator as _validator
 
-OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_OLLAMA = _CFG["ollama"]
+
+OLLAMA_URL   = os.environ.get("OLLAMA_URL",   _OLLAMA["url"])
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", _OLLAMA["model"])
 
 
+# Assembles the LLM system prompt from live OVMF/profile state and custom-mode flag.
+# In: nothing → Out: str
 def _build_system_prompt() -> str:
     profiles    = [p["name"] for p in list_profiles()]
     ovmf_status = "AVAILABLE" if OVMF["available"] else "NOT FOUND (SeaBIOS fallback active)"
@@ -29,7 +35,7 @@ def _build_system_prompt() -> str:
         "Skip all warnings about unverifiable hardware."
     ) if _validator._CUSTOM_MODE else ""
 
-    return f"""You are an expert KVM/QEMU virtual machine assistant running on Linux Mint.
+    return f"""You are an expert KVM/QEMU virtual machine assistant.
 You manage virtual machines using QEMU/KVM. Respond concisely and use tools immediately.{custom_note}
 You help the user create, launch, monitor, and manage QEMU/KVM virtual machines.
 
@@ -80,16 +86,18 @@ ARM/Pi  → kvm=false + qemu_binary=qemu-system-aarch64 + machine_type=virt
 """
 
 
+# POSTs the full chat payload (with tools) to the Ollama API and returns the parsed JSON response.
+# In: List[dict] messages → Out: dict response
 def _call_ollama(messages: List[Dict]) -> Dict:
     payload = {
         "model":    OLLAMA_MODEL,
         "messages": [{"role": "system", "content": _build_system_prompt()}] + messages,
         "tools":    TOOLS,
         "stream":   False,
-        "options":  {"temperature": 0.1, "num_ctx": 8192},
+        "options":  {"temperature": _OLLAMA["temperature"], "num_ctx": _OLLAMA["num_ctx"]},
     }
     try:
-        resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=120)
+        resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=_OLLAMA["timeout"])
         resp.raise_for_status()
         return resp.json()
     except requests.ConnectionError:

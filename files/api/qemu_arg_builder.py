@@ -7,22 +7,31 @@ ISO search-directory scanner.
 """
 
 import glob as _glob
+import json
 import os
 import re
 import socket
 import subprocess
+import sys
+import tempfile
 from typing import List, Tuple
 
 from .qemu_config import (
     AUDIO_PRESETS, BIOS_OPTIONS, CPU_PRESETS, GPU_PRESETS, MachineConfig, OVMF,
 )
 
+_CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_PORTS    = _CFG["ports"]
+_TIMEOUTS = _CFG["timeouts"]
+
 # ── QEMU Version Detection ─────────────────────────────────────────────────────
 
+# Runs qemu --version and parses the version as a (major, minor, patch) triple.
+# In: str binary → Out: (int, int, int), returns (0, 0, 0) on failure
 def _parse_qemu_version(binary: str = "qemu-system-x86_64") -> Tuple[int, int, int]:
     """Return (major, minor, patch). Returns (0, 0, 0) if detection fails."""
     try:
-        r = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=_TIMEOUTS["qemu_version"])
         m = re.search(r"version (\d+)[.](\d+)[.](\d+)", r.stdout)
         if m:
             return int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -34,6 +43,8 @@ def _parse_qemu_version(binary: str = "qemu-system-x86_64") -> Tuple[int, int, i
 QEMU_VERSION: Tuple[int, int, int] = _parse_qemu_version()
 
 
+# Prints a Rich warning panel for any known issues with the detected QEMU version.
+# In: nothing → Out: nothing (console output)
 def _qemu_version_warn() -> None:
     """Print a Rich warning panel for known version-specific issues."""
     major, minor, patch = QEMU_VERSION
@@ -72,17 +83,21 @@ def _qemu_version_warn() -> None:
 
 # ── Port Pool (auto-assign VNC / SPICE ports) ─────────────────────────────────
 
-VNC_PORT_START   = 5900
-SPICE_PORT_START = 5930
-PORT_RANGE       = 50  # supports up to 50 simultaneous VMs
+VNC_PORT_START   = _PORTS["vnc_start"]
+SPICE_PORT_START = _PORTS["spice_start"]
+PORT_RANGE       = _PORTS["port_range"]
 
 
+# Checks if a TCP port on localhost is currently available.
+# In: int port → Out: bool
 def _port_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.3)
         return s.connect_ex(("127.0.0.1", port)) != 0
 
 
+# Finds the first free port starting from start that is not in the used list.
+# In: int start, List[int] used → Out: int
 def _next_free_port(start: int, used: List[int]) -> int:
     for p in range(start, start + PORT_RANGE):
         if p not in used and _port_free(p):
@@ -92,23 +107,55 @@ def _next_free_port(start: int, used: List[int]) -> int:
 
 # ── ISO Search Directory Scanner ───────────────────────────────────────────────
 
+# Builds a list of directories to search for ISO files based on common home subdirectories.
+# In: nothing → Out: List[str]
+_ISO_DESKTOP_SUBDIRS = set(_CFG["iso_desktop_subdirs"])
+_ISO_HOME_SUBDIRS    = _CFG["iso_home_subdirs"]
+
+
 def _build_iso_search_dirs() -> List[str]:
     """Build ISO search dirs dynamically — handles capital/lowercase variants."""
-    home    = os.path.expanduser("~")
-    desktop = os.path.join(home, "Desktop")
+    home = os.path.expanduser("~")
     dirs: List[str] = []
-    if os.path.isdir(desktop):
-        for entry in os.listdir(desktop):
-            full = os.path.join(desktop, entry)
-            if os.path.isdir(full) and entry.lower() in ("images", "iso", "isos", "vms", "vm"):
-                dirs.append(full)
-        dirs.append(desktop)
-    for sub in ["Downloads", "downloads", "iso", "ISO", "ISOs", "isos",
-                "images", "Images", "vm", "VMs"]:
+
+    # Home subdirectories and one level deep inside them for named ISO folders
+    for sub in _ISO_HOME_SUBDIRS:
         p = os.path.join(home, sub)
-        if os.path.isdir(p) and p not in dirs:
+        if not os.path.isdir(p):
+            continue
+        if p not in dirs:
             dirs.append(p)
-    dirs.append("/tmp")
+        try:
+            for entry in os.listdir(p):
+                full = os.path.join(p, entry)
+                if os.path.isdir(full) and entry.lower() in _ISO_DESKTOP_SUBDIRS and full not in dirs:
+                    dirs.append(full)
+        except PermissionError:
+            pass
+
+    # System-wide mount points: /media/<user>/<device>, /mnt/<device>, /run/media/<user>/<device>
+    for mount_root in _CFG.get("iso_mount_roots", []):
+        if not os.path.isdir(mount_root):
+            continue
+        try:
+            for top in sorted(os.listdir(mount_root)):
+                top_path = os.path.join(mount_root, top)
+                if not os.path.isdir(top_path):
+                    continue
+                # /media/<user>/<device> layout — descend one more level
+                try:
+                    children = [os.path.join(top_path, c) for c in os.listdir(top_path)
+                                if os.path.isdir(os.path.join(top_path, c))]
+                except PermissionError:
+                    children = []
+                targets = children if children else [top_path]
+                for t in targets:
+                    if t not in dirs:
+                        dirs.append(t)
+        except PermissionError:
+            pass
+
+    dirs.append(tempfile.gettempdir())
     return dirs
 
 
@@ -118,6 +165,8 @@ ISO_SEARCH_DIRS = _build_iso_search_dirs()
 # ── QEMU Argument Builder ──────────────────────────────────────────────────────
 
 class QemuArgBuilder:
+    # Stores the config and precomputes ARM/raspi detection flags.
+    # In: MachineConfig → Out: nothing
     def __init__(self, config: MachineConfig):
         self.cfg      = config
         self.vm_dir   = config.get_vm_dir()
@@ -126,6 +175,8 @@ class QemuArgBuilder:
         self.is_arm   = config.machine_arch in ("aarch64", "arm", "armhf")
         self.is_raspi = "raspi" in config.machine_type.lower()
 
+    # Orchestrates all _* sub-methods and returns the complete QEMU command list.
+    # In: nothing → Out: List[str]
     def build(self) -> List[str]:
         self.args = [self.cfg.qemu_binary]
         self._base()
@@ -151,6 +202,8 @@ class QemuArgBuilder:
         self.args += self.cfg.extra_args
         return [a for a in self.args if a]
 
+    # Adds -name and -enable-kvm (disabled for ARM).
+    # In: nothing → Out: appends to self.args
     def _base(self):
         self.args += ["-name", f"{self.cfg.name},process={self.cfg.name}"]
         # -enable-kvm enables KVM; accel=kvm is set in _machine() — do NOT add -accel kvm here
@@ -159,6 +212,8 @@ class QemuArgBuilder:
         if self.is_arm:
             self.cfg.kvm = False  # KVM never works for ARM guests on x86 host
 
+    # Adds -machine with KVM/IOMMU accelerators and -rtc.
+    # In: nothing → Out: appends to self.args
     def _machine(self):
         machine_str = self.cfg.machine_type
         extras = []
@@ -175,9 +230,11 @@ class QemuArgBuilder:
             # 'host' is NOT a valid -rtc base value — use 'utc' instead
             rtc_base = self.cfg.rtc_clock
             if rtc_base not in ("utc", "localtime") and not rtc_base[0].isdigit():
-                rtc_base = "utc"
+                rtc_base = _CFG["machine_config_defaults"]["rtc_base_fallback"]
             self.args += ["-rtc", f"base={rtc_base},driftfix=slew"]
 
+    # Adds -cpu (with features) and -smp topology.
+    # In: nothing → Out: appends to self.args
     def _cpu(self):
         cpu_str  = CPU_PRESETS.get(self.cfg.cpu_model, self.cfg.cpu_model)
         cpu_name = cpu_str.replace("-cpu ", "").split(",")[0]
@@ -194,6 +251,8 @@ class QemuArgBuilder:
             f"maxcpus={self.cfg.cpu_cores * self.cfg.cpu_threads * self.cfg.cpu_sockets}",
         ]
 
+    # Adds -m, hugepages path, and balloon device.
+    # In: nothing → Out: appends to self.args
     def _memory(self):
         self.args += ["-m", str(self.cfg.memory_mb)]
         if self.cfg.hugepages and not self.is_arm:
@@ -201,6 +260,8 @@ class QemuArgBuilder:
         if self.cfg.balloon and not self.is_raspi:
             self.args += ["-device", "virtio-balloon-pci"]
 
+    # Adds OVMF code + vars as pflash drives; skipped on ARM.
+    # In: nothing → Out: appends to self.args
     def _firmware(self):
         if self.is_arm:
             return
@@ -219,6 +280,8 @@ class QemuArgBuilder:
             if vars_path and os.path.exists(vars_path):
                 self.args += ["-drive", f"if=pflash,format=raw,file={vars_path}"]
 
+    # Adds -smbios type=1 (manufacturer/product) and type=0 (BIOS vendor); skipped on ARM.
+    # In: nothing → Out: appends to self.args
     def _smbios(self):
         if self.is_arm:
             return
@@ -235,6 +298,8 @@ class QemuArgBuilder:
             if self.cfg.bios_version: parts.append(f"version={self.cfg.bios_version}")
             self.args += ["-smbios", ",".join(parts)]
 
+    # Adds disk drives (SD card for raspi, virtio/NVMe/SCSI/IDE for x86) and ISO cdrom.
+    # In: nothing → Out: appends to self.args
     def _disks(self):
         if self.is_raspi:
             # raspi3b ONLY accepts SD card interface
@@ -257,6 +322,8 @@ class QemuArgBuilder:
         else:
             self.args += ["-boot", "order=c,menu=on"]
 
+    # Adds network args from each NetworkConfig, or a default user NAT if none defined.
+    # In: nothing → Out: appends to self.args
     def _network(self):
         if not self.cfg.networks:
             self.args += ["-nic", "user,model=virtio-net-pci"]
@@ -264,20 +331,23 @@ class QemuArgBuilder:
         for net in self.cfg.networks:
             self.args += net.to_qemu_args()
 
-    @staticmethod
-    def _gl_available() -> bool:
+    # Probes QEMU with gl=on to check if virgl/OpenGL is actually usable on this host.
+    # In: nothing → Out: bool
+    def _gl_available(self) -> bool:
         """Check if virgl/OpenGL is actually usable before passing gl=on."""
         try:
             r = subprocess.run(
-                ["qemu-system-x86_64", "-display", "sdl,gl=on",
+                [self.cfg.qemu_binary, "-display", "sdl,gl=on",
                  "-machine", "none", "-no-user-config"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True, text=True, timeout=_TIMEOUTS["gl_check"],
             )
             err = (r.stderr or "").lower()
             return "gl" not in err and "opengl" not in err
         except Exception:
             return False
 
+    # Adds display args for SDL/GTK/SPICE/VNC or -nographic; downgrades GPU if GL unavailable.
+    # In: nothing → Out: appends to self.args
     def _display(self):
         if self.is_raspi:
             self.args += ["-nographic"]  # raspi3b has NO video output in QEMU
@@ -300,7 +370,7 @@ class QemuArgBuilder:
         elif self.cfg.display == "gtk":
             self.args += ["-display", f"gtk,{gl_flag}"]
         elif self.cfg.display == "spice":
-            port = self.cfg.spice_port or 5930
+            port = self.cfg.spice_port or SPICE_PORT_START
             self.args += [
                 "-spice",   f"port={port},disable-ticketing=on",
                 "-device",  "virtio-serial",
@@ -309,7 +379,7 @@ class QemuArgBuilder:
                 "-display", "spice-app",
             ]
         elif self.cfg.display == "vnc":
-            port = self.cfg.vnc_port or 5900
+            port = self.cfg.vnc_port or VNC_PORT_START
             self.args += ["-vnc", f":{port - 5900}"]
 
         if gpu_device and not self.is_raspi:
@@ -322,59 +392,117 @@ class QemuArgBuilder:
                 # vgamem_mb removed in QEMU 7+ — don't pass it
                 self.args += ["-device", gpu_device]
 
+    # Detects the platform audio server and adds the appropriate -audiodev + -device.
+    # Linux: PulseAudio or PipeWire. macOS: CoreAudio. Windows: DirectSound.
+    # In: nothing → Out: appends to self.args
     def _audio(self):
         if self.is_raspi:
             return
         audio_dev = AUDIO_PRESETS.get(self.cfg.audio)
         if not audio_dev:
             return
-        pa_running = bool(
-            _glob.glob("/run/user/*/pulse/native") or
-            _glob.glob("/tmp/pulse-*/native")
-        )
-        pw_running = bool(_glob.glob("/run/user/*/pipewire-0"))
-        if pa_running:
-            audiodev = "pa,id=audio0"
-        elif pw_running:
-            audiodev = "pipewire,id=audio0"
+
+        if sys.platform == "linux":
+            _tmp = tempfile.gettempdir()
+            pa_running = bool(
+                _glob.glob("/run/user/*/pulse/native") or
+                _glob.glob(os.path.join(_tmp, "pulse-*", "native"))
+            )
+            pw_running = bool(_glob.glob("/run/user/*/pipewire-0"))
+            if pa_running:
+                audiodev = "pa,id=audio0"
+            elif pw_running:
+                audiodev = "pipewire,id=audio0"
+            else:
+                return  # no audio server — skip to avoid crash
+        elif sys.platform == "darwin":
+            audiodev = "coreaudio,id=audio0"
+        elif sys.platform == "win32":
+            audiodev = "dsound,id=audio0"
         else:
-            return  # no audio server found — skip to avoid crash
+            return
+
         self.args += ["-audiodev", audiodev, "-device", audio_dev]
         if self.cfg.audio in ("hda", "ich9"):
             self.args += ["-device", "hda-duplex,audiodev=audio0"]
 
+    # Adds xHCI controller, keyboard, and tablet/mouse device.
+    # In: nothing → Out: appends to self.args
     def _usb(self):
         self.args += ["-device", "qemu-xhci,id=usb", "-device", "usb-kbd"]
         self.args += ["-device", "usb-tablet" if self.cfg.tablet else "usb-mouse"]
 
+    # Adds acpi-battery device for laptop profiles (x86 only).
+    # In: nothing → Out: appends to self.args
     def _battery(self):
         if self.cfg.battery and not self.is_arm:
             self.args += ["-device", "acpi-battery"]
 
+    # Adds -kernel, -initrd, -append for direct kernel boot if paths are set.
+    # In: nothing → Out: appends to self.args
     def _kernel_direct(self):
         if self.cfg.kernel_path:    self.args += ["-kernel", self.cfg.kernel_path]
         if self.cfg.initrd_path:    self.args += ["-initrd", self.cfg.initrd_path]
         if self.cfg.kernel_cmdline: self.args += ["-append", self.cfg.kernel_cmdline]
 
+    # Creates the QMP socket and adds its -chardev/-mon args.
+    # Uses Unix domain sockets on Linux/macOS; TCP on Windows.
+    # In: nothing → Out: appends to self.args
     def _qmp(self):
-        sock = os.path.join(self.vm_dir, "qmp.sock")
-        self.cfg.qmp_socket = sock
-        self.args += [
-            "-chardev", f"socket,id=qmp,path={sock},server=on,wait=off",
-            "-mon",     "chardev=qmp,mode=control,pretty=off",
-        ]
+        if sys.platform == "win32":
+            port = self.cfg.qmp_tcp_port or _next_free_port(
+                _CFG["ports"].get("qmp_port_start", 9000), []
+            )
+            self.cfg.qmp_tcp_port = port
+            self.cfg.qmp_socket   = f"tcp:127.0.0.1:{port}"
+            self.args += [
+                "-chardev", f"socket,id=qmp,host=127.0.0.1,port={port},server=on,wait=off",
+                "-mon",     "chardev=qmp,mode=control,pretty=off",
+            ]
+        else:
+            sock = os.path.join(self.vm_dir, "qmp.sock")
+            self.cfg.qmp_socket = sock
+            self.args += [
+                "-chardev", f"socket,id=qmp,path={sock},server=on,wait=off",
+                "-mon",     "chardev=qmp,mode=control,pretty=off",
+            ]
 
+    # Creates the human monitor socket and adds its -chardev/-mon args.
+    # Uses Unix domain sockets on Linux/macOS; TCP on Windows.
+    # In: nothing → Out: appends to self.args
     def _monitor(self):
-        sock = os.path.join(self.vm_dir, "monitor.sock")
-        self.cfg.monitor_socket = sock
-        self.args += [
-            "-chardev", f"socket,id=mon,path={sock},server=on,wait=off",
-            "-mon",     "chardev=mon,mode=readline",
-        ]
+        if sys.platform == "win32":
+            port = self.cfg.monitor_tcp_port or _next_free_port(
+                _CFG["ports"].get("monitor_port_start", 9100), []
+            )
+            self.cfg.monitor_tcp_port = port
+            self.cfg.monitor_socket   = f"tcp:127.0.0.1:{port}"
+            self.args += [
+                "-chardev", f"socket,id=mon,host=127.0.0.1,port={port},server=on,wait=off",
+                "-mon",     "chardev=mon,mode=readline",
+            ]
+        else:
+            sock = os.path.join(self.vm_dir, "monitor.sock")
+            self.cfg.monitor_socket = sock
+            self.args += [
+                "-chardev", f"socket,id=mon,path={sock},server=on,wait=off",
+                "-mon",     "chardev=mon,mode=readline",
+            ]
 
+    # Adds a serial console socket — Unix socket on Linux/macOS, TCP telnet on Windows.
+    # In: nothing → Out: appends to self.args
     def _serial(self):
-        sock = os.path.join(self.vm_dir, "serial.sock")
-        self.args += ["-serial", f"unix:{sock},server,nowait"]
+        if sys.platform == "win32":
+            port = self.cfg.serial_tcp_port or _next_free_port(
+                _CFG["ports"].get("serial_port_start", 9200), []
+            )
+            self.cfg.serial_tcp_port = port
+            self.args += ["-serial", f"telnet:127.0.0.1:{port},server,nowait"]
+        else:
+            sock = os.path.join(self.vm_dir, "serial.sock")
+            self.args += ["-serial", f"unix:{sock},server,nowait"]
 
+    # Adds virtio-rng-pci entropy device and -no-user-config (x86 only).
+    # In: nothing → Out: appends to self.args
     def _misc(self):
         self.args += ["-device", "virtio-rng-pci", "-no-user-config"]

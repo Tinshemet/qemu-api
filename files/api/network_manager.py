@@ -13,8 +13,12 @@ from typing import Any, Dict, List, Optional
 
 from .qemu_config import MachineConfig
 
-VM_BASE_DIR      = os.path.expanduser("~/.qemu_vms")
-ISOLATED_NET_DIR = os.path.join(VM_BASE_DIR, "_networks")
+_CFG  = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_DIRS = _CFG["dirs"]
+_NET  = _CFG["network"]
+
+VM_BASE_DIR      = os.path.expanduser(_DIRS["vm_base"])
+ISOLATED_NET_DIR = os.path.join(VM_BASE_DIR, _DIRS["isolated_net"])
 
 
 class IsolatedNetManager:
@@ -24,6 +28,8 @@ class IsolatedNetManager:
         os.makedirs(ISOLATED_NET_DIR, exist_ok=True)
         self._nets: Dict[str, Dict] = self._load()
 
+    # Reads the networks.json state file from disk.
+    # In: nothing → Out: dict
     def _load(self) -> Dict:
         if os.path.exists(self.NET_FILE):
             try:
@@ -33,27 +39,33 @@ class IsolatedNetManager:
                 pass
         return {}
 
+    # Writes the current network state back to networks.json.
+    # In: nothing → Out: nothing
     def _save(self):
         with open(self.NET_FILE, "w") as f:
             json.dump(self._nets, f, indent=2)
 
+    # Creates a named multicast network with an auto-assigned port.
+    # In: str net_name → Out: dict with success and network info
     def create_network(self, net_name: str) -> Dict[str, Any]:
         if net_name in self._nets:
             return {"success": False, "error": f"Network '{net_name}' already exists."}
         used_ports = [n["mcast_port"] for n in self._nets.values()]
-        port = 1234
+        port = _NET["start_port"]
         while port in used_ports:
             port += 1
         self._nets[net_name] = {
             "name":       net_name,
             "mcast_port": port,
-            "mcast_addr": "230.0.0.1",
+            "mcast_addr": _NET["mcast_addr"],
             "members":    [],
             "created":    datetime.now().isoformat(),
         }
         self._save()
         return {"success": True, "network": self._nets[net_name]}
 
+    # Removes a network by name from state and disk.
+    # In: str net_name → Out: dict with success
     def delete_network(self, net_name: str) -> Dict[str, Any]:
         if net_name not in self._nets:
             return {"success": False, "error": f"Network '{net_name}' not found."}
@@ -61,9 +73,13 @@ class IsolatedNetManager:
         self._save()
         return {"success": True, "message": f"Network '{net_name}' deleted."}
 
+    # Returns all currently defined isolated networks.
+    # In: nothing → Out: List[dict]
     def list_networks(self) -> List[Dict]:
         return list(self._nets.values())
 
+    # Returns the -netdev socket,mcast=... QEMU args to attach a VM to the network.
+    # In: str net_name, str vm_name → Out: List[str] | None
     def get_netdev_args(self, net_name: str, vm_name: str) -> Optional[List[str]]:
         """Return QEMU -netdev args to attach a VM to an isolated network."""
         net = self._nets.get(net_name)
@@ -80,6 +96,8 @@ class IsolatedNetManager:
             "-device", f"virtio-net-pci,netdev={netid}",
         ]
 
+    # Appends the isolation network args to a stopped VM's extra_args and saves its config.
+    # In: str net_name, str vm_name → Out: dict with success
     def add_vm_to_network(self, net_name: str, vm_name: str) -> Dict[str, Any]:
         """Update a stopped VM's config to include an isolated network interface."""
         net = self._nets.get(net_name)

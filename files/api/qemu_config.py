@@ -7,55 +7,33 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 import json
 import os
+import platform
+import sys
 import uuid
 import subprocess
 import shutil
+
+import psutil
+
+_CFG  = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_DIRS = _CFG["dirs"]
+_MC   = _CFG["machine_config_defaults"]
+_DC   = _CFG["disk_config_defaults"]
+_NC   = _CFG["network_config_defaults"]
 
 # ─────────────────────────────────────────────
 #  OVMF AUTO-DETECTION
 #  Searches all known install locations across distros
 # ─────────────────────────────────────────────
 
-_OVMF_SEARCH_PATHS = [
-    # Debian/Ubuntu/Mint
-    "/usr/share/OVMF/OVMF_CODE.fd",
-    "/usr/share/OVMF/OVMF_CODE_4M.fd",
-    # Fedora/RHEL
-    "/usr/share/edk2/ovmf/OVMF_CODE.fd",
-    "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
-    # Arch
-    "/usr/share/ovmf/x64/OVMF_CODE.fd",
-    "/usr/share/edk2-ovmf/OVMF_CODE.fd",
-    # openSUSE
-    "/usr/share/qemu/ovmf-x86_64-code.bin",
-]
-
-_OVMF_VARS_SEARCH_PATHS = [
-    # 4M variants first — these match modern OVMF_CODE_4M.fd installs
-    "/usr/share/OVMF/OVMF_VARS_4M.fd",
-    "/usr/share/OVMF/OVMF_VARS.fd",
-    "/usr/share/edk2/ovmf/OVMF_VARS.fd",
-    "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
-    "/usr/share/ovmf/x64/OVMF_VARS.fd",
-    "/usr/share/edk2-ovmf/OVMF_VARS.fd",
-    "/usr/share/qemu/ovmf-x86_64-vars.bin",
-]
-
-_OVMF_MS_CODE_PATHS = [
-    "/usr/share/OVMF/OVMF_CODE.ms.fd",
-    "/usr/share/OVMF/OVMF_CODE_4M.ms.fd",
-    "/usr/share/edk2-ovmf/x64/OVMF_CODE.secboot.fd",
-    "/usr/share/ovmf/x64/OVMF_CODE.secboot.fd",
-]
-
-_OVMF_MS_VARS_PATHS = [
-    "/usr/share/OVMF/OVMF_VARS.ms.fd",
-    "/usr/share/OVMF/OVMF_VARS_4M.ms.fd",
-    "/usr/share/edk2-ovmf/x64/OVMF_VARS.secboot.fd",
-    "/usr/share/ovmf/x64/OVMF_VARS.secboot.fd",
-]
+_OVMF_SEARCH_PATHS      = _CFG["ovmf_search_paths"]
+_OVMF_VARS_SEARCH_PATHS = _CFG["ovmf_vars_search_paths"]
+_OVMF_MS_CODE_PATHS     = _CFG["ovmf_ms_code_paths"]
+_OVMF_MS_VARS_PATHS     = _CFG["ovmf_ms_vars_paths"]
 
 
+# Scans a list of paths and returns the first one that exists on disk.
+# In: List[str] paths → Out: str | None
 def _find_first(paths: List[str]) -> Optional[str]:
     for p in paths:
         if os.path.exists(p):
@@ -63,20 +41,22 @@ def _find_first(paths: List[str]) -> Optional[str]:
     return None
 
 
+# Searches all known distro locations for OVMF firmware files.
+# In: nothing → Out: dict with keys code, vars, ms_code, ms_vars, available
 def detect_ovmf() -> Dict[str, Optional[str]]:
     """
     Auto-detect OVMF firmware paths on this system.
     Returns a dict with keys: code, vars, ms_code, ms_vars, available
     """
-    code = _find_first(_OVMF_SEARCH_PATHS)
-    vars_ = _find_first(_OVMF_VARS_SEARCH_PATHS)
+    code    = _find_first(_OVMF_SEARCH_PATHS)
+    vars_   = _find_first(_OVMF_VARS_SEARCH_PATHS)
     ms_code = _find_first(_OVMF_MS_CODE_PATHS)
     ms_vars = _find_first(_OVMF_MS_VARS_PATHS)
     return {
-        "code":     code,
-        "vars":     vars_,
-        "ms_code":  ms_code,
-        "ms_vars":  ms_vars,
+        "code":      code,
+        "vars":      vars_,
+        "ms_code":   ms_code,
+        "ms_vars":   ms_vars,
         "available": code is not None and vars_ is not None,
     }
 
@@ -92,6 +72,8 @@ BIOS_OPTIONS: Dict[str, Optional[str]] = {
 }
 
 
+# Probes the host for KVM, QEMU version, CPU flags, RAM, disk, and arch.
+# In: nothing → Out: dict with full capability report
 def check_system_capabilities() -> Dict[str, Any]:
     """
     Probe the host system for KVM, OVMF, QEMU version, CPU features, etc.
@@ -99,9 +81,13 @@ def check_system_capabilities() -> Dict[str, Any]:
     """
     caps = {}
 
-    # KVM
-    caps["kvm_available"] = os.path.exists("/dev/kvm")
-    caps["kvm_readable"] = os.access("/dev/kvm", os.R_OK | os.W_OK)
+    # KVM — Linux-only hardware accelerator
+    if sys.platform == "linux":
+        caps["kvm_available"] = os.path.exists("/dev/kvm")
+        caps["kvm_readable"]  = os.access("/dev/kvm", os.R_OK | os.W_OK)
+    else:
+        caps["kvm_available"] = False
+        caps["kvm_readable"]  = False
 
     # QEMU
     qemu = shutil.which("qemu-system-x86_64")
@@ -114,59 +100,47 @@ def check_system_capabilities() -> Dict[str, Any]:
             caps["qemu_version"] = "unknown"
 
     # ARM QEMU (for Pi emulation)
-    caps["qemu_arm_installed"] = shutil.which("qemu-system-aarch64") is not None
+    caps["qemu_arm_installed"]    = shutil.which("qemu-system-aarch64") is not None
     caps["qemu_arm_v7_installed"] = shutil.which("qemu-system-arm") is not None
 
     # OVMF
     caps["ovmf"] = OVMF
 
-    # CPU info
+    # CPU info — use platform module; cpu flags only available on Linux via /proc/cpuinfo
     try:
-        with open("/proc/cpuinfo") as f:
-            cpuinfo = f.read()
-        caps["host_cpu"] = next(
-            (l.split(":")[1].strip() for l in cpuinfo.splitlines() if "model name" in l), "unknown"
-        )
-        caps["cpu_flags"] = next(
-            (l.split(":")[1].strip().split() for l in cpuinfo.splitlines() if l.startswith("flags")), []
-        )
-        caps["vmx"] = "vmx" in caps["cpu_flags"]   # Intel VT-x
-        caps["svm"] = "svm" in caps["cpu_flags"]   # AMD-V
-        caps["avx2"] = "avx2" in caps["cpu_flags"]
-        caps["avx512"] = "avx512f" in caps["cpu_flags"]
+        caps["host_cpu"] = platform.processor() or "unknown"
+        cpu_flags: List[str] = []
+        if sys.platform == "linux":
+            with open("/proc/cpuinfo") as f:
+                cpuinfo = f.read()
+            cpu_flags = next(
+                (l.split(":")[1].strip().split() for l in cpuinfo.splitlines() if l.startswith("flags")), []
+            )
+        caps["cpu_flags"] = cpu_flags
+        caps["vmx"]    = "vmx"    in cpu_flags   # Intel VT-x
+        caps["svm"]    = "svm"    in cpu_flags   # AMD-V
+        caps["avx2"]   = "avx2"   in cpu_flags
+        caps["avx512"] = "avx512f" in cpu_flags
     except Exception:
         caps["host_cpu"] = "unknown"
-        caps["vmx"] = False
-        caps["svm"] = False
+        caps["vmx"] = caps["svm"] = caps["avx2"] = caps["avx512"] = False
 
-    # Architecture
-    try:
-        r = subprocess.run(["uname", "-m"], capture_output=True, text=True)
-        caps["host_arch"] = r.stdout.strip()
-    except Exception:
-        caps["host_arch"] = "x86_64"
+    # Architecture — platform.machine() works on all OSes
+    caps["host_arch"] = platform.machine() or "x86_64"
 
-    # Memory
+    # Memory — psutil works on Linux, macOS, and Windows
     try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemTotal"):
-                    caps["host_memory_mb"] = int(line.split()[1]) // 1024
-                    break
+        caps["host_memory_mb"] = psutil.virtual_memory().total // (1024 * 1024)
     except Exception:
         caps["host_memory_mb"] = 0
 
-    # CPU core count
-    try:
-        r = subprocess.run(["nproc"], capture_output=True, text=True)
-        caps["host_cpu_cores"] = int(r.stdout.strip())
-    except Exception:
-        caps["host_cpu_cores"] = 1
+    # CPU core count — os.cpu_count() works everywhere
+    caps["host_cpu_cores"] = os.cpu_count() or 1
 
-    # Disk space in home
+    # Disk space in home — shutil.disk_usage() works on all OSes
     try:
-        st = os.statvfs(os.path.expanduser("~"))
-        caps["home_free_gb"] = (st.f_bavail * st.f_frsize) // (1024**3)
+        usage = shutil.disk_usage(os.path.expanduser("~"))
+        caps["home_free_gb"] = usage.free // (1024 ** 3)
     except Exception:
         caps["home_free_gb"] = 0
 
@@ -177,45 +151,11 @@ def check_system_capabilities() -> Dict[str, Any]:
 #  ENUMS / CONSTANTS
 # ─────────────────────────────────────────────
 
-MACHINE_TYPES = {
-    "pc":      "i440FX + PIIX (legacy BIOS)",
-    "q35":     "Q35 + ICH9 (modern, PCIe, recommended)",
-    "microvm": "Minimal microvm (containers/cloud)",
-    "virt":    "ARM virt platform (aarch64)",
-}
-
-CPU_PRESETS = {
-    "host":        "-cpu host",
-    "kvm64":       "-cpu kvm64",
-    "Haswell":     "-cpu Haswell,+avx2",
-    "Broadwell":   "-cpu Broadwell,+avx2",
-    "SandyBridge": "-cpu SandyBridge",
-    "Skylake":     "-cpu Skylake-Client,+avx512f",
-    "IceLake":     "-cpu Icelake-Client,+avx512f",
-    "EPYC":        "-cpu EPYC",
-    "Opteron_G5":  "-cpu Opteron_G5",
-    "cortex-a72":  "-cpu cortex-a72",   # RPi 4
-    "cortex-a53":  "-cpu cortex-a53",   # RPi 3
-}
-
-GPU_PRESETS = {
-    "virtio":  "virtio-vga-gl",
-    "qxl":     "qxl-vga",
-    "vga":     "VGA",
-    "vmware":  "vmware-svga",
-    "none":    None,
-    "gt1030":  "vfio-pci",
-}
-
-AUDIO_PRESETS = {
-    "none":  None,
-    "ac97":  "ac97",
-    "hda":   "intel-hda",
-    "ich9":  "ich9-intel-hda",
-    "usb":   "usb-audio",
-}
-
-NETWORK_MODELS = ["virtio-net-pci", "e1000", "e1000e", "rtl8139", "vmxnet3"]
+MACHINE_TYPES:   Dict[str, str]           = _CFG["machine_types"]
+CPU_PRESETS:     Dict[str, str]           = _CFG["cpu_presets"]
+GPU_PRESETS:     Dict[str, Optional[str]] = _CFG["gpu_presets"]
+AUDIO_PRESETS:   Dict[str, Optional[str]] = _CFG["audio_presets"]
+NETWORK_MODELS:  List[str]                = _CFG["network_models"]
 
 
 # ─────────────────────────────────────────────
@@ -224,19 +164,23 @@ NETWORK_MODELS = ["virtio-net-pci", "e1000", "e1000e", "rtl8139", "vmxnet3"]
 
 @dataclass
 class DiskConfig:
-    path: str
-    size_gb: int = 60
-    format: str = "qcow2"
-    bus: str = "virtio"
-    cache: str = "writeback"
-    discard: bool = True
-    ssd: bool = False
-    boot: bool = False
+    path:    str
+    size_gb: int  = _DC["size_gb"]
+    format:  str  = _DC["format"]
+    bus:     str  = _DC["bus"]
+    cache:   str  = _DC["cache"]
+    discard: bool = _DC["discard"]
+    ssd:     bool = _DC["ssd"]
+    boot:    bool = _DC["boot"]
 
+    # Coerces size_gb to int — guards against AI sending strings like "60".
+    # In: self (post-construction) → Out: nothing (self-mutation)
     def __post_init__(self):
         # Coerce string values from AI (it sometimes sends "60" instead of 60)
         self.size_gb = int(self.size_gb)
 
+    # Converts this disk config into -drive / -device QEMU args for its bus type.
+    # In: int index → Out: List[str]
     def to_qemu_args(self, index: int = 0) -> List[str]:
         drive_id = f"drive{index}"
         args = [
@@ -270,14 +214,16 @@ class DiskConfig:
 
 @dataclass
 class NetworkConfig:
-    mode: str = "nat"
-    model: str = "virtio-net-pci"
-    mac: Optional[str] = None
-    bridge: str = "virbr0"
-    ip: Optional[str] = None
-    hostname: Optional[str] = None
-    port_forwards: List[tuple] = field(default_factory=list)
+    mode:          str           = _NC["mode"]
+    model:         str           = _NC["model"]
+    mac:           Optional[str] = None
+    bridge:        str           = _NC["bridge"]
+    ip:            Optional[str] = None
+    hostname:      Optional[str] = None
+    port_forwards: List[tuple]   = field(default_factory=list)
 
+    # Generates or validates the MAC address on init.
+    # In: self (post-construction) → Out: nothing (self-mutation)
     def __post_init__(self):
         if not self.mac:
             self._generate_mac()
@@ -285,10 +231,14 @@ class NetworkConfig:
             # Validate and fix incoming MAC — must be exactly 6 octets
             self.mac = self._fix_mac(self.mac)
 
+    # Generates a random QEMU-style 52:54:xx:xx:xx:xx MAC address.
+    # In: nothing → Out: sets self.mac
     def _generate_mac(self):
         raw = uuid.uuid4().hex[:10]
         self.mac = "52:54:" + ":".join(raw[i:i+2] for i in range(0, 10, 2))
 
+    # Validates or salvages a MAC string; generates a fresh one if unfixable.
+    # In: str → Out: str
     @staticmethod
     def _fix_mac(mac: str) -> str:
         """Validate MAC — if invalid, generate a fresh one."""
@@ -304,6 +254,8 @@ class NetworkConfig:
         raw = uuid.uuid4().hex[:10]
         return "52:54:" + ":".join(raw[i:i+2] for i in range(0, 10, 2))
 
+    # Returns -netdev/-device args for NAT or bridge networking.
+    # In: nothing → Out: List[str]
     def to_qemu_args(self) -> List[str]:
         args = []
         if self.mode == "none":
@@ -331,64 +283,70 @@ class NetworkConfig:
 
 @dataclass
 class MachineConfig:
-    name: str = "vm-default"
-    vm_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    hostname: str = "localhost"
-    description: str = ""
-    machine_class: str = "desktop"
-    machine_type: str = "q35"
-    bios: str = "ovmf"
-    uefi: bool = True
-    uefi_vars: Optional[str] = None
-    cpu_model: str = "host"
-    cpu_cores: int = 4
-    cpu_threads: int = 2
-    cpu_sockets: int = 1
-    cpu_features: List[str] = field(default_factory=list)
-    kvm: bool = True
-    cpu_pinning: Optional[List[int]] = None
-    memory_mb: int = 8192
-    hugepages: bool = False
-    balloon: bool = True
-    gpu: str = "virtio"
-    display: str = "sdl"
-    vnc_port: Optional[int] = None
-    spice_port: Optional[int] = None
-    opengl: bool = True
-    resolution: str = "1920x1080"
-    audio: str = "hda"
-    disks: List[DiskConfig] = field(default_factory=list)
-    networks: List[NetworkConfig] = field(default_factory=list)
-    os_type: str = "linux"
-    os_name: str = ""
-    iso_path: Optional[str] = None
-    boot_order: str = "cd"
-    smbios_type: str = ""
-    product_name: str = ""
-    manufacturer: str = ""
-    serial_number: str = ""
-    bios_version: str = ""
-    bios_vendor: str = ""
-    kernel_path: Optional[str] = None
-    initrd_path: Optional[str] = None
-    kernel_cmdline: str = ""
-    battery: bool = False
-    tablet: bool = True
-    iommu: bool = False
-    nested_virt: bool = False
-    hpet: bool = False
-    rtc_clock: str = "host"
-    tsc_deadline: bool = True
-    kvm_pv_features: bool = True
-    hugepages_path: str = "/dev/hugepages"
-    extra_args: List[str] = field(default_factory=list)
+    name:            str           = _MC["name"]
+    vm_id:           str           = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    hostname:        str           = _MC["hostname"]
+    description:     str           = ""
+    machine_class:   str           = _MC["machine_class"]
+    machine_type:    str           = _MC["machine_type"]
+    bios:            str           = _MC["bios"]
+    uefi:            bool          = _MC["uefi"]
+    uefi_vars:       Optional[str] = None
+    cpu_model:       str           = _MC["cpu_model"]
+    cpu_cores:       int           = _MC["cpu_cores"]
+    cpu_threads:     int           = _MC["cpu_threads"]
+    cpu_sockets:     int           = _MC["cpu_sockets"]
+    cpu_features:    List[str]     = field(default_factory=list)
+    kvm:             bool          = _MC["kvm"]
+    cpu_pinning:     Optional[List[int]] = None
+    memory_mb:       int           = _MC["memory_mb"]
+    hugepages:       bool          = _MC["hugepages"]
+    balloon:         bool          = _MC["balloon"]
+    gpu:             str           = _MC["gpu"]
+    display:         str           = _MC["display"]
+    vnc_port:        Optional[int] = None
+    spice_port:      Optional[int] = None
+    opengl:          bool          = _MC["opengl"]
+    resolution:      str           = _MC["resolution"]
+    audio:           str           = _MC["audio"]
+    disks:           List[DiskConfig]    = field(default_factory=list)
+    networks:        List[NetworkConfig] = field(default_factory=list)
+    os_type:         str           = _MC["os_type"]
+    os_name:         str           = ""
+    iso_path:        Optional[str] = None
+    boot_order:      str           = _MC["boot_order"]
+    smbios_type:     str           = _MC["smbios_type"]
+    product_name:    str           = _MC["product_name"]
+    manufacturer:    str           = _MC["manufacturer"]
+    serial_number:   str           = _MC["serial_number"]
+    bios_version:    str           = _MC["bios_version"]
+    bios_vendor:     str           = _MC["bios_vendor"]
+    kernel_path:     Optional[str] = None
+    initrd_path:     Optional[str] = None
+    kernel_cmdline:  str           = _MC["kernel_cmdline"]
+    battery:         bool          = _MC["battery"]
+    tablet:          bool          = _MC["tablet"]
+    iommu:           bool          = _MC["iommu"]
+    nested_virt:     bool          = _MC["nested_virt"]
+    hpet:            bool          = _MC["hpet"]
+    rtc_clock:       str           = _MC["rtc_clock"]
+    tsc_deadline:    bool          = _MC["tsc_deadline"]
+    kvm_pv_features: bool          = _MC["kvm_pv_features"]
+    hugepages_path:  str           = _MC["hugepages_path"]
+    extra_args:      List[str]     = field(default_factory=list)
     # ARM / non-x86 support
-    qemu_binary: str = "qemu-system-x86_64"
-    machine_arch: str = "x86_64"
-    pid: Optional[int] = field(default=None, repr=False)
-    monitor_socket: str = field(default="", repr=False)
-    qmp_socket: str = field(default="", repr=False)
+    qemu_binary:     str           = _MC["qemu_binary"]
+    machine_arch:    str           = _MC["machine_arch"]
+    pid:             Optional[int] = field(default=None, repr=False)
+    monitor_socket:  str           = field(default="", repr=False)
+    qmp_socket:      str           = field(default="", repr=False)
+    # Windows-only: TCP ports for QMP/monitor/serial (0 = use Unix socket on Linux/macOS)
+    qmp_tcp_port:     int = field(default=0)
+    monitor_tcp_port: int = field(default=0)
+    serial_tcp_port:  int = field(default=0)
 
+    # Coerces int fields and auto-falls back to SeaBIOS if OVMF is absent.
+    # In: self (post-construction) → Out: nothing (self-mutation)
     def __post_init__(self):
         # Coerce types that AI may send as strings
         self.cpu_cores   = int(self.cpu_cores)
@@ -399,12 +357,32 @@ class MachineConfig:
             self.bios = "seabios"
             self.uefi = False
 
+    # Returns the VM's directory path (~/.qemu_vms/<name>).
+    # In: nothing → Out: str
     def get_vm_dir(self) -> str:
         return os.path.expanduser(f"~/.qemu_vms/{self.name}")
 
+    # Returns the path to the VM's config.json.
+    # In: nothing → Out: str
     def get_config_path(self) -> str:
         return os.path.join(self.get_vm_dir(), "config.json")
 
+    # Returns the QMP socket address — Unix path on Linux/macOS, tcp:host:port on Windows.
+    # In: nothing → Out: str
+    def get_qmp_socket(self) -> str:
+        if sys.platform == "win32" and self.qmp_tcp_port:
+            return f"tcp:127.0.0.1:{self.qmp_tcp_port}"
+        return os.path.join(self.get_vm_dir(), "qmp.sock")
+
+    # Returns the monitor socket address — Unix path on Linux/macOS, tcp:host:port on Windows.
+    # In: nothing → Out: str
+    def get_monitor_socket(self) -> str:
+        if sys.platform == "win32" and self.monitor_tcp_port:
+            return f"tcp:127.0.0.1:{self.monitor_tcp_port}"
+        return os.path.join(self.get_vm_dir(), "monitor.sock")
+
+    # Serializes the config to a dict, stripping runtime-only fields (pid, sockets).
+    # In: nothing → Out: dict
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d.pop("pid", None)
@@ -412,11 +390,15 @@ class MachineConfig:
         d.pop("qmp_socket", None)
         return d
 
+    # Writes the config to ~/.qemu_vms/<name>/config.json.
+    # In: nothing → Out: nothing
     def save(self):
         os.makedirs(self.get_vm_dir(), exist_ok=True)
         with open(self.get_config_path(), "w") as f:
             json.dump(self.to_dict(), f, indent=2)
 
+    # Loads and deserializes a VM config from disk by name.
+    # In: str name → Out: MachineConfig
     @classmethod
     def load(cls, name: str) -> "MachineConfig":
         path = os.path.expanduser(f"~/.qemu_vms/{name}/config.json")
@@ -434,9 +416,11 @@ class MachineConfig:
 #  Profiles are saved to ~/.qemu_vms/_profiles/
 # ─────────────────────────────────────────────
 
-PROFILES_DIR = os.path.expanduser("~/.qemu_vms/_profiles")
+PROFILES_DIR = os.path.expanduser(_DIRS["profiles"])
 
 
+# Reads all .json files from ~/.qemu_vms/_profiles/ into a dict.
+# In: nothing → Out: dict
 def _load_custom_profiles() -> Dict[str, Dict[str, Any]]:
     profiles = {}
     if not os.path.isdir(PROFILES_DIR):
@@ -452,6 +436,8 @@ def _load_custom_profiles() -> Dict[str, Dict[str, Any]]:
     return profiles
 
 
+# Sanitizes the name and writes a custom profile JSON to _profiles/.
+# In: str name, dict profile_data → Out: dict with success and path
 def save_custom_profile(name: str, profile_data: Dict[str, Any]) -> Dict[str, Any]:
     """Save a custom hardware profile to disk."""
     os.makedirs(PROFILES_DIR, exist_ok=True)
@@ -459,12 +445,14 @@ def save_custom_profile(name: str, profile_data: Dict[str, Any]) -> Dict[str, An
     safe_name = name.lower().replace(" ", "_").replace("-", "_")
     path = os.path.join(PROFILES_DIR, f"{safe_name}.json")
     profile_data["_custom"] = True
-    profile_data["_name"] = safe_name
+    profile_data["_name"]   = safe_name
     with open(path, "w") as f:
         json.dump(profile_data, f, indent=2)
     return {"success": True, "profile_name": safe_name, "path": path}
 
 
+# Deletes a custom profile JSON file by name.
+# In: str name → Out: dict with success
 def delete_custom_profile(name: str) -> Dict[str, Any]:
     safe_name = name.lower().replace(" ", "_").replace("-", "_")
     path = os.path.join(PROFILES_DIR, f"{safe_name}.json")
@@ -478,97 +466,11 @@ def delete_custom_profile(name: str) -> Dict[str, Any]:
 #  BUILT-IN HARDWARE PROFILES
 # ─────────────────────────────────────────────
 
-HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = {
-    "dell_g15_5520": {
-        "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": True,
-        "cpu_model": "host", "cpu_cores": 6, "cpu_threads": 12, "memory_mb": 16384,
-        "gpu": "virtio", "audio": "hda", "battery": True,
-        "manufacturer": "Dell Inc.", "product_name": "G15 5520",
-        "bios_vendor": "Dell Inc.", "bios_version": "1.14.0",
-        "description": "Dell G15 Gaming Laptop (2022) — i5-12500H profile",
-        "kvm_pv_features": True, "opengl": True, "tablet": True,
-    },
-    "gaming_desktop": {
-        "machine_class": "desktop", "machine_type": "q35", "bios": "ovmf", "uefi": True,
-        "cpu_model": "host", "cpu_cores": 8, "cpu_threads": 16, "memory_mb": 32768,
-        "gpu": "virtio", "audio": "ich9", "battery": False,
-        "manufacturer": "Custom Build", "product_name": "Gaming Desktop",
-        "description": "High-performance gaming desktop profile", "opengl": True,
-    },
-    "office_laptop": {
-        "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": True,
-        "cpu_model": "host", "cpu_cores": 4, "cpu_threads": 8, "memory_mb": 8192,
-        "gpu": "qxl", "audio": "hda", "battery": True,
-        "manufacturer": "Lenovo", "product_name": "ThinkPad E14",
-        "description": "Lenovo ThinkPad-style office laptop",
-    },
-    "server": {
-        "machine_class": "server", "machine_type": "q35", "bios": "ovmf", "uefi": True,
-        "cpu_model": "EPYC", "cpu_cores": 16, "cpu_threads": 32, "memory_mb": 65536,
-        "gpu": "none", "display": "none", "audio": "none", "battery": False,
-        "manufacturer": "Supermicro", "product_name": "AS-1124US-TNRP",
-        "description": "EPYC server profile — headless",
-        "hugepages": True, "iommu": True,
-    },
-    "mac_mini": {
-        "machine_class": "desktop", "machine_type": "q35", "bios": "ovmf", "uefi": True,
-        "cpu_model": "host", "cpu_cores": 4, "cpu_threads": 8, "memory_mb": 8192,
-        "os_type": "macos", "manufacturer": "Apple Inc.", "product_name": "Mac mini",
-        "bios_vendor": "Apple Inc.", "description": "macOS-style Mac Mini profile",
-        "gpu": "vmware", "audio": "hda",
-    },
-    "minimal": {
-        "machine_class": "custom", "machine_type": "q35", "cpu_model": "kvm64",
-        "cpu_cores": 2, "cpu_threads": 2, "memory_mb": 2048,
-        "gpu": "none", "display": "none", "audio": "none",
-        "description": "Minimal headless VM for CI/testing",
-    },
-    # ── Raspberry Pi profiles (emulated, not native) ──────────────────
-    "raspberry_pi_4": {
-        "machine_class": "custom",
-        "machine_type": "raspi3b",       # QEMU raspi machine type
-        "qemu_binary": "qemu-system-aarch64",
-        "machine_arch": "aarch64",
-        "bios": "seabios",               # No OVMF on ARM
-        "uefi": False,
-        "cpu_model": "cortex-a72",
-        "cpu_cores": 4, "cpu_threads": 1,
-        "memory_mb": 4096,
-        "gpu": "none", "display": "sdl", "audio": "none",
-        "manufacturer": "Raspberry Pi Foundation",
-        "product_name": "Raspberry Pi 4 Model B",
-        "description": "Emulated Raspberry Pi 4 (aarch64) — requires qemu-system-aarch64",
-        "_requires": {"qemu_arm_installed": True},
-        "_notes": "Pi 4 emulation is slow. For bare-metal Pi use, flash an SD card instead.",
-    },
-    "raspberry_pi_3b": {
-        "machine_class": "custom",
-        "machine_type": "raspi3b",
-        "qemu_binary": "qemu-system-aarch64",
-        "machine_arch": "aarch64",
-        "bios": "seabios",
-        "uefi": False,
-        "kvm": False,
-        "hugepages": False,
-        "balloon": False,
-        "cpu_model": "cortex-a53",
-        "cpu_cores": 4, "cpu_threads": 1,
-        "memory_mb": 1024,
-        "gpu": "none",
-        "display": "none",
-        "audio": "none",
-        "battery": False,
-        "kvm_pv_features": False,
-        "manufacturer": "Raspberry Pi Foundation",
-        "product_name": "Raspberry Pi 3 Model B Rev 1.2",
-        "kernel_cmdline": "console=ttyAMA0 root=/dev/mmcblk0p2 rw rootfstype=ext4 fsck.repair=yes",
-        "description": "Emulated Raspberry Pi 3B — serial console only, requires Pi OS image + kernel8.img",
-        "_requires": {"qemu_arm_installed": True},
-        "_notes": "raspi3b has NO display output in QEMU. Connect via serial console. KVM not available on x86. Needs kernel8.img + bcm2710-rpi-3-b.dtb extracted from Pi OS image.",
-    },
-}
+HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = _CFG["hardware_profiles"]
 
 
+# Merges built-in HARDWARE_PROFILES with any saved custom profiles.
+# In: nothing → Out: dict
 def get_all_profiles() -> Dict[str, Dict[str, Any]]:
     """Return built-in + custom profiles merged."""
     all_profiles = dict(HARDWARE_PROFILES)
@@ -576,6 +478,8 @@ def get_all_profiles() -> Dict[str, Dict[str, Any]]:
     return all_profiles
 
 
+# Copies all matching profile fields onto a MachineConfig.
+# In: MachineConfig, str profile_name → Out: MachineConfig
 def apply_profile(config: MachineConfig, profile_name: str) -> MachineConfig:
     all_profiles = get_all_profiles()
     profile = all_profiles.get(profile_name)
@@ -593,15 +497,17 @@ def apply_profile(config: MachineConfig, profile_name: str) -> MachineConfig:
     return config
 
 
+# Returns a flat list of all profiles with name, description, arch, and custom flag.
+# In: nothing → Out: List[dict]
 def list_profiles() -> List[Dict[str, str]]:
     all_profiles = get_all_profiles()
     result = []
     for k, v in all_profiles.items():
         entry = {
-            "name": k,
+            "name":        k,
             "description": v.get("description", ""),
-            "arch": v.get("machine_arch", "x86_64"),
-            "custom": str(v.get("_custom", False)),
+            "arch":        v.get("machine_arch", "x86_64"),
+            "custom":      str(v.get("_custom", False)),
         }
         if "_notes" in v:
             entry["notes"] = v["_notes"]
@@ -609,20 +515,27 @@ def list_profiles() -> List[Dict[str, str]]:
     return result
 
 
+# Compares a profile's requirements against the host (KVM, RAM, cores, OVMF, arch).
+# In: str profile_name → Out: dict with compatible, issues, warnings
 def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
     """
     Check whether a given profile can run on this host system.
     Returns compatibility status, issues found, and alternatives.
     """
+    _THRESHOLDS = _CFG.get("compatibility_thresholds", {
+        "memory_ratio": 0.8,
+        "min_disk_free_gb": 20,
+    })
+
     all_profiles = get_all_profiles()
-    profile = all_profiles.get(profile_name)
-    caps = check_system_capabilities()
+    profile      = all_profiles.get(profile_name)
+    caps         = check_system_capabilities()
 
     if not profile:
         return {"compatible": False, "error": f"Profile '{profile_name}' not found."}
 
-    issues = []
-    warnings = []
+    issues       = []
+    warnings     = []
     alternatives = []
 
     # KVM check
@@ -651,8 +564,8 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
 
     # Memory check
     requested_mb = int(profile.get("memory_mb", 2048))
-    host_mb = caps.get("host_memory_mb", 0)
-    if host_mb > 0 and requested_mb > host_mb * 0.8:
+    host_mb      = caps.get("host_memory_mb", 0)
+    if host_mb > 0 and requested_mb > host_mb * _THRESHOLDS["memory_ratio"]:
         warnings.append(
             f"Profile requests {requested_mb}MB RAM but host only has {host_mb}MB. "
             f"Consider reducing memory_mb to {host_mb // 2}MB."
@@ -660,7 +573,7 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
 
     # CPU core check
     requested_cores = int(profile.get("cpu_cores", 2))
-    host_cores = caps.get("host_cpu_cores", 1)
+    host_cores      = caps.get("host_cpu_cores", 1)
     if requested_cores > host_cores:
         warnings.append(
             f"Profile requests {requested_cores} cores but host only has {host_cores}. "
@@ -669,29 +582,31 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
 
     # Disk space check
     free_gb = caps.get("home_free_gb", 0)
-    if free_gb < 20:
+    if free_gb < _THRESHOLDS["min_disk_free_gb"]:
         warnings.append(f"Low disk space: only {free_gb}GB free in home directory.")
 
     compatible = len(issues) == 0
     return {
-        "profile": profile_name,
+        "profile":    profile_name,
         "compatible": compatible,
-        "issues": issues,
-        "warnings": warnings,
+        "issues":     issues,
+        "warnings":   warnings,
         "alternatives": alternatives,
         "host_summary": {
-            "cpu": caps.get("host_cpu", "unknown"),
-            "cores": caps.get("host_cpu_cores"),
+            "cpu":       caps.get("host_cpu", "unknown"),
+            "cores":     caps.get("host_cpu_cores"),
             "memory_mb": caps.get("host_memory_mb"),
-            "kvm": caps.get("kvm_available"),
-            "ovmf": OVMF["available"],
-            "qemu_arm": caps.get("qemu_arm_installed"),
-            "arch": caps.get("host_arch"),
+            "kvm":       caps.get("kvm_available"),
+            "ovmf":      OVMF["available"],
+            "qemu_arm":  caps.get("qemu_arm_installed"),
+            "arch":      caps.get("host_arch"),
         },
         "notes": profile.get("_notes", ""),
     }
 
 
+# Injects OS-specific CPU features: Hyper-V flags for Windows, KVM PV for Linux, vendor tweak for macOS.
+# In: MachineConfig → Out: MachineConfig
 def apply_os_hints(config: MachineConfig) -> MachineConfig:
     os_type = config.os_type.lower()
     if "windows" in os_type or os_type == "windows":
@@ -701,7 +616,7 @@ def apply_os_hints(config: MachineConfig) -> MachineConfig:
             "hv_synic", "hv_stimer", "hv_vpindex",
         ]
         config.hpet = False
-        if config.rtc_clock == "host":
+        if config.rtc_clock == _MC["rtc_clock"]:
             config.rtc_clock = "localtime"
         config.tsc_deadline = True
     elif "linux" in os_type:

@@ -1,0 +1,53 @@
+{
+  "placeholder_vm_names": [
+    "windows-vm", "linux-vm", "ubuntu-vm", "my-vm", "vm", "myvm",
+    "new-vm", "unnamed", "windows_vm", "linux_vm", "ubuntu_vm",
+    "my_vm", "new_vm", "virtual-machine", "virtual_machine",
+    "test-vm", "default-vm", "example-vm"
+  ],
+  "placeholder_iso_patterns": [
+    "/path/to/", "scan_isos()[0]", "<iso>", "<path>", "<file>",
+    "your_iso", "your-iso", "example.iso"
+  ],
+  "valid_machine_types":  ["q35", "pc", "pc-i440fx", "microvm", "virt", "raspi3b", "raspi2b", "raspi0"],
+  "valid_display_modes":  ["sdl", "gtk", "vnc", "spice", "none", "cocoa"],
+  "valid_gpu_types":      ["virtio", "qxl", "vga", "vmware", "none", "bochs"],
+  "valid_audio_types":    ["hda", "ich9", "ac97", "sb16", "none"],
+  "valid_network_modes":  ["nat", "bridge", "none", "user"],
+  "valid_disk_formats":   ["qcow2", "raw", "vmdk", "vdi"],
+  "valid_bios":           ["ovmf", "ovmf_ms", "seabios"],
+  "valid_machine_arch":   ["x86_64", "aarch64", "arm", "armhf", "i386"],
+  "valid_machine_class":  ["desktop", "laptop", "server", "custom", "embedded"],
+  "valid_os_types":       ["linux", "windows", "macos", "other"],
+  "os_type_aliases": {
+    "ubuntu":    "linux",  "debian":   "linux",  "fedora":  "linux",
+    "mint":      "linux",  "arch":     "linux",  "kali":    "linux",
+    "centos":    "linux",  "rhel":     "linux",  "suse":    "linux",
+    "win":       "windows","win7":     "windows","win10":   "windows",
+    "win11":     "windows","win32":    "windows","win64":   "windows",
+    "windows10": "windows","windows11":"windows","windows7":"windows",
+    "osx":       "macos",  "darwin":   "macos",  "mac":     "macos",
+    "macosx":    "macos"
+  },
+  "qemu_oui_prefixes":   ["52:54:00", "00:1a:4a"],
+  "bad_bridge_ifaces":   ["bridge","br","network","<bridge>","your_bridge","",
+                          "eth0","eth1","ens33","ens3","enp","wlan0","wlan1","wifi0"],
+  "bad_bridge_prefixes": ["eth","ens","enp","wlan","wlp"],
+  "default_bridge":      "virbr0",
+  "arm_cpu_models": [
+    "cortex-a15","cortex-a53","cortex-a57","cortex-a72","cortex-a76",
+    "arm1176","arm926","cortex-m","cortex-r"
+  ],
+  "arm_machine_types": ["raspi", "raspi3b", "raspi2b", "virt"],
+  "arm_machine_archs": ["aarch64", "arm", "armhf"],
+  "iso_search_dirs": ["images","iso","isos","vms"],
+  "bounds": {
+    "memory_min_mb":    512,
+    "memory_max_ratio": 0.95,
+    "disk_min_gb":      8,
+    "disk_max_gb":      2048,
+    "port_min":         1024,
+    "port_max":         65535,
+    "extra_arg_max_len": 500
+  }
+}

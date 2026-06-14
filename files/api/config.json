@@ -1,0 +1,261 @@
+{
+  "dirs": {
+    "vm_base":     "~/.qemu_vms",
+    "profiles":    "~/.qemu_vms/_profiles",
+    "isolated_net": "_networks",
+    "state_file":  ".state.json"
+  },
+  "network": {
+    "mcast_addr": "230.0.0.1",
+    "start_port": 1234
+  },
+  "ports": {
+    "vnc_start":         5900,
+    "spice_start":       5930,
+    "port_range":        50,
+    "qmp_port_start":    9000,
+    "monitor_port_start": 9100,
+    "serial_port_start": 9200
+  },
+  "timeouts": {
+    "qemu_version":    5,
+    "qmp_connect":     5,
+    "gl_check":        3,
+    "stop_graceful":   30,
+    "cpu_pinning_delay": 1,
+    "monitor_recv_sleep": 0.3
+  },
+  "buffers": {
+    "qmp":          4096,
+    "monitor_recv": 8192,
+    "monitor_send": 4096
+  },
+  "iso_desktop_subdirs": ["images", "iso", "isos", "vms", "vm"],
+  "iso_home_subdirs":    ["Downloads", "downloads", "Desktop", "iso", "ISO", "ISOs", "isos",
+                          "images", "Images", "vm", "VMs", "Documents"],
+  "iso_mount_roots":     ["/media", "/mnt", "/run/media", "/Volumes"],
+  "ovmf_search_paths": [
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.fd",
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+    "/usr/share/ovmf/x64/OVMF_CODE.fd",
+    "/usr/share/edk2-ovmf/OVMF_CODE.fd",
+    "/usr/share/qemu/ovmf-x86_64-code.bin",
+    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
+    "/usr/local/share/qemu/edk2-x86_64-code.fd",
+    "C:/Program Files/qemu/share/edk2-x86_64-code.fd",
+    "C:/Program Files (x86)/QEMU/share/edk2-x86_64-code.fd"
+  ],
+  "ovmf_vars_search_paths": [
+    "/usr/share/OVMF/OVMF_VARS_4M.fd",
+    "/usr/share/OVMF/OVMF_VARS.fd",
+    "/usr/share/edk2/ovmf/OVMF_VARS.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
+    "/usr/share/ovmf/x64/OVMF_VARS.fd",
+    "/usr/share/edk2-ovmf/OVMF_VARS.fd",
+    "/usr/share/qemu/ovmf-x86_64-vars.bin",
+    "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
+    "/usr/local/share/qemu/edk2-x86_64-vars.fd",
+    "C:/Program Files/qemu/share/edk2-x86_64-vars.fd",
+    "C:/Program Files (x86)/QEMU/share/edk2-x86_64-vars.fd"
+  ],
+  "ovmf_ms_code_paths": [
+    "/usr/share/OVMF/OVMF_CODE.ms.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.ms.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.secboot.fd",
+    "/usr/share/ovmf/x64/OVMF_CODE.secboot.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-secure-code.fd",
+    "/usr/local/share/qemu/edk2-x86_64-secure-code.fd",
+    "C:/Program Files/qemu/share/edk2-x86_64-secure-code.fd"
+  ],
+  "ovmf_ms_vars_paths": [
+    "/usr/share/OVMF/OVMF_VARS.ms.fd",
+    "/usr/share/OVMF/OVMF_VARS_4M.ms.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_VARS.secboot.fd",
+    "/usr/share/ovmf/x64/OVMF_VARS.secboot.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-secure-vars.fd",
+    "/usr/local/share/qemu/edk2-x86_64-secure-vars.fd",
+    "C:/Program Files/qemu/share/edk2-x86_64-secure-vars.fd"
+  ],
+  "machine_types": {
+    "pc":      "i440FX + PIIX (legacy BIOS)",
+    "q35":     "Q35 + ICH9 (modern, PCIe, recommended)",
+    "microvm": "Minimal microvm (containers/cloud)",
+    "virt":    "ARM virt platform (aarch64)"
+  },
+  "cpu_presets": {
+    "host":        "-cpu host",
+    "kvm64":       "-cpu kvm64",
+    "Haswell":     "-cpu Haswell,+avx2",
+    "Broadwell":   "-cpu Broadwell,+avx2",
+    "SandyBridge": "-cpu SandyBridge",
+    "Skylake":     "-cpu Skylake-Client,+avx512f",
+    "IceLake":     "-cpu Icelake-Client,+avx512f",
+    "EPYC":        "-cpu EPYC",
+    "Opteron_G5":  "-cpu Opteron_G5",
+    "cortex-a72":  "-cpu cortex-a72",
+    "cortex-a53":  "-cpu cortex-a53"
+  },
+  "gpu_presets": {
+    "virtio": "virtio-vga-gl",
+    "qxl":    "qxl-vga",
+    "vga":    "VGA",
+    "vmware": "vmware-svga",
+    "none":   null,
+    "gt1030": "vfio-pci"
+  },
+  "audio_presets": {
+    "none": null,
+    "ac97": "ac97",
+    "hda":  "intel-hda",
+    "ich9": "ich9-intel-hda",
+    "usb":  "usb-audio"
+  },
+  "network_models": ["virtio-net-pci", "e1000", "e1000e", "rtl8139", "vmxnet3"],
+  "disk_config_defaults": {
+    "size_gb":  60,
+    "format":   "qcow2",
+    "bus":      "virtio",
+    "cache":    "writeback",
+    "discard":  true,
+    "ssd":      false,
+    "boot":     false
+  },
+  "network_config_defaults": {
+    "mode":   "nat",
+    "model":  "virtio-net-pci",
+    "bridge": "virbr0"
+  },
+  "machine_config_defaults": {
+    "name":             "vm-default",
+    "hostname":         "localhost",
+    "machine_class":    "desktop",
+    "machine_type":     "q35",
+    "bios":             "ovmf",
+    "uefi":             true,
+    "cpu_model":        "host",
+    "cpu_cores":        4,
+    "cpu_threads":      2,
+    "cpu_sockets":      1,
+    "kvm":              true,
+    "memory_mb":        8192,
+    "hugepages":        false,
+    "balloon":          true,
+    "gpu":              "virtio",
+    "display":          "sdl",
+    "opengl":           true,
+    "resolution":       "1920x1080",
+    "audio":            "hda",
+    "os_type":          "linux",
+    "boot_order":       "cd",
+    "smbios_type":      "",
+    "product_name":     "",
+    "manufacturer":     "",
+    "serial_number":    "",
+    "bios_version":     "",
+    "bios_vendor":      "",
+    "kernel_cmdline":   "",
+    "battery":          false,
+    "tablet":           true,
+    "iommu":            false,
+    "nested_virt":      false,
+    "hpet":             false,
+    "rtc_clock":        "host",
+    "rtc_base_fallback": "utc",
+    "tsc_deadline":     true,
+    "kvm_pv_features":  true,
+    "hugepages_path":   "/dev/hugepages",
+    "qemu_binary":      "qemu-system-x86_64",
+    "machine_arch":     "x86_64"
+  },
+  "log_default_lines": 50,
+  "hardware_profiles": {
+    "dell_g15_5520": {
+      "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
+      "cpu_model": "host", "cpu_cores": 6, "cpu_threads": 12, "memory_mb": 16384,
+      "gpu": "virtio", "audio": "hda", "battery": true,
+      "manufacturer": "Dell Inc.", "product_name": "G15 5520",
+      "bios_vendor": "Dell Inc.", "bios_version": "1.14.0",
+      "description": "Dell G15 Gaming Laptop (2022) — i5-12500H profile",
+      "kvm_pv_features": true, "opengl": true, "tablet": true
+    },
+    "gaming_desktop": {
+      "machine_class": "desktop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
+      "cpu_model": "host", "cpu_cores": 8, "cpu_threads": 16, "memory_mb": 32768,
+      "gpu": "virtio", "audio": "ich9", "battery": false,
+      "manufacturer": "Custom Build", "product_name": "Gaming Desktop",
+      "description": "High-performance gaming desktop profile", "opengl": true
+    },
+    "office_laptop": {
+      "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
+      "cpu_model": "host", "cpu_cores": 4, "cpu_threads": 8, "memory_mb": 8192,
+      "gpu": "qxl", "audio": "hda", "battery": true,
+      "manufacturer": "Lenovo", "product_name": "ThinkPad E14",
+      "description": "Lenovo ThinkPad-style office laptop"
+    },
+    "server": {
+      "machine_class": "server", "machine_type": "q35", "bios": "ovmf", "uefi": true,
+      "cpu_model": "EPYC", "cpu_cores": 16, "cpu_threads": 32, "memory_mb": 65536,
+      "gpu": "none", "display": "none", "audio": "none", "battery": false,
+      "manufacturer": "Supermicro", "product_name": "AS-1124US-TNRP",
+      "description": "EPYC server profile — headless",
+      "hugepages": true, "iommu": true
+    },
+    "mac_mini": {
+      "machine_class": "desktop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
+      "cpu_model": "host", "cpu_cores": 4, "cpu_threads": 8, "memory_mb": 8192,
+      "os_type": "macos", "manufacturer": "Apple Inc.", "product_name": "Mac mini",
+      "bios_vendor": "Apple Inc.", "description": "macOS-style Mac Mini profile",
+      "gpu": "vmware", "audio": "hda"
+    },
+    "minimal": {
+      "machine_class": "custom", "machine_type": "q35", "cpu_model": "kvm64",
+      "cpu_cores": 2, "cpu_threads": 2, "memory_mb": 2048,
+      "gpu": "none", "display": "none", "audio": "none",
+      "description": "Minimal headless VM for CI/testing"
+    },
+    "raspberry_pi_4": {
+      "machine_class": "custom",
+      "machine_type": "raspi3b",
+      "qemu_binary": "qemu-system-aarch64",
+      "machine_arch": "aarch64",
+      "bios": "seabios",
+      "uefi": false,
+      "cpu_model": "cortex-a72",
+      "cpu_cores": 4, "cpu_threads": 1,
+      "memory_mb": 4096,
+      "gpu": "none", "display": "sdl", "audio": "none",
+      "manufacturer": "Raspberry Pi Foundation",
+      "product_name": "Raspberry Pi 4 Model B",
+      "description": "Emulated Raspberry Pi 4 (aarch64) — requires qemu-system-aarch64",
+      "_requires": {"qemu_arm_installed": true},
+      "_notes": "Pi 4 emulation is slow. For bare-metal Pi use, flash an SD card instead."
+    },
+    "raspberry_pi_3b": {
+      "machine_class": "custom",
+      "machine_type": "raspi3b",
+      "qemu_binary": "qemu-system-aarch64",
+      "machine_arch": "aarch64",
+      "bios": "seabios",
+      "uefi": false,
+      "kvm": false,
+      "hugepages": false,
+      "balloon": false,
+      "cpu_model": "cortex-a53",
+      "cpu_cores": 4, "cpu_threads": 1,
+      "memory_mb": 1024,
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
+      "battery": false,
+      "kvm_pv_features": false,
+      "manufacturer": "Raspberry Pi Foundation",
+      "product_name": "Raspberry Pi 3 Model B Rev 1.2",
+      "kernel_cmdline": "console=ttyAMA0 root=/dev/mmcblk0p2 rw rootfstype=ext4 fsck.repair=yes",
+      "description": "Emulated Raspberry Pi 3B — serial console only, requires Pi OS image + kernel8.img",
+      "_requires": {"qemu_arm_installed": true},
+      "_notes": "raspi3b has NO display output in QEMU. Connect via serial console. KVM not available on x86. Needs kernel8.img + bcm2710-rpi-3-b.dtb extracted from Pi OS image."
+    }
+  }
+}

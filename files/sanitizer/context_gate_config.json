@@ -1,0 +1,99 @@
+{
+    "create_vm": [
+        ["name",    "What would you like to name this VM?",             ["my-linux-vm", "dev-machine", "test-ubuntu"]],
+        ["os_type", "What operating system type will this VM run?",     ["linux", "windows", "macos", "other"]]
+    ],
+    "clone_vm": [
+        ["source_name", "Which existing VM would you like to clone?",  []],
+        ["new_name",    "What should the cloned VM be named?",         []]
+    ],
+
+    "launch_vm": [
+        ["name", "Which VM would you like to launch?",                                  []]
+    ],
+    "stop_vm": [
+        ["name", "Which VM would you like to stop? (or 'all' to stop every VM)",        []]
+    ],
+    "delete_vm": [
+        ["name", "Which VM would you like to delete?",                                  []]
+    ],
+
+    "vm_status": [
+        ["name", "Which VM's status would you like to check?",                          []]
+    ],
+    "monitor_vm": [
+        ["name", "Which VM would you like to monitor? (or 'all' for all VMs)",          []]
+    ],
+    "get_vm_logs": [
+        ["name", "Which VM's logs would you like to read?",                             []]
+    ],
+
+    "show_config": [
+        ["name", "Which VM's config would you like to see?",                            []]
+    ],
+    "update_config": [
+        ["name", "Which VM's config would you like to update?",                         []]
+    ],
+    "print_command": [
+        ["name", "Which VM's QEMU command would you like to print?",                    []]
+    ],
+
+    "resize_disk": [
+        ["name",        "Which VM's disk would you like to resize?",                    []],
+        ["new_size_gb", "What size (in GB) should the disk be resized to?",             ["50", "100", "200", "500"]]
+    ],
+
+    "snapshot_create": [
+        ["name",      "Which VM would you like to snapshot?",                           []],
+        ["snap_name", "What should this snapshot be named?",                            ["snap1", "pre-update", "baseline"]]
+    ],
+    "snapshot_list": [
+        ["name", "Which VM's snapshots would you like to list?",                        []]
+    ],
+    "snapshot_restore": [
+        ["name",      "Which VM would you like to restore a snapshot on?",              []],
+        ["snap_name", "Which snapshot would you like to restore?",                      []]
+    ],
+    "snapshot_delete": [
+        ["name",      "Which VM's snapshot would you like to delete?",                  []],
+        ["snap_name", "Which snapshot would you like to delete?",                       []]
+    ],
+
+    "set_resource_limits": [
+        ["name", "Which VM would you like to set resource limits on?",                  []]
+    ],
+
+    "open_display": [
+        ["name", "Which VM's display would you like to open?",                          []]
+    ],
+    "open_shell": [
+        ["name", "Which VM's serial console would you like to open?",                   []]
+    ],
+
+    "send_monitor_cmd": [
+        ["name", "Which VM would you like to send a monitor command to?",               []],
+        ["cmd",  "What QEMU monitor command would you like to send?",                   ["info status", "info block", "info network", "info kvm"]]
+    ],
+
+    "check_profile_compatibility": [
+        ["profile_name", "Which hardware profile would you like to check compatibility for?", []]
+    ],
+    "create_profile": [
+        ["profile_name", "What would you like to name this hardware profile?",          []],
+        ["description",  "Please provide a short description for this profile.",        []]
+    ],
+    "delete_profile": [
+        ["profile_name", "Which hardware profile would you like to delete?",            []]
+    ],
+
+    "create_network": [
+        ["net_name", "What would you like to name this isolated network?",              []]
+    ],
+    "delete_network": [
+        ["net_name", "Which network would you like to delete?",                         []]
+    ],
+    "add_vm_to_network": [
+        ["net_name", "Which network would you like to add the VM to?",                  []],
+        ["vm_name",  "Which VM would you like to add to the network?",                  []]
+    ]
+}

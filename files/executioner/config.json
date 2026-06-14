@@ -1,0 +1,12 @@
+{
+  "create_vm_defaults": {
+    "disk_size_gb":  60,
+    "disk_format":   "qcow2",
+    "network_mode":  "nat",
+    "bridge":        "virbr0"
+  },
+  "tool_defaults": {
+    "snap_name":  "snap1",
+    "log_lines":  50
+  }
+}

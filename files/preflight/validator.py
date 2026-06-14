@@ -24,10 +24,13 @@ from typing import Any, Dict, List, Optional
 from api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
 from sanitizer.sanitizer import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
 
+_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_THRESHOLDS = _CFG["thresholds"]
+
 # ── Global flags ───────────────────────────────────────────────────────────────
 
 _NET_CACHE:   Dict[str, Any] = {}
-_NET_TIMEOUT  = 4
+_NET_TIMEOUT  = _CFG["net_timeout"]
 _NET_ENABLED  = True
 _CUSTOM_MODE  = False   # set True via set_custom_mode() to skip product verification
 
@@ -36,6 +39,8 @@ _QEMU_MACHINES_CACHE: Optional[set] = None
 _QEMU_CPUS_CACHE:     Optional[set] = None
 
 
+# Toggles the global flag that disables product verification via DuckDuckGo.
+# In: bool → Out: nothing
 def set_custom_mode(enabled: bool):
     global _CUSTOM_MODE
     _CUSTOM_MODE = enabled
@@ -43,6 +48,8 @@ def set_custom_mode(enabled: bool):
 
 # ── Network utilities ──────────────────────────────────────────────────────────
 
+# Fetches JSON from a URL with an MD5 session cache and timeout; returns None on failure.
+# In: str url, dict? headers → Out: dict | None
 def _net_get(url: str, headers: Dict = None) -> Optional[Dict]:
     """Fetch JSON from a URL with session caching and timeout. Returns None on failure."""
     if not _NET_ENABLED:
@@ -51,7 +58,7 @@ def _net_get(url: str, headers: Dict = None) -> Optional[Dict]:
     if cache_key in _NET_CACHE:
         return _NET_CACHE[cache_key]
     try:
-        req = urllib.request.Request(url, headers=headers or {"User-Agent": "qemu-api/1.0"})
+        req = urllib.request.Request(url, headers=headers or {"User-Agent": _CFG["user_agent"]})
         with urllib.request.urlopen(req, timeout=_NET_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())
             _NET_CACHE[cache_key] = data
@@ -61,12 +68,14 @@ def _net_get(url: str, headers: Dict = None) -> Optional[Dict]:
         return None
 
 
+# Checks if a URL exists via HEAD request; returns False on failure.
+# In: str url → Out: bool
 def _net_head(url: str) -> bool:
     """Check if a URL exists via HEAD request. Returns False on failure."""
     if not _NET_ENABLED:
         return False
     try:
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "qemu-api/1.0"})
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": _CFG["user_agent"]})
         with urllib.request.urlopen(req, timeout=_NET_TIMEOUT):
             return True
     except Exception:
@@ -75,13 +84,15 @@ def _net_head(url: str) -> bool:
 
 # ── Local QEMU capability queries ──────────────────────────────────────────────
 
+# Queries the local QEMU binary for all supported machine types (result is cached).
+# In: str binary → Out: set
 def _get_qemu_machine_types(binary: str = "qemu-system-x86_64") -> set:
     """Ask the local QEMU binary what machine types it supports."""
     global _QEMU_MACHINES_CACHE
     if _QEMU_MACHINES_CACHE is not None:
         return _QEMU_MACHINES_CACHE
     try:
-        result = subprocess.run([binary, "-machine", "help"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run([binary, "-machine", "help"], capture_output=True, text=True, timeout=_CFG["qemu_timeout"])
         machines = set()
         for line in result.stdout.splitlines():
             parts = line.split()
@@ -93,13 +104,15 @@ def _get_qemu_machine_types(binary: str = "qemu-system-x86_64") -> set:
         return set()
 
 
+# Queries the local QEMU binary for all supported CPU models (result is cached).
+# In: str binary → Out: set
 def _get_qemu_cpu_models(binary: str = "qemu-system-x86_64") -> set:
     """Ask the local QEMU binary what CPU models it supports."""
     global _QEMU_CPUS_CACHE
     if _QEMU_CPUS_CACHE is not None:
         return _QEMU_CPUS_CACHE
     try:
-        result = subprocess.run([binary, "-cpu", "help"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run([binary, "-cpu", "help"], capture_output=True, text=True, timeout=_CFG["qemu_timeout"])
         cpus = set()
         for line in result.stdout.splitlines():
             parts = line.strip().split()
@@ -113,27 +126,19 @@ def _get_qemu_cpu_models(binary: str = "qemu-system-x86_64") -> set:
 
 # ── CPU architecture classification ───────────────────────────────────────────
 
-_ARM_CPU_PREFIXES = (
-    "cortex-a", "cortex-m", "cortex-r",
-    "arm1", "arm7", "arm9", "arm11",
-    "neoverse", "ampere", "apple m",
-    "qualcomm", "snapdragon",
-)
-
-_X86_CPU_NAMES = {
-    "haswell", "broadwell", "skylake", "kabylake", "coffeelake",
-    "cannonlake", "icelake", "tigerlake", "alderlake", "raptorlake",
-    "sandybridge", "ivybridge", "westmere", "nehalem", "penryn",
-    "opteron", "epyc", "zen", "zen2", "zen3", "zen4",
-    "kvm64", "host", "qemu64", "qemu32",
-}
+_ARM_CPU_PREFIXES = tuple(_CFG["arm_cpu_prefixes"])
+_X86_CPU_NAMES    = set(_CFG["x86_cpu_names"])
 
 
+# Returns True if the CPU name matches known ARM prefixes.
+# In: str cpu_model → Out: bool
 def _is_arm_cpu(cpu_model: str) -> bool:
     lower = cpu_model.lower()
     return any(lower.startswith(p) for p in _ARM_CPU_PREFIXES)
 
 
+# Returns True if the CPU name matches known x86 names.
+# In: str cpu_model → Out: bool
 def _is_x86_cpu(cpu_model: str) -> bool:
     lower = cpu_model.lower().replace("-", "").replace("_", "")
     return any(x86 in lower for x86 in _X86_CPU_NAMES)
@@ -141,6 +146,8 @@ def _is_x86_cpu(cpu_model: str) -> bool:
 
 # ── DuckDuckGo product lookup ──────────────────────────────────────────────────
 
+# Queries DuckDuckGo to verify a hardware product is real; returns found flag and summary snippet.
+# In: str manufacturer, str product → Out: dict
 def _lookup_product(manufacturer: str, product: str) -> Dict[str, Any]:
     query  = f"{manufacturer} {product} laptop desktop specifications"
     params = urllib.parse.urlencode({"q": query, "format": "json", "no_html": "1"})
@@ -154,11 +161,13 @@ def _lookup_product(manufacturer: str, product: str) -> Dict[str, Any]:
     }
 
 
-_MS_WINDOWS_ISO_PAGE = "https://www.microsoft.com/software-download/windows11"
+_MS_WINDOWS_ISO_PAGE = _CFG["ms_windows_iso_page"]
 
 
 # ── Internet / local QEMU validation ──────────────────────────────────────────
 
+# Cross-checks machine type, CPU, arch, product existence, memory, and ISO arch against local QEMU and DuckDuckGo.
+# In: dict args, bool verbose → Out: List[dict] issues
 def _validate_with_internet(args: Dict[str, Any], verbose: bool = False) -> List[Dict]:
     """
     Cross-check AI-provided hardware assumptions against real-world data.
@@ -234,7 +243,7 @@ def _validate_with_internet(args: Dict[str, Any], verbose: bool = False) -> List
     memory_mb = int(args.get("memory_mb", 0))
     if memory_mb and product_name and not _CUSTOM_MODE:
         prod_lower = product_name.lower()
-        if any(k in prod_lower for k in ("g15", "thinkpad", "inspiron")) and memory_mb > 65536:
+        if any(k in prod_lower for k in _CFG["laptop_product_keywords"]) and memory_mb > _THRESHOLDS["max_laptop_memory_mb"]:
             issues.append({
                 "severity": "warning",
                 "message":  f"'{product_name}' typically supports max 32-64GB RAM, got {memory_mb//1024}GB",
@@ -247,7 +256,7 @@ def _validate_with_internet(args: Dict[str, Any], verbose: bool = False) -> List
     iso_path = str(args.get("iso_path", ""))
     if ("windows" in os_type or "win" in os_type) and iso_path:
         iso_lower = os.path.basename(iso_path).lower()
-        if any(k in iso_lower for k in ("arm64", "aarch64", "arm_")) and machine_arch == "x86_64":
+        if any(k in iso_lower for k in _CFG["arm_iso_keywords"]) and machine_arch == "x86_64":
             issues.append({
                 "severity": "error",
                 "message":  "ARM64 Windows ISO with x86_64 VM — will not boot",
@@ -258,6 +267,8 @@ def _validate_with_internet(args: Dict[str, Any], verbose: bool = False) -> List
     return issues
 
 
+# Checks a profile against the host for ARM binary, KVM/OVMF/hugepages/RAM/core constraints, and raspi binary mismatch.
+# In: str profile_name → Out: List[dict] issues
 def _validate_profile_for_host(profile_name: str) -> List[Dict[str, Any]]:
     """
     Validate any profile (built-in or custom) against the current host.
@@ -297,17 +308,17 @@ def _validate_profile_for_host(profile_name: str) -> List[Dict[str, Any]]:
     profile_mem = int(profile.get("memory_mb", 2048))
     host_mem    = caps.get("host_memory_mb", 0)
     if host_mem > 0 and profile_mem > host_mem:
-        issues.append({"severity":"warning","message":f"Profile requests {profile_mem}MB RAM but host only has {host_mem}MB","fix":f"Reduce memory_mb to {host_mem//2} or less","auto_fix":True,"fix_field":"memory_mb","fix_value":min(profile_mem, int(host_mem*0.85))})
+        issues.append({"severity":"warning","message":f"Profile requests {profile_mem}MB RAM but host only has {host_mem}MB","fix":f"Reduce memory_mb to {host_mem//2} or less","auto_fix":True,"fix_field":"memory_mb","fix_value":min(profile_mem, int(host_mem*_THRESHOLDS["profile_memory_ratio"]))})
 
     profile_cores = int(profile.get("cpu_cores", 2))
     host_cores    = caps.get("host_cpu_cores", 1)
-    if profile_cores > host_cores * 2:
+    if profile_cores > host_cores * _THRESHOLDS["profile_cores_overcommit"]:
         issues.append({"severity":"warning","message":f"Profile requests {profile_cores} cores but host only has {host_cores} — heavy over-commit","fix":f"Reduce cpu_cores to {host_cores} or less","auto_fix":True,"fix_field":"cpu_cores","fix_value":host_cores})
 
     free_gb = caps.get("home_free_gb", 999)
-    if free_gb < 10:
+    if free_gb < _THRESHOLDS["min_disk_free_gb_error"]:
         issues.append({"severity":"error","message":f"Only {free_gb}GB free in home directory","fix":"Free up disk space before creating the VM","auto_fix":False})
-    elif free_gb < 60:
+    elif free_gb < _THRESHOLDS["min_disk_free_gb_warn"]:
         issues.append({"severity":"warning","message":f"Only {free_gb}GB free — VM disk image may exceed available space","fix":"Use a smaller disk_size_gb or free up space","auto_fix":False})
 
     mt = profile.get("machine_type", "q35")
@@ -332,6 +343,8 @@ def _validate_profile_for_host(profile_name: str) -> List[Dict[str, Any]]:
 
 # ── Pre-flight gate ────────────────────────────────────────────────────────────
 
+# Gate run before destructive tools: validates name, ISO, machine type, Windows requirements, disk size, and profile compatibility.
+# In: str tool_name, dict args, QemuManager, bool verbose → Out: dict with action (ok/auto_fix/ask_user/abort)
 def _preflight_check(
     tool_name:  str,
     args:       Dict[str, Any],
@@ -400,10 +413,11 @@ def _preflight_check(
             fixed = dict(args); fixed["uefi"] = True; fixed["bios"] = "ovmf"
             return {"action":"auto_fix","reason":"Windows 11 requires UEFI but uefi=False was set","correction":"Forced uefi=True and bios=ovmf","fixed_args":fixed}
 
-        disk_gb = int(args.get("disk_size_gb", 60))
-        if is_win and disk_gb < 40:
-            fixed = dict(args); fixed["disk_size_gb"] = 64
-            return {"action":"auto_fix","reason":f"Windows 11 needs at least 64GB disk, got {disk_gb}GB","correction":f"Increased disk_size_gb from {disk_gb} to 64","fixed_args":fixed}
+        disk_gb = int(args.get("disk_size_gb", _THRESHOLDS["min_windows_disk_gb"]))
+        if is_win and disk_gb < _THRESHOLDS["min_windows_disk_gb"]:
+            _win_disk = _THRESHOLDS["auto_windows_disk_gb"]
+            fixed = dict(args); fixed["disk_size_gb"] = _win_disk
+            return {"action":"auto_fix","reason":f"Windows 11 needs at least {_win_disk}GB disk, got {disk_gb}GB","correction":f"Increased disk_size_gb from {disk_gb} to {_win_disk}","fixed_args":fixed}
 
         internet_issues = _validate_with_internet(args, verbose=verbose)
         if internet_issues:
@@ -441,7 +455,9 @@ def _preflight_check(
         name   = str(args.get("name", "")).strip()
         vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
         if name and not os.path.exists(vm_dir):
-            candidates = [v["name"] for v in manager.list_vms() if name.lower() in v["name"].lower()]
+            candidates = []
+            if hasattr(manager, "list_vms"):
+                candidates = [v["name"] for v in manager.list_vms() if name.lower() in v["name"].lower()]
             if candidates:
                 return {"action":"abort","reason":f"VM '{name}' not found. Did you mean: {candidates}?","correction":f"Use one of these names: {candidates}"}
             return {"action":"abort","reason":f"VM '{name}' doesn't exist. Create it first.","correction":"Call create_vm before launch_vm."}
@@ -479,7 +495,7 @@ def _preflight_check(
 
     elif tool_name == "send_monitor_cmd":
         cmd = str(args.get("cmd", "")).strip().lower()
-        if any(d in cmd for d in ["quit","system_reset","powerdown","eject","device_del"]):
+        if any(d in cmd for d in ["quit","system_reset","powerdown","eject","device_del","drive_del"]):
             return {"action":"ask_user","reason":f"Potentially destructive monitor command: '{cmd}'","question":f"Run QEMU monitor command '{cmd}'? This may affect the running VM.","fix_field":None,"options":["Yes, run it","No, cancel"]}
 
     elif tool_name in ("snapshot_restore", "snapshot_delete"):
@@ -491,6 +507,8 @@ def _preflight_check(
     return ok
 
 
+# Renders a yellow warning panel and presents the pre-flight options to the user.
+# In: dict preflight, Console → Out: nothing (console output)
 def _show_preflight_warning(preflight: Dict, console):
     """Display a pre-flight warning panel and present options to the user."""
     from rich.panel import Panel

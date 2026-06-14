@@ -11,6 +11,10 @@ import os
 import re
 from typing import Any, Dict
 
+_CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_VM_DEFS  = _CFG["create_vm_defaults"]
+_TOOL_DEFS = _CFG["tool_defaults"]
+
 from api.qemu_config import (
     MachineConfig, DiskConfig, NetworkConfig,
     OVMF, apply_profile, check_profile_compatibility,
@@ -22,6 +26,7 @@ from sanitizer.sanitizer import (
     PLACEHOLDER_VM_NAMES,
     _resolve_iso, _resolve_vm_name, _sanitise_args,
 )
+from sanitizer.context_gate import gate_check
 from ai.display import (
     console,
     _render_compat, _render_monitor, _render_profiles,
@@ -33,8 +38,15 @@ from rich.panel import Panel
 manager = QemuManager()
 
 
+# Sanitizes args, resolves VM names, dispatches to the manager or config layer, and triggers Rich rendering.
+# In: str tool_name, dict args, bool verbose → Out: Any result
 def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) -> Any:
     args = _sanitise_args(tool_name, args)
+
+    # Context gate — block execution and ask for missing required args
+    gate_result = gate_check(tool_name, args)
+    if gate_result:
+        return gate_result
 
     # Resolve VM names by fuzzy match / index
     if "name" in args and tool_name not in (
@@ -196,14 +208,14 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
                     ),
                 }
 
-        disk_size   = int(args.get("disk_size_gb", 60))
-        disk_format = args.get("disk_format", "qcow2")
+        disk_size   = int(args.get("disk_size_gb", _VM_DEFS["disk_size_gb"]))
+        disk_format = args.get("disk_format", _VM_DEFS["disk_format"])
         disk_path   = os.path.expanduser(f"~/.qemu_vms/{cfg.name}/disk0.{disk_format}")
         cfg.disks   = [DiskConfig(path=disk_path, size_gb=disk_size, format=disk_format)]
 
         net = NetworkConfig(
-            mode=args.get("network_mode", "nat"),
-            bridge=args.get("bridge_iface", "virbr0") or "virbr0",
+            mode=args.get("network_mode", _VM_DEFS["network_mode"]),
+            bridge=args.get("bridge_iface", _VM_DEFS["bridge"]) or _VM_DEFS["bridge"],
         )
         if args.get("mac_address"):
             net.mac = args["mac_address"]
@@ -217,7 +229,13 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
             cfg.bios = "ovmf"
             cfg.uefi = True
 
-        return manager.create_vm(cfg)
+        result = manager.create_vm(cfg)
+        if not verbose:
+            if result.get("success"):
+                console.print(f"[green]✓ VM '{result['name']}' created at {result['vm_dir']}[/green]")
+            else:
+                console.print(f"[red]✗ create_vm failed: {result.get('error', 'unknown error')}[/red]")
+        return result
 
     # ── VM lifecycle ──────────────────────────────────────────────────────────
     elif tool_name == "clone_vm":
@@ -265,7 +283,7 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         )
 
     elif tool_name == "snapshot_create":
-        return manager.snapshot_create(args["name"], args.get("snap_name", "snap1"))
+        return manager.snapshot_create(args["name"], args.get("snap_name", _TOOL_DEFS["snap_name"]))
 
     elif tool_name == "snapshot_list":
         result = manager.snapshot_list(args["name"])
@@ -308,7 +326,7 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         return manager.delete_vm(args["name"], delete_disks=args.get("delete_disks", False))
 
     elif tool_name == "get_vm_logs":
-        result = manager.get_vm_logs(args["name"], lines=int(args.get("lines", 50)))
+        result = manager.get_vm_logs(args["name"], lines=int(args.get("lines", _TOOL_DEFS["log_lines"])))
         if not verbose:
             _render_vm_failure(result)
         return result
