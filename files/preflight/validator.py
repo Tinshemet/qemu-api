@@ -21,8 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from qemu_config import OVMF, check_system_capabilities, get_all_profiles
-from sanitizer   import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
+from api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
+from sanitizer.sanitizer import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
 
 # ── Global flags ───────────────────────────────────────────────────────────────
 

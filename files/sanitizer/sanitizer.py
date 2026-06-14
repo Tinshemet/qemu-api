@@ -10,7 +10,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
-from qemu_config import get_all_profiles
+from api.qemu_config import get_all_profiles
 
 REAL_HOME = os.path.expanduser("~")
 

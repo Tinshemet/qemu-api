@@ -13,7 +13,7 @@ import socket
 import subprocess
 from typing import List, Tuple
 
-from qemu_config import (
+from .qemu_config import (
     AUDIO_PRESETS, BIOS_OPTIONS, CPU_PRESETS, GPU_PRESETS, MachineConfig, OVMF,
 )
 

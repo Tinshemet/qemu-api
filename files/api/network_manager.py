@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from qemu_config import MachineConfig
+from .qemu_config import MachineConfig
 
 VM_BASE_DIR      = os.path.expanduser("~/.qemu_vms")
 ISOLATED_NET_DIR = os.path.join(VM_BASE_DIR, "_networks")
