@@ -15,9 +15,13 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-_CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
-_TIMEOUTS = _CFG["timeouts"]
-_BUFFERS  = _CFG["buffers"]
+_CFG                 = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_TIMEOUTS            = _CFG["timeouts"]
+_BUFFERS             = _CFG["buffers"]
+_MACOS_OVMF          = _CFG["ovmf_macos_vars_paths"]
+_WIN_OVMF            = _CFG["ovmf_win_vars_paths"]
+_LOG_ERROR_PATTERNS  = [tuple(p) for p in _CFG["log_error_patterns"]]
+_VALID_MACHINE_TYPES = set(_CFG["valid_machine_types"])
 
 import psutil
 
@@ -133,14 +137,6 @@ class QemuManager:
                 code_path = OVMF.get("code", "")
                 prefer_4m = "4M" in (code_path or "")
 
-                _MACOS_OVMF = [
-                    "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
-                    "/usr/local/share/qemu/edk2-x86_64-vars.fd",
-                ]
-                _WIN_OVMF = [
-                    "C:/Program Files/qemu/share/edk2-x86_64-vars.fd",
-                    "C:/Program Files (x86)/QEMU/share/edk2-x86_64-vars.fd",
-                ]
                 if config.bios == "ovmf_ms":
                     search = [
                         OVMF.get("ms_vars"),
@@ -755,40 +751,9 @@ class QemuManager:
             result["last_line"]       = tail[-1].strip() if tail else ""
             result["total_log_lines"] = len(all_lines)
 
-            error_patterns = [
-                ("qemu: could not load",        "Boot image or kernel file not found"),
-                ("no bootable device",           "No bootable disk — check ISO/disk image path"),
-                ("failed to open",               "Could not open a file — check paths in config"),
-                ("permission denied",            "Permission denied — check file permissions"),
-                ("address already in use",       "Port conflict — VNC/SPICE port already in use"),
-                ("kvm: permission denied",       "KVM permission denied — run: sudo usermod -aG kvm $USER"),
-                ("kvm: no such file",            "KVM not available — check BIOS VT-x/AMD-V setting"),
-                ("could not initialize kvm",     "KVM init failed — may conflict with another hypervisor"),
-                ("unsupported machine type",     "Invalid machine type for this QEMU binary"),
-                ("invalid accelerator",          "Accelerator not supported — KVM on wrong arch"),
-                ("accel=kvm not supported",      "KVM not supported for this guest architecture"),
-                ("cannot set up guest memory",   "Not enough RAM — reduce memory_mb or free host RAM"),
-                ("hugepages",                    "Hugepages not allocated — run: sudo sysctl vm.nr_hugepages=2048"),
-                ("no such file or directory",    "A required file is missing — check disk/ISO/firmware paths"),
-                ("invalid parameter",            "Invalid QEMU argument — check machine type and CPU flags"),
-                ("unknown cpu model",            "CPU model not supported by this QEMU version"),
-                ("pflash",                       "OVMF/UEFI firmware file not found or wrong format"),
-                ("virtio",                       "Virtio device error — may be incompatible with machine type"),
-                ("sdl_init failed",              "SDL display init failed — check DISPLAY env var"),
-                ("gtk_init_check failed",        "GTK display init failed — check DISPLAY env var"),
-                ("socket",                       "Socket error — another instance may be running"),
-                ("address family not supported", "Network config error — check bridge/network settings"),
-                ("tap: failed to connect",       "TAP network error — bridge may not exist"),
-                ("if=sd",                        "SD card interface error — check disk image format"),
-                ("raspi",                        "Raspberry Pi machine error — needs kernel8.img + dtb file"),
-                ("arm",                          "ARM machine error — check qemu-system-aarch64 is installed"),
-                ("out of memory",                "Host is out of memory — reduce VM memory_mb"),
-                ("segfault",                     "QEMU crashed (segfault) — try updating qemu-system"),
-                ("aborted",                      "QEMU aborted — likely an incompatible argument combination"),
-            ]
             for line in tail:
                 line_lower = line.lower()
-                for pattern, meaning in error_patterns:
+                for pattern, meaning in _LOG_ERROR_PATTERNS:
                     if pattern in line_lower:
                         entry = {"line": line.strip(), "meaning": meaning}
                         if entry not in result["errors"]:
@@ -834,9 +799,8 @@ class QemuManager:
                 if not _OVMF["available"]:
                     result["errors"].append({"line": "bios=ovmf but OVMF not installed", "meaning": "UEFI firmware not found — run: sudo apt install ovmf"})
 
-            valid_machine_types = {"q35","pc","pc-i440fx","microvm","virt","raspi3b","raspi2b","raspi0"}
             mt = cfg.machine_type.lower().split(",")[0].strip()
-            if mt not in valid_machine_types and not mt.startswith("pc-"):
+            if mt not in _VALID_MACHINE_TYPES and not mt.startswith("pc-"):
                 result["errors"].append({
                     "line": f"machine_type = {cfg.machine_type}",
                     "meaning": f"'{cfg.machine_type}' is not a valid QEMU machine type — it looks like a profile name was used by mistake. Should be 'q35' for modern x86 or 'pc' for legacy."

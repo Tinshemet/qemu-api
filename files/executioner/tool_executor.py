@@ -11,9 +11,11 @@ import os
 import re
 from typing import Any, Dict
 
-_CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
-_VM_DEFS  = _CFG["create_vm_defaults"]
-_TOOL_DEFS = _CFG["tool_defaults"]
+_CFG                 = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_VM_DEFS             = _CFG["create_vm_defaults"]
+_TOOL_DEFS           = _CFG["tool_defaults"]
+_VALID_MACHINE_TYPES = set(_CFG["valid_machine_types"])
+_ARM_CPU_PREFIXES    = tuple(_CFG["arm_cpu_prefixes"])
 
 from api.qemu_config import (
     MachineConfig, DiskConfig, NetworkConfig,
@@ -33,9 +35,24 @@ from ai.display import (
     _render_snapshots, _render_status, _render_system,
     _render_vm_failure, _render_vm_list,
 )
+from ai.fingerprint import _tf_report
 from rich.panel import Panel
 
 manager = QemuManager()
+
+# Stores the inverse action for the last reversible tool call.
+# None means nothing to revert (either no tool ran yet or last tool was irreversible).
+_last_revert_action: Dict[str, Any] = {}
+
+
+def _set_revert(tool: str, args: dict, description: str) -> None:
+    global _last_revert_action
+    _last_revert_action = {"tool": tool, "args": args, "description": description}
+
+
+def _clear_revert() -> None:
+    global _last_revert_action
+    _last_revert_action = {}
 
 
 # Sanitizes args, resolves VM names, dispatches to the manager or config layer, and triggers Rich rendering.
@@ -56,6 +73,16 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         resolved = _resolve_vm_name(vms, str(args["name"]))
         if resolved:
             args["name"] = resolved
+
+    # ── revert ────────────────────────────────────────────────────────────────
+    if tool_name == "revert":
+        if not _last_revert_action:
+            return {"success": False, "error": "No reversible action to revert."}
+        rev = dict(_last_revert_action)
+        _clear_revert()
+        if not verbose:
+            console.print(f"  [yellow]↩ Reverting: {rev['description']}[/yellow]")
+        return execute_tool(rev["tool"], rev["args"], verbose)
 
     # ── clarify ───────────────────────────────────────────────────────────────
     if tool_name == "clarify":
@@ -98,9 +125,11 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         result = save_custom_profile(pname, args)
         if result["success"]:
             result["compatibility"] = check_profile_compatibility(result["profile_name"])
+            _set_revert("delete_profile", {"profile_name": pname}, f"undo create_profile '{pname}'")
         return result
 
     elif tool_name == "delete_profile":
+        _clear_revert()
         return delete_custom_profile(args["profile_name"])
 
     # ── create_vm ─────────────────────────────────────────────────────────────
@@ -149,10 +178,9 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
             cfg.extra_args = args["extra_args"]
 
         # Reject profile names used as machine_type
-        valid_machine_types = {"q35", "pc", "pc-i440fx", "microvm", "virt", "raspi3b", "raspi2b", "raspi0"}
         if cfg.machine_type:
             mt = cfg.machine_type.lower().split(",")[0].strip()
-            if mt not in valid_machine_types and not mt.startswith("pc-"):
+            if mt not in _VALID_MACHINE_TYPES and not mt.startswith("pc-"):
                 cfg.machine_type = "q35"
 
         # Windows 11 requires UEFI + q35
@@ -163,9 +191,8 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
                 cfg.machine_type = "q35"
 
         # Reject ARM CPU on x86 VM
-        arm_cpu_prefixes = ("cortex", "arm1", "arm9", "arm11")
         if cfg.machine_arch == "x86_64" and any(
-            cfg.cpu_model.lower().startswith(p) for p in arm_cpu_prefixes
+            cfg.cpu_model.lower().startswith(p) for p in _ARM_CPU_PREFIXES
         ):
             cfg.cpu_model = "host"
 
@@ -235,23 +262,35 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
                 console.print(f"[green]✓ VM '{result['name']}' created at {result['vm_dir']}[/green]")
             else:
                 console.print(f"[red]✗ create_vm failed: {result.get('error', 'unknown error')}[/red]")
+        if result.get("success"):
+            _set_revert("delete_vm", {"name": name}, f"undo create_vm '{name}'")
         return result
 
     # ── VM lifecycle ──────────────────────────────────────────────────────────
     elif tool_name == "clone_vm":
-        return manager.clone_vm(args["source_name"], args["new_name"])
+        result = manager.clone_vm(args["source_name"], args["new_name"])
+        if result.get("success"):
+            _set_revert("delete_vm", {"name": args["new_name"]}, f"undo clone_vm '{args['new_name']}'")
+        return result
 
     elif tool_name == "launch_vm":
-        return manager.launch_vm(
+        result = manager.launch_vm(
             args["name"],
             display=args.get("display"),
             dry_run=args.get("dry_run", False),
         )
+        if result.get("success"):
+            _set_revert("stop_vm", {"name": args["name"], "force": True}, f"undo launch_vm '{args['name']}'")
+        return result
 
     elif tool_name == "stop_vm":
         if args["name"] == "all":
+            _clear_revert()
             return manager.stop_all()
-        return manager.stop_vm(args["name"], force=args.get("force", False))
+        result = manager.stop_vm(args["name"], force=args.get("force", False))
+        if result.get("success"):
+            _set_revert("launch_vm", {"name": args["name"]}, f"undo stop_vm '{args['name']}'")
+        return result
 
     elif tool_name == "vm_status":
         result = manager.vm_status(args["name"])
@@ -275,7 +314,18 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         return manager.show_config(args["name"])
 
     elif tool_name == "update_config":
-        return manager.update_config(args["name"], args.get("updates", {}))
+        # Capture old values before applying so we can revert
+        _old_cfg = manager.show_config(args["name"])
+        _updates = args.get("updates", {})
+        result = manager.update_config(args["name"], _updates)
+        if result.get("success") and _old_cfg.get("success"):
+            _old_vals = {k: _old_cfg["config"].get(k) for k in _updates}
+            _set_revert(
+                "update_config",
+                {"name": args["name"], "updates": _old_vals},
+                f"undo update_config '{args['name']}' fields {list(_updates.keys())}",
+            )
+        return result
 
     elif tool_name == "resize_disk":
         return manager.resize_disk(
@@ -323,7 +373,7 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         return manager.open_shell(args["name"])
 
     elif tool_name == "delete_vm":
-        return manager.delete_vm(args["name"], delete_disks=args.get("delete_disks", False))
+        return manager.delete_vm(args["name"], delete_disks=True)
 
     elif tool_name == "get_vm_logs":
         result = manager.get_vm_logs(args["name"], lines=int(args.get("lines", _TOOL_DEFS["log_lines"])))
@@ -336,6 +386,9 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         if result.get("success") and not verbose:
             console.print(Panel(result["command"], title="QEMU Command", border_style="cyan"))
         return result
+
+    elif tool_name == "fingerprint_vm":
+        return _tf_report(args["name"], summary=bool(args.get("summary", False)))
 
     elif tool_name == "send_monitor_cmd":
         return manager.send_monitor_cmd(args["name"], args.get("cmd", "info status"))

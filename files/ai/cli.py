@@ -16,37 +16,78 @@ from rich.panel import Panel
 from rich.table import Table
 
 from api.qemu_config  import OVMF, check_profile_compatibility, check_system_capabilities, list_profiles
-from .session      import clear_session, load_session, save_session
+from .session      import AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session, save_session, set_auto_clear, set_loop_max, get_loop_max
 from .display      import (
     console,
     _print_banner, _render_compat, _render_monitor, _render_profiles,
     _render_snapshots, _render_status, _render_system, _render_vm_list,
 )
-from .fingerprint  import _tf_report
-from .ollama_client import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
+from .fingerprint        import _tf_report
+from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
+from .context_assistant  import check_context, extract_slots
+from sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from executioner.tool_executor import execute_tool, manager
-from preflight.validator    import set_custom_mode
+from preflight.validator    import set_custom_mode, _preflight_check, _show_preflight_warning
 
-_CFG         = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
-_EXIT_CMDS   = set(_CFG["exit_commands"])
-_SHORTCUTS   = _CFG["shortcut_commands"]
-_LOOP_MAX    = _CFG["chat"]["tool_loop_max"]
-_ACTION_WORDS = set(_CFG["action_words"])
+_CFG            = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_EXIT_CMDS      = set(_CFG["exit_commands"])
+_SHORTCUTS      = _CFG["shortcut_commands"]
+_LOOP_MAX       = get_loop_max()   # respects tool_loop_max_override if set
+_ACTION_WORDS   = set(_CFG["action_words"])
+_OS_KEYWORDS    = set(_CFG["os_keywords_gate"])
+_CONFIRM_YN     = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
+_CONFIRM_NAME   = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
+_RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
 
-# Tools that require explicit user confirmation before execution.
-# Maps tool_name → (arg_field_to_confirm, human-readable verb).
-_CONFIRM_REQUIRED: dict = {
-    "create_vm":           ("name",         "create VM"),
-    "delete_vm":           ("name",         "delete VM"),
-    "clone_vm":            ("new_name",     "clone to new VM"),
-    "update_config":       ("name",         "update config for VM"),
-    "resize_disk":         ("name",         "resize disk for VM"),
-    "snapshot_restore":    ("name",         "restore snapshot for VM"),
-    "snapshot_delete":     ("name",         "delete snapshot of VM"),
-    "delete_network":      ("net_name",     "delete network"),
-    "delete_profile":      ("profile_name", "delete profile"),
-    "set_resource_limits": ("name",         "set resource limits for VM"),
-}
+def _is_critical(tool_name: str, args: dict) -> bool:
+    """True when the operation requires double confirmation (irreversible + data loss)."""
+    return tool_name == "delete_vm"
+
+
+def _show_drift_report(messages: list, runtime_drift_count: int) -> None:
+    from rich.table import Table
+    from rich.text  import Text
+
+    user_count      = sum(1 for m in messages if m.get("role") == "user")
+    assistant_count = sum(1 for m in messages if m.get("role") == "assistant")
+    orphan_count    = user_count - assistant_count
+    orphan_pct      = int(orphan_count / user_count * 100) if user_count else 0
+
+    max_consec, consec = 0, 0
+    for m in messages:
+        if m.get("role") == "user":
+            consec += 1
+            max_consec = max(max_consec, consec)
+        else:
+            consec = 0
+
+    drift_result = detect_drift(messages)
+    if drift_result:
+        level, _ = drift_result
+        if level == "critical":
+            status_text = Text("✖ CRITICAL — model likely poisoned", style="bold red")
+        else:
+            status_text = Text("⚠ WARNING — early drift signal", style="bold yellow")
+    else:
+        status_text = Text("✓ HEALTHY", style="bold green")
+
+    t = Table(show_header=False, box=None, padding=(0, 2))
+    t.add_column("key",   style="dim")
+    t.add_column("value", style="bold")
+
+    t.add_row("Status",                  status_text)
+    t.add_row("Session messages",        str(len(messages)))
+    t.add_row("User turns",              str(user_count))
+    t.add_row("Verified responses",      str(assistant_count))
+    t.add_row("Orphaned turns",          f"{orphan_count}  ({orphan_pct}%)")
+    t.add_row("Max consecutive orphans", str(max_consec))
+    t.add_row("Runtime drift (turns)",   str(runtime_drift_count))
+
+    if drift_result:
+        _, msg = drift_result
+        t.add_row("Advice", Text(msg, style="yellow" if drift_result[0] == "warn" else "red"))
+
+    console.print(Panel(t, title="Session Drift Report", border_style="cyan"))
 
 
 # ── Chat loop ──────────────────────────────────────────────────────────────────
@@ -54,6 +95,7 @@ _CONFIRM_REQUIRED: dict = {
 # Runs the interactive Ollama chat REPL: reads input, drives the agentic tool loop (up to 15 rounds), handles clarifications, and saves session.
 # In: bool verbose → Out: nothing (blocks until exit)
 def chat_loop(verbose: bool = False):
+    global _LOOP_MAX
     _print_banner(
         verbose=verbose,
         ollama_url=OLLAMA_URL,
@@ -61,17 +103,39 @@ def chat_loop(verbose: bool = False):
         ovmf_available=OVMF["available"],
         ovmf_code=OVMF.get("code", ""),
     )
+    if AUTO_CLEAR_SESSION:
+        clear_session()
+        console.print("[dim]Session auto-cleared (auto_clear=true in config).[/dim]")
+
     messages = load_session()
 
-    while True:
-        try:
-            user_input = console.input("\n[bold cyan]You:[/bold cyan] ").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Goodbye.[/dim]")
-            break
+    drift_result = detect_drift(messages)
+    if drift_result:
+        _drift_level, _drift_msg = drift_result
+        if _drift_level == "critical":
+            console.print(f"[bold red]✖ Session critically drifted — auto-clearing to prevent poisoning.[/bold red]")
+            console.print(f"[dim]{_drift_msg}[/dim]")
+            clear_session()
+            messages = []
+        else:
+            console.print(f"[bold yellow]⚠ {_drift_msg}[/bold yellow]")
 
-        if not user_input:
-            continue
+    _runtime_drift_count  = 0    # consecutive action turns with no tool execution
+    _synthetic_continue   = False # True when re-entering loop after cap-hit continuation
+
+    while True:
+        _is_synthetic = _synthetic_continue
+        if _synthetic_continue:
+            _synthetic_continue = False
+        else:
+            try:
+                user_input = console.input("\n[bold cyan]You:[/bold cyan] ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Goodbye.[/dim]")
+                break
+
+            if not user_input:
+                continue
 
         _ui = user_input.lower().strip()
 
@@ -97,11 +161,55 @@ def chat_loop(verbose: bool = False):
             console.print("[dim]Session cleared.[/dim]")
             continue
 
-        messages.append({"role": "user", "content": user_input})
+        if _ui in _SHORTCUTS["drift"]:
+            _show_drift_report(messages, _runtime_drift_count)
+            continue
+
+        if _ui in _SHORTCUTS["auto_clear_on"]:
+            set_auto_clear(True)
+            console.print("[dim]Auto-clear enabled — session will be cleared on next start.[/dim]")
+            continue
+
+        if _ui in _SHORTCUTS["auto_clear_off"]:
+            set_auto_clear(False)
+            console.print("[dim]Auto-clear disabled.[/dim]")
+            continue
+
+        _ll_matched = next((s for s in _SHORTCUTS["loop_limit"] if _ui == s or _ui.startswith(s + " ")), None)
+        if _ll_matched is not None:
+            _ll_inline = _ui[len(_ll_matched):].strip()
+            if _ll_inline:
+                _ll_input = _ll_inline
+            else:
+                console.print(f"[dim]Current tool loop limit: [bold]{_LOOP_MAX}[/bold] (default: {_CFG['chat']['tool_loop_max']})[/dim]")
+                console.print("[dim]Enter a number to set a new limit, or press Enter to clear the override.[/dim]")
+                try:
+                    _ll_input = console.input("[bold cyan]New limit:[/bold cyan] ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    continue
+            if _ll_input == "":
+                set_loop_max(None)
+                _LOOP_MAX = _CFG["chat"]["tool_loop_max"]
+                console.print(f"[dim]Loop limit reset to default ({_LOOP_MAX}).[/dim]")
+            elif _ll_input.isdigit() and int(_ll_input) > 0:
+                _LOOP_MAX = int(_ll_input)
+                set_loop_max(_LOOP_MAX)
+                console.print(f"[dim]Loop limit set to {_LOOP_MAX}.[/dim]")
+            else:
+                console.print("[dim]Invalid input — loop limit unchanged.[/dim]")
+            continue
+
+        if not _is_synthetic:
+            messages.append({"role": "user", "content": user_input})
 
         _user_wants_action = bool(set(_ui.split()) & _ACTION_WORDS)
-        _tools_called_this_turn = False
-        _just_clarified_fields: set = set()  # persists across all iterations for this user turn
+        _tools_called_this_turn   = False
+        _just_clarified_fields: set = set()  # field names answered via clarify gate this turn
+        _just_clarified_values: set = set()  # (field, value) pairs answered via clarify gate
+        _confirmed_values: set = set()       # (field, value) pairs confirmed via safety gate
+        _context_assistant_fired  = False
+        _tool_executed_this_turn  = False    # True only when execute_tool actually ran
+        _last_had_tools           = False    # True when last Ollama response had tool_calls
 
         # Agentic tool loop — up to _LOOP_MAX rounds per user turn
         for _loop_iter in range(_LOOP_MAX):
@@ -119,6 +227,7 @@ def chat_loop(verbose: bool = False):
             messages.append(assistant_msg)
 
             tool_calls = msg.get("tool_calls", [])
+            _last_had_tools = bool(tool_calls)
             if not tool_calls:
                 text = msg.get("content", "").strip()
                 # Empty response (no tool calls, no text) — nudge the AI to respond.
@@ -175,6 +284,57 @@ def chat_loop(verbose: bool = False):
                         f"  [tool]→ {tool_name}[/tool]  [dim]{json.dumps(raw_args)}[/dim]"
                     )
 
+                # ── Context assistant ──────────────────────────────────────
+                # Only runs once per user turn — if it already fired and the
+                # AI still chose a bad tool, let the downstream layers handle it.
+                #
+                # _recent_context: last 6 real user messages joined into one
+                # string. Used by the context assistant and the pre-gate so
+                # multi-turn flows ("delete test1" → "yes") don't lose the
+                # entity name when only the confirmation arrives as user_input.
+                _recent_user_msgs = [
+                    m.get("content", "").lower() for m in messages
+                    if m.get("role") == "user"
+                    and not str(m.get("content", "")).startswith("_INTERNAL_")
+                ]
+                _recent_context = " ".join(_recent_user_msgs[-6:])
+                if not _context_assistant_fired:
+                    _ca_hint = check_context(user_input, tool_name, raw_args,
+                                             recent_context=_recent_context)
+                    if _ca_hint:
+                        _context_assistant_fired = True
+                        if "never mentioned it" in _ca_hint:
+                            # Hallucinated required field — ask the user directly
+                            # rather than re-prompting the AI (model ignores the hint).
+                            import re as _re
+                            _fields = _re.findall(r"You set (\w+)=", _ca_hint)
+                            _filled = {}
+                            for _f in _fields:
+                                console.print(f"[yellow]?[/yellow] What {_f} would you like to use?")
+                                try:
+                                    _ans = console.input("[bold cyan]You:[/bold cyan] ").strip()
+                                except (KeyboardInterrupt, EOFError):
+                                    console.print("\n[dim]Cancelled.[/dim]")
+                                    return
+                                if _ans:
+                                    _filled[_f] = _ans
+                            if _filled:
+                                raw_args = dict(raw_args)
+                                raw_args.update(_filled)
+                                messages.append({"role": "user", "content": str(_filled)})
+                                _just_clarified_fields.update(_filled.keys())
+                                _just_clarified_values.update(_filled.items())
+                            # Don't break — continue with corrected args
+                        else:
+                            # Mismatch or high-stakes — let the AI re-evaluate
+                            messages.pop()
+                            messages.append({
+                                "role":    "user",
+                                "content": f"_INTERNAL_ {_ca_hint} Re-evaluate and call the correct tool.",
+                            })
+                            break       # break tool_calls loop, re-enter outer loop
+                # ──────────────────────────────────────────────────────────
+
                 # ── os_type guard ──────────────────────────────────────────
                 # Strip AI-inferred os_type when the user didn't mention an OS
                 # in their message — unless they already answered it via the
@@ -182,44 +342,52 @@ def chat_loop(verbose: bool = False):
                 if tool_name == "create_vm" \
                         and "os_type" in raw_args \
                         and "os_type" not in _just_clarified_fields:
-                    _OS_KEYWORDS = {
-                        "linux", "windows", "win", "ubuntu", "debian", "fedora",
-                        "arch", "kali", "mint", "centos", "rhel", "macos", "mac",
-                        "osx", "android", "freebsd", "openbsd", "other",
-                    }
                     if not (_OS_KEYWORDS & set(_ui.split())):
                         raw_args.pop("os_type")
                 # ──────────────────────────────────────────────────────────
 
-                # ── Safety confirmation gate ───────────────────────────────
-                # Skip if the key field was answered via the clarify gate this
-                # turn — the user just confirmed the value moments ago.
-                if tool_name in _CONFIRM_REQUIRED and \
-                        _CONFIRM_REQUIRED[tool_name][0] not in _just_clarified_fields:
-                    field, verb = _CONFIRM_REQUIRED[tool_name]
-                    proposed = raw_args.get(field, "")
+                # ── Pre-flight check ───────────────────────────────────────
+                _pf        = _preflight_check(tool_name, raw_args, manager, verbose)
+                _pf_action = _pf.get("action", "ok")
 
-                    try:
-                        vm_names = [v["name"] for v in manager.list_vms()]
-                    except Exception:
-                        vm_names = []
-                    opts_str = "  ".join(f"[{n}]" for n in vm_names[:6])
+                if _pf_action == "abort":
+                    messages.append({
+                        "role":    "tool",
+                        "content": json.dumps(
+                            {"success": False, "error": _pf["reason"]}, default=str
+                        ),
+                    })
+                    messages.append({
+                        "role":    "user",
+                        "content": (
+                            f"_INTERNAL_ {_pf['reason']}. "
+                            f"{_pf.get('correction', '')} Do not retry this operation."
+                        ),
+                    })
+                    break
 
-                    hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
-                    console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
-                    if opts_str:
-                        console.print(f"   Available: {opts_str}")
-                    console.print(
-                        "[dim]Type the name to confirm, a different name to redirect,"
-                        " or press Enter to cancel.[/dim]"
-                    )
+                elif _pf_action == "auto_fix":
+                    raw_args = _pf["fixed_args"]
+                    if not verbose:
+                        console.print(
+                            f"  [yellow]⚙  Pre-flight auto-fixed: {_pf['correction']}[/yellow]"
+                        )
+
+                elif _pf_action == "ask_user" and tool_name not in _CONFIRM_NAME:
+                    _show_preflight_warning(_pf, console)
+                    fix_field = _pf.get("fix_field")
+                    opts      = _pf.get("options", [])
                     try:
-                        confirmed = console.input("[bold cyan]Confirm:[/bold cyan] ").strip()
+                        pf_answer = console.input("[bold cyan]Your choice:[/bold cyan] ").strip()
                     except (KeyboardInterrupt, EOFError):
                         console.print("\n[dim]Cancelled.[/dim]")
                         return
-
-                    if not confirmed:
+                    cancelled = (
+                        not pf_answer
+                        or (opts and pf_answer.lower() == opts[-1].lower())
+                        or pf_answer.lower() in ("no", "cancel", "n")
+                    )
+                    if cancelled:
                         messages.append({
                             "role":    "tool",
                             "content": json.dumps(
@@ -233,16 +401,157 @@ def chat_loop(verbose: bool = False):
                         })
                         _op_cancelled = True
                         break
-
-                    if confirmed != proposed:
-                        raw_args[field] = confirmed
-                    _just_clarified_fields.add(field)  # don't ask again this turn
+                    if fix_field:
+                        raw_args = dict(raw_args)
+                        raw_args[fix_field] = pf_answer
+                        _just_clarified_fields.add(fix_field)
                 # ──────────────────────────────────────────────────────────
 
-                result = execute_tool(tool_name, raw_args, verbose)
+                # ── Safety confirmation gate ───────────────────────────────
+                # Skip if the key field was answered via the clarify gate this
+                # turn — the user just confirmed the value moments ago.
+                _conf_entry = (
+                    _CONFIRM_YN.get(tool_name) or _CONFIRM_NAME.get(tool_name)
+                )
+                if _conf_entry:
+                    field, verb = _conf_entry
+                    proposed = raw_args.get(field, "")
+                if _conf_entry and (field, proposed) not in _just_clarified_values and (field, proposed) not in _confirmed_values:
+
+                    def _cancel_op():
+                        messages.append({
+                            "role":    "tool",
+                            "content": json.dumps(
+                                {"success": False, "error": "Operation cancelled by user."},
+                                default=str,
+                            ),
+                        })
+                        messages.append({
+                            "role":    "user",
+                            "content": "_INTERNAL_ The user cancelled this operation. Ask what they would like to do instead.",
+                        })
+
+                    if _is_critical(tool_name, raw_args):
+                        # Double confirm: YES → VM name
+                        console.print(f"\n[bold red]⚠  {verb}: [bold]{proposed}[/bold] — this will also delete its disk(s)[/bold red]")
+                        console.print("[dim]Type YES to proceed, or press Enter to cancel.[/dim]")
+                        try:
+                            step1 = console.input("[bold red]Confirm (YES):[/bold red] ").strip()
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[dim]Cancelled.[/dim]")
+                            return
+                        if step1.upper() != "YES":
+                            _cancel_op()
+                            _op_cancelled = True
+                            break
+                        console.print(f"[dim]Type the name [bold]{proposed}[/bold] to confirm.[/dim]")
+                        try:
+                            step2 = console.input("[bold red]Confirm name:[/bold red] ").strip()
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[dim]Cancelled.[/dim]")
+                            return
+                        if step2 != proposed:
+                            console.print("[dim]Name did not match. Cancelled.[/dim]")
+                            _cancel_op()
+                            _op_cancelled = True
+                            break
+
+                    elif tool_name in _CONFIRM_YN:
+                        # y/n confirm for reversible modify and launch/stop
+                        hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
+                        console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
+                        try:
+                            answer = console.input("[bold cyan]Proceed? (y/n):[/bold cyan] ").strip().lower()
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[dim]Cancelled.[/dim]")
+                            return
+                        if answer != "y":
+                            _cancel_op()
+                            _op_cancelled = True
+                            break
+
+                    else:
+                        # Name confirm for destructive operations — exact match required
+                        hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
+                        console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
+                        console.print(f"[dim]Type the name to confirm, or press Enter to cancel.[/dim]")
+                        try:
+                            confirmed = console.input("[bold cyan]Confirm:[/bold cyan] ").strip()
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[dim]Cancelled.[/dim]")
+                            return
+                        if confirmed != proposed:
+                            if confirmed:
+                                console.print("[dim]Name did not match. Cancelled.[/dim]")
+                            _cancel_op()
+                            _op_cancelled = True
+                            break
+
+                    _confirmed_values.add((field, proposed))  # this exact value confirmed
+                # ──────────────────────────────────────────────────────────
+
+                # ── Pre-execution gate ─────────────────────────────────────────
+                # Check required trackable fields against what the user actually
+                # said — not what the AI put in args. If any gated field is
+                # absent from the user's message and hasn't been clarified this
+                # turn, jump straight to clarify without calling execute_tool.
+                # This prevents hallucinated args from bypassing the gate.
+                _gate_required = _GATE_REQUIRED.get(tool_name, [])
+                _pre_gate_result = None
+                if _gate_required and tool_name != "clarify":
+                    _user_slots = extract_slots(user_input)
+                    for _clf in _just_clarified_fields:
+                        if _clf in raw_args and raw_args[_clf]:
+                            _user_slots[_clf] = raw_args[_clf]
+                    _missing_early = [
+                        {"field": f, "question": q, "options": opts}
+                        for f, q, opts in _gate_required
+                        if f in _user_slots and _user_slots[f] is None
+                        # Skip if the AI's value for this field is grounded in
+                        # recent conversation history — handles multi-turn flows
+                        # where the entity ("test1") was named in a prior turn
+                        # and the current message is only a confirmation ("yes").
+                        and not (
+                            raw_args.get(f)
+                            and isinstance(raw_args.get(f), str)
+                            and raw_args[f].lower() in _recent_context
+                        )
+                    ]
+                    if _missing_early:
+                        _pre_gate_result = {
+                            "success":             False,
+                            "clarify":             True,
+                            "missing":             _missing_early,
+                            "question":            _missing_early[0]["question"],
+                            "options":             _missing_early[0]["options"],
+                            "needs_clarification": _missing_early[0]["field"],
+                            "error":               (
+                                f"Missing required arguments for {tool_name}: "
+                                f"{[m['field'] for m in _missing_early]}"
+                            ),
+                        }
+                # ──────────────────────────────────────────────────────────────
+
+                if _pre_gate_result:
+                    result = _pre_gate_result
+                else:
+                    result = execute_tool(tool_name, raw_args, verbose)
+                    _tool_executed_this_turn = True
+
+                # Tools that self-render formatted output: strip data so the AI
+                # doesn't repeat the table/panel in its text response.
+                if tool_name in _RENDERS_OUTPUT and not verbose and not _pre_gate_result:
+                    tool_content = json.dumps(
+                        {"success": True, "rendered": True,
+                         "note": "Output already displayed to user. Do not repeat it."},
+                        default=str,
+                    )
+                else:
+                    tool_content = json.dumps(result, default=str)
+
                 messages.append({
                     "role":    "tool",
-                    "content": json.dumps(result, default=str),
+                    "content": tool_content,
                 })
 
                 if isinstance(result, dict) and result.get("clarify"):
@@ -273,6 +582,13 @@ def chat_loop(verbose: bool = False):
                             filled[f] = clarified
                             messages.append({"role": "user", "content": clarified})
                     _just_clarified_fields.update(filled.keys())
+                    _just_clarified_values.update(filled.items())
+                    if filled:
+                        _field_summary = ", ".join(f"{k}='{v}'" for k, v in filled.items())
+                        messages.append({
+                            "role":    "user",
+                            "content": f"_INTERNAL_ The user provided the missing values: {_field_summary}. Call the correct tool using these EXACT values — do not invent different ones.",
+                        })
                     _clarify_happened = True
                     _clarify_answer   = str(filled)
                     _clarify_field    = ", ".join(filled.keys())
@@ -280,6 +596,12 @@ def chat_loop(verbose: bool = False):
 
             if _op_cancelled:
                 continue  # let AI ask what the user wants to do instead
+
+            if _context_assistant_fired and not tool_calls:
+                # Mismatch/high-stakes path: hint was injected, give AI another pass.
+                # Hallucinated-field path: args were patched in-place, loop continues normally.
+                _tools_called_this_turn = False
+                continue
 
             if _clarify_happened:
                 hint = (
@@ -297,7 +619,51 @@ def chat_loop(verbose: bool = False):
                 })
                 continue
 
+        else:
+            # for loop exhausted all _LOOP_MAX iterations without a natural break
+            if _last_had_tools:
+                console.print(
+                    f"\n[yellow]⚠  Tool loop reached the {_LOOP_MAX}-iteration limit "
+                    f"— the task may be incomplete.[/yellow]"
+                )
+                try:
+                    _cap_ans = console.input("[bold cyan]Continue? (y/n):[/bold cyan] ").strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    _cap_ans = "n"
+                if _cap_ans == "y":
+                    messages.append({
+                        "role":    "user",
+                        "content": "_INTERNAL_ You were cut off by the tool loop limit. Continue the task from where you left off.",
+                    })
+                    _synthetic_continue = True
+                    save_session(messages)
+                    continue  # outer REPL while loop — no new user input needed
+
+        # If the user wanted an action but no tool ever executed, the last
+        # assistant message is a hallucinated success — strip it before saving.
+        if _user_wants_action and not _tool_executed_this_turn and messages:
+            last = messages[-1]
+            if last.get("role") == "assistant" and not last.get("tool_calls"):
+                messages.pop()
         save_session(messages)
+
+        # Runtime drift counter — warn after 3 consecutive action turns where
+        # the model gave text instead of calling a tool.
+        if _user_wants_action and not _tool_executed_this_turn:
+            _runtime_drift_count += 1
+            if _runtime_drift_count >= 6:
+                console.print(
+                    f"[bold red]✖ drift critical: {_runtime_drift_count} consecutive turns "
+                    f"with no tool call — the model is likely poisoned. "
+                    f"Type 'clear session' now.[/bold red]"
+                )
+            elif _runtime_drift_count >= 3:
+                console.print(
+                    f"[bold yellow]⚠ drift detected: {_runtime_drift_count} consecutive "
+                    f"turns with no tool call — type 'clear session' to reset[/bold yellow]"
+                )
+        elif _tool_executed_this_turn:
+            _runtime_drift_count = 0
 
 
 # ── Direct sub-command CLI ─────────────────────────────────────────────────────
@@ -463,7 +829,8 @@ def cli_direct(args: List[str], verbose: bool = False):
             "  qemu-api clear-session\n"
             "  qemu-api -tf <name>\n\n"
             "Add [bold]-v[/bold] anywhere for verbose/raw output.\n"
-            "Add [bold]-cu[/bold] to AI chat to skip product verification for custom machines.",
+            "Add [bold]-cu[/bold] to AI chat to skip product verification for custom machines.\n"
+            "Add [bold]-cs[/bold] to AI chat to clear the session before starting.",
             border_style="cyan", title="qemu-api help",
         ))
 
@@ -479,6 +846,11 @@ if __name__ == "__main__":
         set_custom_mode(True)
         argv = [a for a in argv if a != "-cu"]
         console.print("[dim]Custom mode active — product verification disabled[/dim]")
+
+    if "-cs" in argv:
+        clear_session()
+        argv = [a for a in argv if a != "-cs"]
+        console.print("[dim]Session cleared.[/dim]")
 
     if argv:
         cli_direct(argv, verbose=verbose)

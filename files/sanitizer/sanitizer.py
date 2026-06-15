@@ -14,8 +14,11 @@ from typing import Any, Dict, List, Optional
 
 from api.qemu_config import get_all_profiles
 
-_CFG    = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
-_BOUNDS = _CFG["bounds"]
+_CFG                = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_BOUNDS             = _CFG["bounds"]
+_OPTIONAL_REMOVABLE = set(_CFG["optional_removable"])
+_ISO_OS_KEYWORDS    = _CFG["iso_os_keywords"]
+_ENUM_DEFAULTS      = _CFG["enum_field_defaults"]
 
 REAL_HOME = os.path.expanduser("~")
 
@@ -152,19 +155,8 @@ def _resolve_iso(iso_hint: str) -> Optional[str]:
     raw_words = re.split(r"[\s/\\-_.]+", iso_hint.lower())
     keywords  = [w for w in raw_words if len(w) > 2 and w not in stopwords]
 
-    os_keywords = {
-        "win":     ["win", "windows"],
-        "ubuntu":  ["ubuntu"],
-        "debian":  ["debian"],
-        "fedora":  ["fedora"],
-        "mint":    ["mint", "linuxmint"],
-        "arch":    ["arch"],
-        "kali":    ["kali"],
-        "raspios": ["raspios", "raspberry", "raspi"],
-        "macos":   ["macos", "osx", "darwin"],
-    }
     hint_lower = iso_hint.lower()
-    for key, variants in os_keywords.items():
+    for key, variants in _ISO_OS_KEYWORDS.items():
         if any(v in hint_lower for v in variants):
             keywords += variants
     keywords = list(dict.fromkeys(keywords))
@@ -243,21 +235,21 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             args["os_type"] = alias
 
     # Enum field validation
-    enum_map = {
-        "display":       (VALID_DISPLAY_MODES, "sdl"),
-        "gpu":           (VALID_GPU_TYPES,      "virtio"),
-        "audio":         (VALID_AUDIO_TYPES,    "hda"),
-        "network_mode":  (VALID_NETWORK_MODES,  "nat"),
-        "disk_format":   (VALID_DISK_FORMATS,   "qcow2"),
-        "bios":          (VALID_BIOS,           "ovmf"),
-        "machine_arch":  (VALID_MACHINE_ARCH,   "x86_64"),
-        "machine_class": (VALID_MACHINE_CLASS,  "desktop"),
-        "os_type":       (VALID_OS_TYPES,       "linux"),
+    _ENUM_VALID_SETS = {
+        "display":       VALID_DISPLAY_MODES,
+        "gpu":           VALID_GPU_TYPES,
+        "audio":         VALID_AUDIO_TYPES,
+        "network_mode":  VALID_NETWORK_MODES,
+        "disk_format":   VALID_DISK_FORMATS,
+        "bios":          VALID_BIOS,
+        "machine_arch":  VALID_MACHINE_ARCH,
+        "machine_class": VALID_MACHINE_CLASS,
+        "os_type":       VALID_OS_TYPES,
     }
-    for field, (valid_set, default) in enum_map.items():
+    for field, valid_set in _ENUM_VALID_SETS.items():
         if field in args and args[field] is not None:
             val = str(args[field]).lower().strip()
-            args[field] = val if val in valid_set else default
+            args[field] = val if val in valid_set else _ENUM_DEFAULTS[field]
 
     # Path fields
     for path_field in ("iso_path", "kernel_path", "initrd_path"):
@@ -349,12 +341,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 args[text_field] = re.sub(r"[/\\`$()]", "", val)
 
     # Remove empty optional fields
-    optional_removable = {
-        "bridge_iface","mac_address","iso_path","kernel_path",
-        "initrd_path","bios_version","bios_vendor","serial_number",
-        "product_name","manufacturer","hostname",
-    }
-    for f in optional_removable:
+    for f in _OPTIONAL_REMOVABLE:
         if f in args and (args[f] is None or args[f] == ""):
             args.pop(f, None)
 

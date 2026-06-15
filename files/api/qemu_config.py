@@ -522,10 +522,7 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
     Check whether a given profile can run on this host system.
     Returns compatibility status, issues found, and alternatives.
     """
-    _THRESHOLDS = _CFG.get("compatibility_thresholds", {
-        "memory_ratio": 0.8,
-        "min_disk_free_gb": 20,
-    })
+    _THRESHOLDS = _CFG["compatibility_thresholds"]
 
     all_profiles = get_all_profiles()
     profile      = all_profiles.get(profile_name)
