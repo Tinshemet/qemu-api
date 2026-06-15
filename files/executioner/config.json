@@ -1,4 +1,6 @@
 {
+  "valid_machine_types": ["q35", "pc", "pc-i440fx", "microvm", "virt", "raspi3b", "raspi2b", "raspi0"],
+  "arm_cpu_prefixes":    ["cortex", "arm1", "arm9", "arm11"],
   "create_vm_defaults": {
     "disk_size_gb":  60,
     "disk_format":   "qcow2",

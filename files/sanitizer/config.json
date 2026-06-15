@@ -41,6 +41,33 @@
   "arm_machine_types": ["raspi", "raspi3b", "raspi2b", "virt"],
   "arm_machine_archs": ["aarch64", "arm", "armhf"],
   "iso_search_dirs": ["images","iso","isos","vms"],
+  "iso_os_keywords": {
+    "win":     ["win", "windows"],
+    "ubuntu":  ["ubuntu"],
+    "debian":  ["debian"],
+    "fedora":  ["fedora"],
+    "mint":    ["mint", "linuxmint"],
+    "arch":    ["arch"],
+    "kali":    ["kali"],
+    "raspios": ["raspios", "raspberry", "raspi"],
+    "macos":   ["macos", "osx", "darwin"]
+  },
+  "enum_field_defaults": {
+    "display":       "sdl",
+    "gpu":           "virtio",
+    "audio":         "hda",
+    "network_mode":  "nat",
+    "disk_format":   "qcow2",
+    "bios":          "ovmf",
+    "machine_arch":  "x86_64",
+    "machine_class": "desktop",
+    "os_type":       "linux"
+  },
+  "optional_removable": [
+    "bridge_iface", "mac_address", "iso_path", "kernel_path",
+    "initrd_path", "bios_version", "bios_vendor", "serial_number",
+    "product_name", "manufacturer", "hostname"
+  ],
   "bounds": {
     "memory_min_mb":    512,
     "memory_max_ratio": 0.95,

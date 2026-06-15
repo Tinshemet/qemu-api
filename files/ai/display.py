@@ -6,6 +6,8 @@ helper that turns a manager result dict into a formatted terminal panel
 or table.
 """
 
+import json
+import os
 from typing import Any, Dict, List
 
 from rich import box
@@ -18,17 +20,8 @@ from rich.table   import Table
 from rich.text    import Text
 from rich.theme   import Theme
 
-THEME = Theme({
-    "tool":    "bold cyan",
-    "success": "bold green",
-    "error":   "bold red",
-    "warn":    "bold yellow",
-    "info":    "dim cyan",
-    "ai":      "bold white",
-    "user":    "bold blue",
-    "dim":     "dim white",
-    "header":  "bold magenta",
-})
+_CFG   = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+THEME  = Theme(_CFG["theme"])
 console = Console(theme=THEME)
 
 
@@ -282,7 +275,7 @@ def _print_banner(verbose: bool, ollama_url: str, ollama_model: str, ovmf_availa
         f"Model: [bold]{ollama_model}[/bold]  |  {ollama_url}\n"
         f"{ovmf_line}\n"
         f"{verb_line}\n"
-        f"[dim]Commands: 'exit' · 'clear session' · 'list' · 'system'[/dim]",
+        f"[dim]Commands: 'exit' · 'clear session' · 'list' · 'system' · 'drift'[/dim]",
         border_style="cyan",
         title="[bold]qemu-api[/bold]",
     ))

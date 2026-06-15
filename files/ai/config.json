@@ -8,32 +8,214 @@
   },
   "session": {
     "file": "~/.qemu_vms/.session.json",
-    "max_history": 40
+    "max_history": 10,
+    "auto_clear": true
   },
   "chat": {
-    "tool_loop_max": 15
+    "tool_loop_max": 15,
+    "tool_loop_max_override": 100
   },
   "exit_commands": [
-    "exit", "quit", "bye", "goodbye", "q", ":q", ":q!",
-    "stop", "leave", "close", "done", "end", "out",
-    "exit()", "quit()", "i want to exit", "i want to quit",
-    "please exit", "please quit"
+    "exit",
+    "quit",
+    "bye",
+    "goodbye",
+    "q",
+    ":q",
+    ":q!",
+    "stop",
+    "leave",
+    "close",
+    "done",
+    "end",
+    "out",
+    "exit()",
+    "quit()",
+    "i want to exit",
+    "i want to quit",
+    "please exit",
+    "please quit"
   ],
   "shortcut_commands": {
-    "list":          ["list", "vms"],
-    "system":        ["system"],
-    "profiles":      ["profiles"],
-    "clear_session": ["clear session", "forget"]
+    "list": [
+      "list",
+      "vms",
+      "list vms",
+      "show vms",
+      "ls",
+      "list all",
+      "show all",
+      "list all vms",
+      "show all vms"
+    ],
+    "system": [
+      "system",
+      "system info",
+      "check system",
+      "show system"
+    ],
+    "profiles": [
+      "profiles",
+      "list profiles",
+      "show profiles"
+    ],
+    "clear_session": [
+      "clear session",
+      "forget"
+    ],
+    "drift": [
+      "drift",
+      "check drift",
+      "drift check",
+      "drift status",
+      "drift report"
+    ],
+    "auto_clear_on": [
+      "auto clear on",
+      "enable auto clear",
+      "autoclear on"
+    ],
+    "auto_clear_off": [
+      "auto clear off",
+      "disable auto clear",
+      "autoclear off"
+    ],
+    "loop_limit": [
+      "loop limit",
+      "set loop limit",
+      "loop max",
+      "set loop max",
+      "tool loop limit",
+      "tool loop max"
+    ]
   },
-  "action_words": [
-    "create", "make", "build", "launch", "start", "run",
-    "stop", "kill", "delete", "remove", "destroy",
-    "clone", "resize", "snapshot", "update", "list"
+  "rendered_tools": [
+    "list_vms",
+    "list_profiles",
+    "check_system",
+    "vm_status",
+    "monitor_vm",
+    "snapshot_list",
+    "check_profile_compatibility"
   ],
+  "action_words": [
+    "create",
+    "make",
+    "build",
+    "launch",
+    "start",
+    "run",
+    "stop",
+    "kill",
+    "delete",
+    "remove",
+    "destroy",
+    "clone",
+    "resize",
+    "snapshot",
+    "update",
+    "list"
+  ],
+  "confirm_yn": {
+    "update_config": [
+      "name",
+      "update config for VM"
+    ],
+    "resize_disk": [
+      "name",
+      "resize disk for VM"
+    ],
+    "set_resource_limits": [
+      "name",
+      "set resource limits for VM"
+    ],
+    "create_vm": [
+      "name",
+      "create VM"
+    ],
+    "clone_vm": [
+      "new_name",
+      "clone to new VM"
+    ],
+    "launch_vm": [
+      "name",
+      "launch VM"
+    ],
+    "stop_vm": [
+      "name",
+      "stop VM"
+    ]
+  },
+  "confirm_name": {
+    "delete_vm": [
+      "name",
+      "delete VM"
+    ],
+    "snapshot_restore": [
+      "name",
+      "restore snapshot for VM"
+    ],
+    "snapshot_delete": [
+      "name",
+      "delete snapshot of VM"
+    ],
+    "delete_network": [
+      "net_name",
+      "delete network"
+    ],
+    "delete_profile": [
+      "profile_name",
+      "delete profile"
+    ]
+  },
+  "os_keywords_gate": [
+    "linux",
+    "windows",
+    "win",
+    "ubuntu",
+    "debian",
+    "fedora",
+    "arch",
+    "kali",
+    "mint",
+    "centos",
+    "rhel",
+    "macos",
+    "mac",
+    "osx",
+    "android",
+    "freebsd",
+    "openbsd",
+    "other"
+  ],
+  "theme": {
+    "tool": "bold cyan",
+    "success": "bold green",
+    "error": "bold red",
+    "warn": "bold yellow",
+    "info": "dim cyan",
+    "ai": "bold white",
+    "user": "bold blue",
+    "dim": "dim white",
+    "header": "bold magenta"
+  },
   "fingerprint": {
-    "vm_bios_vendors":   ["seabios", "ovmf", "tianocore", "edk ii", "bochs"],
-    "vm_chassis_types":  ["other", "unspecified", ""],
-    "qemu_oui_prefixes": ["52:54:00", "00:1a:4a"],
+    "vm_bios_vendors": [
+      "seabios",
+      "ovmf",
+      "tianocore",
+      "edk ii",
+      "bochs"
+    ],
+    "vm_chassis_types": [
+      "other",
+      "unspecified",
+      ""
+    ],
+    "qemu_oui_prefixes": [
+      "52:54:00",
+      "00:1a:4a"
+    ],
     "score_good": 80,
     "score_warn": 50
   }

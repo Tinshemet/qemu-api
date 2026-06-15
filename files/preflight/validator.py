@@ -330,9 +330,8 @@ def _validate_profile_for_host(profile_name: str) -> List[Dict[str, Any]]:
         issues.append({"severity":"warning","message":f"Profile note: {notes}","fix":"","auto_fix":False})
 
     if profile.get("_custom"):
-        cpu_model   = profile.get("cpu_model", "host")
-        arm_prefixes = ("cortex", "arm1", "arm9", "arm11")
-        if any(cpu_model.lower().startswith(p) for p in arm_prefixes) and arch == "x86_64":
+        cpu_model = profile.get("cpu_model", "host")
+        if any(cpu_model.lower().startswith(p) for p in _ARM_CPU_PREFIXES) and arch == "x86_64":
             issues.append({"severity":"error","message":f"Custom profile '{profile_name}' has ARM cpu_model='{cpu_model}' but machine_arch=x86_64","fix":"Change cpu_model to 'host' or set machine_arch=aarch64","auto_fix":True,"fix_field":"cpu_model","fix_value":"host"})
         missing = [f for f in ("manufacturer","product_name") if not profile.get(f)]
         if missing:

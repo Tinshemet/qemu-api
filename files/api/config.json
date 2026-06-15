@@ -170,6 +170,50 @@
     "machine_arch":     "x86_64"
   },
   "log_default_lines": 50,
+  "valid_machine_types": ["q35", "pc", "pc-i440fx", "microvm", "virt", "raspi3b", "raspi2b", "raspi0"],
+  "ovmf_macos_vars_paths": [
+    "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
+    "/usr/local/share/qemu/edk2-x86_64-vars.fd"
+  ],
+  "ovmf_win_vars_paths": [
+    "C:/Program Files/qemu/share/edk2-x86_64-vars.fd",
+    "C:/Program Files (x86)/QEMU/share/edk2-x86_64-vars.fd"
+  ],
+  "log_error_patterns": [
+    ["qemu: could not load",        "Boot image or kernel file not found"],
+    ["no bootable device",           "No bootable disk — check ISO/disk image path"],
+    ["failed to open",               "Could not open a file — check paths in config"],
+    ["permission denied",            "Permission denied — check file permissions"],
+    ["address already in use",       "Port conflict — VNC/SPICE port already in use"],
+    ["kvm: permission denied",       "KVM permission denied — run: sudo usermod -aG kvm $USER"],
+    ["kvm: no such file",            "KVM not available — check BIOS VT-x/AMD-V setting"],
+    ["could not initialize kvm",     "KVM init failed — may conflict with another hypervisor"],
+    ["unsupported machine type",     "Invalid machine type for this QEMU binary"],
+    ["invalid accelerator",          "Accelerator not supported — KVM on wrong arch"],
+    ["accel=kvm not supported",      "KVM not supported for this guest architecture"],
+    ["cannot set up guest memory",   "Not enough RAM — reduce memory_mb or free host RAM"],
+    ["hugepages",                    "Hugepages not allocated — run: sudo sysctl vm.nr_hugepages=2048"],
+    ["no such file or directory",    "A required file is missing — check disk/ISO/firmware paths"],
+    ["invalid parameter",            "Invalid QEMU argument — check machine type and CPU flags"],
+    ["unknown cpu model",            "CPU model not supported by this QEMU version"],
+    ["pflash",                       "OVMF/UEFI firmware file not found or wrong format"],
+    ["virtio",                       "Virtio device error — may be incompatible with machine type"],
+    ["sdl_init failed",              "SDL display init failed — check DISPLAY env var"],
+    ["gtk_init_check failed",        "GTK display init failed — check DISPLAY env var"],
+    ["socket",                       "Socket error — another instance may be running"],
+    ["address family not supported", "Network config error — check bridge/network settings"],
+    ["tap: failed to connect",       "TAP network error — bridge may not exist"],
+    ["if=sd",                        "SD card interface error — check disk image format"],
+    ["raspi",                        "Raspberry Pi machine error — needs kernel8.img + dtb file"],
+    ["arm",                          "ARM machine error — check qemu-system-aarch64 is installed"],
+    ["out of memory",                "Host is out of memory — reduce VM memory_mb"],
+    ["segfault",                     "QEMU crashed (segfault) — try updating qemu-system"],
+    ["aborted",                      "QEMU aborted — likely an incompatible argument combination"]
+  ],
+  "compatibility_thresholds": {
+    "memory_ratio":    0.8,
+    "min_disk_free_gb": 20
+  },
   "hardware_profiles": {
     "dell_g15_5520": {
       "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
