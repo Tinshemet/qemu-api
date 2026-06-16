@@ -13,8 +13,11 @@ from .shared import (
 )
 
 LAYER_NAMES   = {1:"Sanitiser", 2:"Executor", 3:"AI Integration",
-                 4:"Profile + HTTP", 5:"Property-Based", 6:"Input Pipeline"}
-LAYER_COLOURS = {1:"green", 2:"cyan", 3:"magenta", 4:"yellow", 5:"blue", 6:"white"}
+                 4:"Profile + HTTP", 5:"Property-Based", 6:"Input Pipeline",
+                 7:"Context Assistant", 8:"Pipeline Probe",
+                 9:"Gated Pipeline", 10:"Full Pipeline"}
+LAYER_COLOURS = {1:"green", 2:"cyan", 3:"magenta", 4:"yellow", 5:"blue", 6:"white",
+                 7:"bright_magenta", 8:"bright_cyan", 9:"bright_yellow", 10:"bright_green"}
 
 
 def render_layer_results(results: List[TestResult], layer: int, verbose: bool = False):
@@ -62,6 +65,143 @@ def render_layer_results(results: List[TestResult], layer: int, verbose: bool = 
                 lines.append(f"  [dim]Prompt: {r.detail['prompt_used']}[/dim]")
         console.print(Panel("\n".join(lines),
                              title=f"[red]✗ {r.test_id}[/red]", border_style="red"))
+    console.print()
+
+
+def render_pipeline_table(results: List[TestResult]):
+    """Per-tool breakdown table for layer 8 (pipeline probe)."""
+    lr = [r for r in results if r.layer == 8]
+    if not lr:
+        return
+
+    t = Table(
+        title="[bold bright_cyan]Layer 8 — Per-Tool Breakdown[/bold bright_cyan]",
+        box=box.SIMPLE_HEAVY, border_style="bright_cyan",
+        header_style="bold bright_cyan", show_lines=True,
+    )
+    t.add_column("Tool",          style="cyan",   width=22)
+    t.add_column("Category",      style="dim",    width=9)
+    t.add_column("Expected Layer",style="yellow", width=14)
+    t.add_column("Actual Layer",  style="yellow", width=14)
+    t.add_column("Result",        justify="center", width=8)
+    t.add_column("Error / Missing", style="red",  width=42)
+
+    for r in lr:
+        d        = r.detail
+        tool     = d.get("tool", r.test_id)
+        category = d.get("category", "—")
+        exp_l    = d.get("expect_layer", "—") or "—"
+        act_l    = d.get("actual_layer", "—") or "—"
+        icon     = "[green]✓ PASS[/green]" if r.passed else "[red]✗ FAIL[/red]"
+
+        # Error detail: prefer gate missing fields, then executor error, then issues
+        missing  = d.get("missing", [])
+        err      = d.get("error") or ""
+        if missing:
+            detail_str = f"gate blocked: {missing}"
+        elif err:
+            detail_str = err[:40]
+        elif r.issues:
+            detail_str = r.issues[0][:40]
+        else:
+            detail_str = "—"
+
+        layer_colour = "green" if act_l == exp_l else "red"
+        t.add_row(
+            tool, category, exp_l,
+            f"[{layer_colour}]{act_l}[/{layer_colour}]",
+            icon, detail_str,
+        )
+
+    console.print(t)
+    console.print()
+
+
+def render_gated_table(results: List[TestResult]):
+    """Per-test breakdown for Layer 9 (gate active). Highlights double-ask bugs."""
+    lr = [r for r in results if r.layer == 9]
+    if not lr:
+        return
+
+    t = Table(
+        title="[bold bright_yellow]Layer 9 — Gated Pipeline Breakdown[/bold bright_yellow]",
+        box=box.SIMPLE_HEAVY, border_style="bright_yellow",
+        header_style="bold bright_yellow", show_lines=True,
+    )
+    t.add_column("Tool",        style="cyan",  width=20)
+    t.add_column("Category",    style="dim",   width=12)
+    t.add_column("Expected",    style="yellow",width=12)
+    t.add_column("Actual",      style="yellow",width=12)
+    t.add_column("Result",      justify="center", width=8)
+    t.add_column("Missing / Error", style="red", width=44)
+
+    for r in lr:
+        d        = r.detail
+        tool     = d.get("tool", r.test_id)
+        category = d.get("category", "—")
+        exp_l    = d.get("expect_layer") or "—"
+        act_l    = d.get("actual_layer") or "—"
+        icon     = "[green]✓ PASS[/green]" if r.passed else "[red]✗ FAIL[/red]"
+
+        if d.get("double_ask"):
+            icon = "[bold red]✗ DOUBLE-ASK[/bold red]"
+
+        detail_str = "—"
+        if d.get("double_ask"):
+            detail_str = f"[bold red]gate asked for provided: {d.get('actual_missing')}[/bold red]"
+        elif r.issues:
+            detail_str = r.issues[0][:42]
+        elif d.get("actual_missing"):
+            detail_str = f"gate asked: {d['actual_missing']}"
+
+        layer_colour = "green" if act_l == exp_l else ("red" if exp_l != "—" else "dim")
+        t.add_row(tool, category, exp_l,
+                  f"[{layer_colour}]{act_l}[/{layer_colour}]",
+                  icon, detail_str)
+
+    console.print(t)
+    console.print()
+
+
+def render_full_pipeline_table(results: List[TestResult]):
+    """Per-test breakdown for Layer 10 (assistant + gate + executor)."""
+    lr = [r for r in results if r.layer == 10]
+    if not lr:
+        return
+
+    t = Table(
+        title="[bold bright_green]Layer 10 — Full Pipeline Breakdown[/bold bright_green]",
+        box=box.SIMPLE_HEAVY, border_style="bright_green",
+        header_style="bold bright_green", show_lines=True,
+    )
+    t.add_column("Tool",       style="cyan",  width=18)
+    t.add_column("Category",   style="dim",   width=10)
+    t.add_column("Prompt",     style="white", width=28)
+    t.add_column("Hint fired", justify="center", width=10)
+    t.add_column("Gate fired", justify="center", width=10)
+    t.add_column("Result",     justify="center", width=12)
+    t.add_column("Issue",      style="red",   width=34)
+
+    for r in lr:
+        d         = r.detail
+        tool      = d.get("tool", r.test_id)
+        category  = d.get("category", "—")
+        prompt    = (d.get("prompt") or "")[:26]
+        hint_icon = "[yellow]hint[/yellow]"   if d.get("hint") else "[dim]—[/dim]"
+        gate_icon = "[red]BLOCKED[/red]"      if d.get("gate_fired") else "[green]pass[/green]"
+
+        if d.get("double_ask"):
+            result_icon = "[bold red]✗ DOUBLE-ASK[/bold red]"
+        elif r.passed:
+            result_icon = "[green]✓ PASS[/green]"
+        else:
+            result_icon = "[red]✗ FAIL[/red]"
+
+        issue_str = r.issues[0][:32] if r.issues else "—"
+
+        t.add_row(tool, category, prompt, hint_icon, gate_icon, result_icon, issue_str)
+
+    console.print(t)
     console.print()
 
 

@@ -60,6 +60,17 @@ def _name_near_triggers(prompt: str, name: str, triggers: List[str]) -> bool:
 
 # ── Hint scanner ───────────────────────────────────────────────────────────────
 
+# Plain "\b" word boundaries aren't enough here: a hyphen/underscore already
+# counts as a non-word character, so r"\bbuild\b" still matches inside
+# "build-box". A VM/snapshot name that happens to contain a trigger word as
+# one of its hyphenated segments (e.g. name="build-box", trigger="build")
+# must not be mistaken for the user invoking that trigger. Require that
+# neither side of the match be a word character OR a dash/underscore.
+def _trigger_in(text: str, trigger: str) -> bool:
+    pattern = r"(?<![\w-])" + re.escape(trigger) + r"(?![\w-])"
+    return re.search(pattern, text) is not None
+
+
 def scan_tool_hints(prompt: str) -> List[str]:
     """
     Returns the list of tool names the prompt hints at based on trigger words.
@@ -71,7 +82,7 @@ def scan_tool_hints(prompt: str) -> List[str]:
     hinted  = set()
 
     for tool, triggers in _TOOL_HINTS.items():
-        if any(t in lower or t in cleaned for t in triggers):
+        if any(_trigger_in(lower, t) or _trigger_in(cleaned, t) for t in triggers):
             hinted.add(tool)
 
     # Remove generic hints suppressed by a more specific one
@@ -83,6 +94,19 @@ def scan_tool_hints(prompt: str) -> List[str]:
 
 
 # ── Slot extractor ─────────────────────────────────────────────────────────────
+
+# These two "name" patterns have no anchor word signaling "the next token is a
+# name" — they fire on any "vm <word>" / "on <word>" substring, including status
+# questions like "is vm running" or "turn on X". Unlike anchored patterns
+# (called/named/quoted), a bare-pattern capture is only trusted if it looks like
+# a real identifier (contains a digit, dash, or underscore — e.g. probe9_min,
+# dev-box) rather than relying on an ever-growing denylist of English words.
+_BARE_NAME_PATTERNS = {
+    r"\bvm ([\w][\w\-_\.]*)",
+    r"\bon ([\w][\w\-_\.]*)",
+}
+_IDENTIFIER_SHAPE = re.compile(r"[-_0-9]")
+
 
 def extract_slots(prompt: str) -> Dict[str, Optional[str]]:
     """
@@ -100,9 +124,12 @@ def extract_slots(prompt: str) -> Dict[str, Optional[str]]:
                 # Try every match so a rejected first hit doesn't hide a valid later one
                 for m in re.finditer(p, lower):
                     candidate = m.group(1)
-                    if candidate not in _STOPWORDS and candidate not in _PROTECTED_NAMES:
-                        found = candidate
-                        break
+                    if candidate in _STOPWORDS or candidate in _PROTECTED_NAMES:
+                        continue
+                    if p in _BARE_NAME_PATTERNS and not _IDENTIFIER_SHAPE.search(candidate):
+                        continue
+                    found = candidate
+                    break
             else:
                 # plain keyword
                 if p in lower:
@@ -133,6 +160,16 @@ def check_context(
     Returns a short _INTERNAL_ hint string if something looks wrong,
     or None if the call looks grounded and the tool matches intent.
     """
+    # Recon / query tools are always valid as precursors to any action.
+    # Never flag them as mismatches — the AI legitimately calls list_vms
+    # before launching, scan_isos before creating, etc.
+    _RECON_TOOLS = {
+        "list_vms", "scan_isos", "check_system",
+        "list_profiles", "list_networks", "monitor_all", "monitor_vm",
+    }
+    if tool_name in _RECON_TOOLS:
+        return None
+
     slots  = extract_slots(prompt)
     # Extended slot check — also scan recent history so "yes" after
     # "delete test1" doesn't lose the name extracted from the earlier turn.

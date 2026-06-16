@@ -29,6 +29,7 @@ from sanitizer.sanitizer import (
     _resolve_iso, _resolve_vm_name, _sanitise_args,
 )
 from sanitizer.context_gate import gate_check
+from preflight.validator import _preflight_check, _show_preflight_warning
 from ai.display import (
     console,
     _render_compat, _render_monitor, _render_profiles,
@@ -57,13 +58,15 @@ def _clear_revert() -> None:
 
 # Sanitizes args, resolves VM names, dispatches to the manager or config layer, and triggers Rich rendering.
 # In: str tool_name, dict args, bool verbose → Out: Any result
-def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) -> Any:
+def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, skip_gate: bool = False) -> Any:
+    _raw_os_type = args.get("os_type", "")  # capture before alias conversion
     args = _sanitise_args(tool_name, args)
 
     # Context gate — block execution and ask for missing required args
-    gate_result = gate_check(tool_name, args)
-    if gate_result:
-        return gate_result
+    if not skip_gate:
+        gate_result = gate_check(tool_name, args)
+        if gate_result:
+            return gate_result
 
     # Resolve VM names by fuzzy match / index
     if "name" in args and tool_name not in (
@@ -79,9 +82,15 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         if not _last_revert_action:
             return {"success": False, "error": "No reversible action to revert."}
         rev = dict(_last_revert_action)
+        console.print(f"\n[yellow]↩ Revert: {rev['description']}[/yellow]")
+        try:
+            answer = console.input("[bold cyan]Proceed? (y/n):[/bold cyan] ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled.[/dim]")
+            return {"success": False, "error": "Revert cancelled by user."}
+        if answer != "y":
+            return {"success": False, "error": "Revert cancelled by user."}
         _clear_revert()
-        if not verbose:
-            console.print(f"  [yellow]↩ Reverting: {rev['description']}[/yellow]")
         return execute_tool(rev["tool"], rev["args"], verbose)
 
     # ── clarify ───────────────────────────────────────────────────────────────
@@ -120,8 +129,45 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
     elif tool_name == "create_profile":
         pname = args.pop("profile_name")
         notes = args.pop("notes", "")
+        force = args.pop("force", False)
         if notes:
             args["_notes"] = notes
+
+        if not force:
+            preflight = _preflight_check(
+                "create_profile", {"profile_name": pname, **args}, manager, verbose
+            )
+            action = preflight.get("action", "ok")
+
+            if action == "abort":
+                return {
+                    "success":    False,
+                    "error":      preflight.get("reason", "Pre-flight check failed"),
+                    "correction": preflight.get("correction"),
+                }
+
+            if action == "ask_user":
+                if not verbose:
+                    _show_preflight_warning(preflight, console)
+                return {
+                    "success":    False,
+                    "clarify":    True,
+                    "question":   preflight.get("question"),
+                    "options":    preflight.get("options", []),
+                    "reason":     preflight.get("reason"),
+                    "correction": preflight.get("correction"),
+                    "issues":     preflight.get("issues", []),
+                    "hint":       "To save anyway, call create_profile again with force=true",
+                }
+
+            if action == "auto_fix":
+                fixed = preflight.get("fixed_args", {})
+                args.update({k: v for k, v in fixed.items() if k not in ("profile_name", "force")})
+                if not verbose:
+                    console.print(f"  [yellow]⚠ Pre-flight auto-fixed: {preflight.get('reason')}[/yellow]")
+                    for w in preflight.get("warnings", []):
+                        console.print(f"  [dim]  ↳ {w}[/dim]")
+
         result = save_custom_profile(pname, args)
         if result["success"]:
             result["compatibility"] = check_profile_compatibility(result["profile_name"])
@@ -238,7 +284,9 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         disk_size   = int(args.get("disk_size_gb", _VM_DEFS["disk_size_gb"]))
         disk_format = args.get("disk_format", _VM_DEFS["disk_format"])
         disk_path   = os.path.expanduser(f"~/.qemu_vms/{cfg.name}/disk0.{disk_format}")
-        cfg.disks   = [DiskConfig(path=disk_path, size_gb=disk_size, format=disk_format)]
+        is_windows  = "windows" in cfg.os_type.lower() or "windows" in cfg.os_name.lower()
+        disk_bus    = args.get("disk_bus", "sata" if is_windows else _VM_DEFS.get("disk_bus", "virtio"))
+        cfg.disks   = [DiskConfig(path=disk_path, size_gb=disk_size, format=disk_format, bus=disk_bus)]
 
         net = NetworkConfig(
             mode=args.get("network_mode", _VM_DEFS["network_mode"]),
@@ -247,6 +295,30 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         if args.get("mac_address"):
             net.mac = args["mac_address"]
         cfg.networks = [net]
+
+        # Auto-find ISO from distro name when no iso_path was given.
+        # os_name is preferred; fall back to the raw os_type before alias conversion
+        # (e.g. the AI passes os_type="mint" which sanitizer converts to "linux").
+        _GENERIC_OS_NAMES = {"linux", "windows", "macos", "other", ""}
+        _distro_hint = (cfg.os_name or _raw_os_type or "").lower().strip()
+        if _distro_hint and _distro_hint not in _GENERIC_OS_NAMES and not cfg.os_name:
+            cfg.os_name = _distro_hint
+        if not args.get("iso_path") and _distro_hint and _distro_hint not in _GENERIC_OS_NAMES:
+            resolved = _resolve_iso(_distro_hint)
+            if resolved and os.path.exists(resolved):
+                _fname = os.path.basename(resolved).lower()
+                _arm_markers = ("arm64", "aarch64", "_arm_", "-arm-")
+                _x86_markers = ("amd64", "x86_64", "x64", "i386", "i686", "64bit")
+                _iso_is_arm  = any(m in _fname for m in _arm_markers)
+                _iso_is_x86  = any(m in _fname for m in _x86_markers)
+                _arch_ok = not (
+                    (cfg.machine_arch == "x86_64" and _iso_is_arm) or
+                    (cfg.machine_arch in ("aarch64", "arm") and _iso_is_x86)
+                )
+                if _arch_ok:
+                    cfg.iso_path = resolved
+                    if not verbose:
+                        console.print(f"  [cyan]↳ Auto-found ISO for '{_distro_hint}': {os.path.basename(resolved)}[/cyan]")
 
         if args.get("iso_path"):
             cfg.iso_path = _resolve_iso(args["iso_path"])
@@ -328,12 +400,21 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         return result
 
     elif tool_name == "resize_disk":
+        _clear_revert()
         return manager.resize_disk(
             args["name"], args.get("disk_index", 0), args["new_size_gb"]
         )
 
     elif tool_name == "snapshot_create":
-        return manager.snapshot_create(args["name"], args.get("snap_name", _TOOL_DEFS["snap_name"]))
+        _snap = args.get("snap_name", _TOOL_DEFS["snap_name"])
+        result = manager.snapshot_create(args["name"], _snap)
+        if result.get("success"):
+            _set_revert(
+                "snapshot_delete",
+                {"name": args["name"], "snap_name": _snap},
+                f"undo snapshot_create '{_snap}' on '{args['name']}'",
+            )
+        return result
 
     elif tool_name == "snapshot_list":
         result = manager.snapshot_list(args["name"])
@@ -342,9 +423,11 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         return result
 
     elif tool_name == "snapshot_restore":
+        _clear_revert()
         return manager.snapshot_restore(args["name"], args["snap_name"])
 
     elif tool_name == "snapshot_delete":
+        _clear_revert()
         return manager.snapshot_delete(args["name"], args["snap_name"])
 
     elif tool_name == "set_resource_limits":
@@ -355,9 +438,13 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         )
 
     elif tool_name == "create_network":
-        return manager.create_network(args["net_name"])
+        result = manager.create_network(args["net_name"])
+        if result.get("success"):
+            _set_revert("delete_network", {"net_name": args["net_name"]}, f"undo create_network '{args['net_name']}'")
+        return result
 
     elif tool_name == "delete_network":
+        _clear_revert()
         return manager.delete_network(args["net_name"])
 
     elif tool_name == "list_networks":
@@ -373,7 +460,11 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         return manager.open_shell(args["name"])
 
     elif tool_name == "delete_vm":
+        _clear_revert()
         return manager.delete_vm(args["name"], delete_disks=True)
+
+    elif tool_name == "check_disk":
+        return manager.check_disk(args["name"])
 
     elif tool_name == "get_vm_logs":
         result = manager.get_vm_logs(args["name"], lines=int(args.get("lines", _TOOL_DEFS["log_lines"])))
@@ -385,6 +476,7 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False) ->
         result = manager.print_command(args["name"])
         if result.get("success") and not verbose:
             console.print(Panel(result["command"], title="QEMU Command", border_style="cyan"))
+            return {"success": True}
         return result
 
     elif tool_name == "fingerprint_vm":

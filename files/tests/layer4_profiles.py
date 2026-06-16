@@ -3,7 +3,7 @@ tests/layer4_profiles.py — Layer 4: Random profile tests with preflight/HTTP v
 """
 
 import random, string, time, traceback
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .shared import (
     ProfileTest, TestResult,
@@ -103,7 +103,7 @@ def _generate_broken_profile() -> Tuple[Dict[str, Any], List[str]]:
 #  PROFILE TEST CASE GENERATOR
 # ─────────────────────────────────────────────
 
-def _generate_profile_tests(n: int = 5, seed: int = 42) -> List[ProfileTest]:
+def _generate_profile_tests(n: int = 5, seed: Optional[int] = None) -> List[ProfileTest]:
     """Generate N random ProfileTest objects for Layer 4."""
     random.seed(seed)
     tests: List[ProfileTest] = [

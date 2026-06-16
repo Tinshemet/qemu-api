@@ -38,6 +38,22 @@ from .vm_state        import VMState, _PsutilProcWrapper
 
 VM_BASE_DIR = os.path.expanduser(_CFG["dirs"]["vm_base"])
 
+_LINUX_DISTROS = [
+    "ubuntu", "debian", "fedora", "mint", "linuxmint", "arch", "manjaro",
+    "opensuse", "suse", "kali", "parrot", "tails", "centos", "rocky", "alma",
+    "pop", "elementary", "zorin", "rhel", "void", "gentoo", "slackware",
+    "deepin", "mx", "antiX", "antix",
+]
+
+
+def _infer_distro(iso_path: Optional[str], os_type: str) -> str:
+    if iso_path:
+        needle = os.path.basename(iso_path).lower()
+        for distro in _LINUX_DISTROS:
+            if distro in needle:
+                return "mint" if distro == "linuxmint" else distro
+    return os_type
+
 
 class QemuManager:
     # Creates the VM base dir, initializes state and net managers, reconnects to surviving VMs.
@@ -87,7 +103,7 @@ class QemuManager:
                 "name":        name,
                 "id":          cfg.vm_id,
                 "description": cfg.description,
-                "os":          cfg.os_name or cfg.os_type,
+                "os":          cfg.os_name or _infer_distro(cfg.iso_path, cfg.os_type),
                 "cpu_cores":   cfg.cpu_cores,
                 "memory_mb":   cfg.memory_mb,
                 "disks":       len(cfg.disks),
@@ -204,14 +220,26 @@ class QemuManager:
                 if result.returncode != 0:
                     return {"success": False, "error": f"qemu-img failed: {result.stderr}"}
 
+        # Auto-attach a matching ISO if none was provided
+        if not config.iso_path:
+            matches = self._match_iso(config.os_type, config.os_name, config.machine_arch)
+            matches.sort(key=lambda x: x["match_score"], reverse=True)
+            if matches and matches[0]["match_score"] > 0:
+                config.iso_path  = matches[0]["path"]
+                config.boot_order = "dc"
+
         config.save()
         return {
-            "success": True,
-            "name":    config.name,
-            "vm_dir":  vm_dir,
-            "bios":    config.bios,
-            "uefi":    config.uefi,
-            "message": f"VM '{config.name}' created successfully.",
+            "success":       True,
+            "name":          config.name,
+            "vm_dir":        vm_dir,
+            "bios":          config.bios,
+            "uefi":          config.uefi,
+            "iso_path":      config.iso_path,
+            "message": (
+                f"VM '{config.name}' created successfully."
+                + (f" Auto-attached ISO: {os.path.basename(config.iso_path)}" if config.iso_path else "")
+            ),
         }
 
     # ── Clone ──────────────────────────────────────────────────────────────────
@@ -794,6 +822,21 @@ class QemuManager:
                 dp = os.path.expanduser(disk.path)
                 if not os.path.exists(dp):
                     result["errors"].append({"line": f"disk[{i}].path = {disk.path}", "meaning": f"Disk image not found: {dp}"})
+                else:
+                    try:
+                        r = subprocess.run(
+                            ["qemu-img", "info", "--output=json", dp],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        if r.returncode == 0:
+                            info = json.loads(r.stdout)
+                            if info.get("actual-size", 0) < 1024 * 1024:
+                                result["errors"].append({
+                                    "line": f"disk[{i}] actual size = {info.get('actual-size', 0)} bytes",
+                                    "meaning": f"Disk {i} is blank — no OS installed. Attach an ISO and boot from it to install.",
+                                })
+                    except Exception:
+                        pass
             if cfg.bios in ("ovmf", "ovmf_ms") and cfg.uefi:
                 from qemu_config import OVMF as _OVMF
                 if not _OVMF["available"]:
@@ -840,6 +883,7 @@ class QemuManager:
             if "arm" in m and "binary" in m: suggestions.append("sudo apt install qemu-system-arm")
             if "ovmf" in m or "uefi" in m: suggestions.append("sudo apt install ovmf")
             if "no bootable" in m:  suggestions.append("Check iso_path in VM config — run: qemu-api config " + name)
+            if "blank" in m and "disk" in m: suggestions.append("Call scan_isos to find an ISO, then update_config with iso_path, then launch_vm")
             if "port" in m or "address already" in m: suggestions.append("Change vnc_port or spice_port in VM config to a free port")
             if "display" in m:      suggestions.append("Check DISPLAY env var: echo $DISPLAY  (should be :0 or :1)")
             if "not a valid qemu machine type" in m or "profile name" in m:
@@ -876,6 +920,114 @@ class QemuManager:
             return {"success": True, "output": response}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # Runs qemu-img info --output=json on each disk and reports blank/non-blank state.
+    # A disk is considered blank if its actual disk_size < 1 MB (just the qcow2 header).
+    # In: str name → Out: dict with per-disk info and top-level has_blank_disk flag
+    def check_disk(self, name: str) -> Dict[str, Any]:
+        try:
+            cfg = MachineConfig.load(name)
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
+        disks_info = []
+        has_blank  = False
+        for i, disk in enumerate(cfg.disks):
+            disk_path = os.path.expanduser(disk.path)
+            if not os.path.exists(disk_path):
+                disks_info.append({
+                    "index": i, "path": disk.path,
+                    "exists": False, "blank": True,
+                    "error": "Disk image file not found",
+                })
+                has_blank = True
+                continue
+            result = subprocess.run(
+                ["qemu-img", "info", "--output=json", disk_path],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                disks_info.append({
+                    "index": i, "path": disk.path,
+                    "exists": True, "blank": False,
+                    "error": result.stderr.strip(),
+                })
+                continue
+            try:
+                info = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                disks_info.append({
+                    "index": i, "path": disk.path,
+                    "exists": True, "blank": False,
+                    "error": "Could not parse qemu-img output",
+                })
+                continue
+            actual_bytes  = info.get("actual-size", 0)
+            virtual_bytes = info.get("virtual-size", 0)
+            blank         = actual_bytes < 1024 * 1024  # < 1 MB means just the header
+            if blank:
+                has_blank = True
+            disks_info.append({
+                "index":         i,
+                "path":          disk.path,
+                "exists":        True,
+                "blank":         blank,
+                "actual_size_mb":  round(actual_bytes  / 1024**2, 2),
+                "virtual_size_gb": round(virtual_bytes / 1024**3, 1),
+                "format":        info.get("format", disk.format),
+            })
+
+        diagnosis      = ""
+        suggestions    = []
+        suggested_iso  = None
+        compatible_isos: List[Dict[str, Any]] = []
+
+        if has_blank:
+            diagnosis = (
+                "One or more disks are blank — no OS has been installed. "
+                "Attach an ISO and boot from it to install an OS."
+            )
+            compatible_isos = self._match_iso(cfg.os_type, cfg.os_name, cfg.machine_arch)
+            compatible_isos.sort(key=lambda x: x["match_score"], reverse=True)
+
+            if compatible_isos and compatible_isos[0]["match_score"] > 0:
+                suggested_iso = compatible_isos[0]["path"]
+                suggestions = [
+                    f"Auto-matched ISO based on os_type='{cfg.os_type}' os_name='{cfg.os_name}': {compatible_isos[0]['name']}",
+                    f"Call update_config with iso_path='{suggested_iso}'",
+                    "Call launch_vm — the VM will boot the ISO installer",
+                    "After installation completes, call update_config with iso_path=null to remove the ISO",
+                ]
+            elif compatible_isos:
+                suggested_iso = compatible_isos[0]["path"]
+                suggestions = [
+                    f"No OS keyword match found — using first compatible ISO: {compatible_isos[0]['name']}",
+                    f"Call update_config with iso_path='{suggested_iso}'",
+                    "Call launch_vm — the VM will boot the ISO installer",
+                    "After installation completes, call update_config with iso_path=null to remove the ISO",
+                ]
+            else:
+                suggestions = [
+                    "No compatible ISO found on this system — download one first",
+                    "Call scan_isos after placing the ISO in ~/Downloads or ~/Desktop",
+                    "Call update_config with iso_path set to the ISO path",
+                    "Call launch_vm — the VM will boot the ISO installer",
+                    "After installation completes, call update_config with iso_path=null to remove the ISO",
+                ]
+
+        return {
+            "success":        True,
+            "name":           name,
+            "os_type":        cfg.os_type,
+            "os_name":        cfg.os_name,
+            "machine_arch":   cfg.machine_arch,
+            "has_blank_disk": has_blank,
+            "disks":          disks_info,
+            "diagnosis":      diagnosis,
+            "suggested_iso":  suggested_iso,
+            "compatible_isos": compatible_isos,
+            "suggestions":    suggestions,
+        }
 
     # Builds and returns the full QEMU command string without running it.
     # In: str name → Out: dict with command
@@ -940,6 +1092,46 @@ class QemuManager:
                 except Exception:
                     pass
         return ports
+
+    # Scores available ISOs against os_type/os_name keywords and filters by arch.
+    # In: str os_type, str os_name, str machine_arch → Out: List[dict] with match_score
+    def _match_iso(self, os_type: str, os_name: str, machine_arch: str) -> List[Dict[str, Any]]:
+        _OS_KEYWORDS: Dict[str, List[str]] = {
+            "windows": ["windows", "win11", "win10", "win"],
+            "linux":   ["linux", "ubuntu", "debian", "fedora", "mint", "arch",
+                        "opensuse", "manjaro", "pop", "elementary", "zorin",
+                        "kali", "parrot", "tails", "centos", "rocky", "alma"],
+            "macos":   ["macos", "mac", "osx", "darwin", "ventura", "sonoma",
+                        "monterey", "sequoia"],
+        }
+        _ARM_MARKERS = ("arm64", "aarch64", "_arm_", "-arm-", "arm_v")
+        _X86_MARKERS = ("amd64", "x86_64", "x64", "i386", "i686", "64bit", "64-bit")
+
+        os_type_l = (os_type or "").lower()
+        os_name_l = (os_name or "").lower()
+        vm_is_x86 = machine_arch == "x86_64"
+        vm_is_arm = machine_arch in ("aarch64", "arm")
+
+        generic_keywords: List[str] = []
+        for key, kws in _OS_KEYWORDS.items():
+            if key in os_type_l or key in os_name_l:
+                generic_keywords.extend(kws)
+
+        # Words from os_name get a 10x score bonus over generic type keywords so that
+        # e.g. "ubuntu" always outranks "linuxmint" (which matches both "linux" and "mint").
+        specific_words = [w for w in os_name_l.split() if len(w) > 3]
+
+        results: List[Dict[str, Any]] = []
+        for iso in self.scan_isos():
+            fname = iso["name"].lower()
+            if vm_is_x86 and any(m in fname for m in _ARM_MARKERS):
+                continue
+            if vm_is_arm and any(m in fname for m in _X86_MARKERS):
+                continue
+            specific_score = sum(10 for w in specific_words if w in fname)
+            generic_score  = sum(1  for kw in generic_keywords if kw in fname and kw not in specific_words)
+            results.append({**iso, "match_score": specific_score + generic_score})
+        return results
 
     # Calls taskset to pin a process to specific host CPU cores (Linux only).
     # In: int pid, List[int] cpus → Out: nothing

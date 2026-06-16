@@ -379,7 +379,7 @@ AI_TESTS: List[AITest] = [
 #  DYNAMIC TEST GENERATORS
 # ─────────────────────────────────────────────
 
-def _generate_random_ai_tests(n: int = 5, seed: int = 42) -> List[AITest]:
+def _generate_random_ai_tests(n: int = 5, seed: Optional[int] = None) -> List[AITest]:
     """Generate N random AI tests covering all available tools."""
     rng   = random.Random(seed)
     tools = list(_TOOL_PROMPT_POOLS.keys())
@@ -424,7 +424,7 @@ def _generate_random_ai_tests(n: int = 5, seed: int = 42) -> List[AITest]:
     return tests
 
 
-def _generate_ai_tests_from_profiles(n: int = 5, seed: int = 42) -> List[AITest]:
+def _generate_ai_tests_from_profiles(n: int = 5, seed: Optional[int] = None) -> List[AITest]:
     """Legacy wrapper — delegates to _generate_random_ai_tests."""
     return _generate_random_ai_tests(n, seed)
 

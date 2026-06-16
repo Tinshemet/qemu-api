@@ -42,15 +42,33 @@ class QMPClient:
         self.sock.sendall((json.dumps(data) + "\n").encode())
 
     # Reads bytes from the socket until a complete JSON object is assembled.
+    # QMP messages are newline-delimited; a single recv() can contain multiple
+    # concatenated messages (e.g. an async event followed by the command reply),
+    # so frame on "\n" rather than parsing the whole buffer as one JSON document.
+    # Async events (no "return"/"error" key) are skipped — callers only want
+    # the actual command response.
     # In: nothing → Out: dict
     def _recv(self) -> dict:
         buf = b""
         while True:
-            buf += self.sock.recv(_BUFFERS["qmp"])
+            if b"\n" not in buf:
+                chunk = self.sock.recv(_BUFFERS["qmp"])
+                if not chunk:
+                    raise ConnectionError(
+                        "QMP socket closed by peer while waiting for response"
+                    )
+                buf += chunk
+                continue
+            line, _, buf = buf.partition(b"\n")
+            if not line.strip():
+                continue
             try:
-                return json.loads(buf.decode())
+                msg = json.loads(line.decode())
             except json.JSONDecodeError:
                 continue
+            if "event" in msg:
+                continue
+            return msg
 
     # Sends a QMP command with optional args and returns the response dict.
     # In: str cmd, dict args → Out: dict

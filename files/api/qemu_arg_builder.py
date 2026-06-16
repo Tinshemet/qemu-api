@@ -309,18 +309,24 @@ class QemuArgBuilder:
             return
 
         has_scsi = any(d.bus == "scsi" for d in self.cfg.disks)
+        has_sata = any(d.bus == "sata" for d in self.cfg.disks)
         if has_scsi:
             self.args += ["-device", "virtio-scsi-pci,id=scsi0"]
+        if has_sata:
+            self.args += ["-device", "ich9-ahci,id=ahci"]
         for i, disk in enumerate(self.cfg.disks):
             self.args += disk.to_qemu_args(i)
         if self.cfg.iso_path:
             self.args += [
-                "-drive", f"file={self.cfg.iso_path},if=none,id=cdrom0,readonly=on,media=cdrom",
+                "-drive",  f"file={self.cfg.iso_path},if=none,id=cdrom0,readonly=on,media=cdrom",
                 "-device", "ide-cd,drive=cdrom0,bootindex=1",
-                "-boot",   f"order={self.cfg.boot_order},menu=on",
             ]
+            if not self.cfg.uefi:
+                # Legacy BIOS only — UEFI uses bootindex and ignores -boot order
+                self.args += ["-boot", f"order={self.cfg.boot_order},menu=on"]
         else:
-            self.args += ["-boot", "order=c,menu=on"]
+            if not self.cfg.uefi:
+                self.args += ["-boot", "order=c,menu=on"]
 
     # Adds network args from each NetworkConfig, or a default user NAT if none defined.
     # In: nothing → Out: appends to self.args

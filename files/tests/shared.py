@@ -24,6 +24,7 @@ from ollama_wrapper import (
     _sanitise_args, _preflight_check, _resolve_iso,
     _validate_with_internet, _validate_profile_for_host,
 )
+from ai.context_assistant import check_context
 from preflight.validator import (
     _get_qemu_machine_types, _get_qemu_cpu_models,
     _is_arm_cpu, _is_x86_cpu, _net_get, _net_head,
@@ -47,6 +48,18 @@ _EXECUTOR_VM_CLEANUP: List[str] = []
 # ─────────────────────────────────────────────
 #  DATACLASSES
 # ─────────────────────────────────────────────
+
+@dataclass
+class ContextAssistantTest:
+    id:           str
+    tags:         List[str]
+    description:  str
+    prompt:       str
+    tool_name:    str
+    args:         Dict[str, Any]
+    expect_fired: bool                # True = hint returned, False = None returned
+    expect_type:  Optional[str] = None  # "mismatch" | "hallucinated" | "high_stakes"
+
 
 @dataclass
 class SanitiserTest:
@@ -118,6 +131,20 @@ class ProfileTest:
     expect_http_check:  bool      = False
     expect_qemu_check:  bool      = False
     cleanup:            bool      = True
+
+
+@dataclass
+class PipelineTest:
+    id:                 str
+    tags:               List[str]
+    description:        str
+    tool:               str
+    input_args:         Dict[str, Any]
+    category:           str            = "valid"    # "valid" | "broken" | "missing"
+    expect_success:     Optional[bool] = None       # None = skip success check
+    expect_clarify:     bool           = False      # True = context gate must fire
+    expect_layer:       Optional[str]  = None       # "context_gate" | "executor" | "ok"
+    expect_result_keys: List[str]      = field(default_factory=list)
 
 
 @dataclass

@@ -199,7 +199,11 @@ class DiskConfig:
             args += ["-device", f"virtio-blk-pci,drive={drive_id}{ssd_hint}"]
         elif self.bus == "scsi":
             args += ["-device", f"scsi-hd,drive={drive_id}"]
+        elif self.bus == "sata":
+            # q35 uses ICH9-AHCI — the controller is added by QemuArgBuilder._disks()
+            args += ["-device", f"ide-hd,drive={drive_id},bus=ahci.{index}"]
         else:
+            # ide fallback — only works on non-q35 machines
             args = [
                 "-drive",
                 f"file={self.path},format={self.format},if=ide,cache={self.cache}"
@@ -231,11 +235,45 @@ class NetworkConfig:
             # Validate and fix incoming MAC — must be exactly 6 octets
             self.mac = self._fix_mac(self.mac)
 
-    # Generates a random QEMU-style 52:54:xx:xx:xx:xx MAC address.
+    # Real vendor OUIs — globally administered, unicast (bit0=0, bit1=0 of first byte).
+    _VENDOR_OUIS = [
+        "00:1A:2B",  # Hewlett-Packard
+        "00:1B:21",  # Intel
+        "00:1C:C0",  # Cisco
+        "00:50:56",  # VMware (real HW line)
+        "00:E0:4C",  # Realtek
+        "08:00:27",  # PCS Systemtechnik (VirtualBox, also used in real gear)
+        "10:02:B5",  # Intel
+        "18:66:DA",  # Intel
+        "1C:1B:0D",  # Hewlett-Packard
+        "28:D2:44",  # Intel
+        "2C:44:FD",  # Intel
+        "3C:FD:FE",  # Intel
+        "40:A3:6B",  # Intel
+        "48:51:B7",  # Intel
+        "4C:79:6E",  # Realtek
+        "54:BF:64",  # Intel
+        "60:57:18",  # Intel
+        "70:85:C2",  # Intel
+        "74:D0:2B",  # Intel
+        "78:2B:CB",  # Intel
+        "8C:8D:28",  # Intel
+        "90:E2:BA",  # Intel
+        "A0:36:9F",  # Intel
+        "B0:83:FE",  # Intel
+        "C8:5B:76",  # Intel
+        "D0:50:99",  # Realtek
+        "E4:B9:7A",  # Intel
+        "F0:1F:AF",  # Intel
+    ]
+
+    # Generates a MAC using a real vendor OUI + 3 random device bytes.
     # In: nothing → Out: sets self.mac
     def _generate_mac(self):
-        raw = uuid.uuid4().hex[:10]
-        self.mac = "52:54:" + ":".join(raw[i:i+2] for i in range(0, 10, 2))
+        import random
+        oui = random.choice(self._VENDOR_OUIS)
+        device = uuid.uuid4().bytes[:3]
+        self.mac = oui + ":" + ":".join(f"{b:02X}" for b in device)
 
     # Validates or salvages a MAC string; generates a fresh one if unfixable.
     # In: str → Out: str
@@ -250,9 +288,11 @@ class NetworkConfig:
         parts = re.findall(r"[0-9a-fA-F]{2}", mac.replace(":","").replace("-",""))
         if len(parts) >= 6:
             return ":".join(parts[:6])
-        # Give up — generate fresh locally-administered MAC
-        raw = uuid.uuid4().hex[:10]
-        return "52:54:" + ":".join(raw[i:i+2] for i in range(0, 10, 2))
+        # Give up — generate fresh MAC using a real vendor OUI
+        import random
+        oui = random.choice(NetworkConfig._VENDOR_OUIS)
+        device = uuid.uuid4().bytes[:3]
+        return oui + ":" + ":".join(f"{b:02X}" for b in device)
 
     # Returns -netdev/-device args for NAT or bridge networking.
     # In: nothing → Out: List[str]

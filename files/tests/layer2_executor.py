@@ -3,7 +3,7 @@ tests/layer2_executor.py — Layer 2: Executor / preflight unit tests (no AI nee
 """
 
 import io, os, contextlib, traceback, time, uuid, random
-from typing import List
+from typing import List, Optional
 
 from .shared import (
     ExecutorTest, TestResult,
@@ -224,6 +224,32 @@ EXECUTOR_TESTS: List[ExecutorTest] = [
         input_args={"profile_name": "minimal"},
         expect_result_keys=["compatible","host_summary"],
     ),
+
+    # ── New tools (revert / check_disk / fingerprint_vm) ──
+    ExecutorTest(
+        id="executor_revert_nothing_to_revert",
+        tags=["executor","revert"],
+        description="revert with no prior action returns success=False immediately (no prompt)",
+        tool="revert",
+        input_args={},
+        expect_success=False,
+    ),
+    ExecutorTest(
+        id="executor_check_disk_nonexistent",
+        tags=["executor","check_disk"],
+        description="check_disk on a VM that doesn't exist returns success=False",
+        tool="check_disk",
+        input_args={"name": "nonexistent-vm-xyz-99999"},
+        expect_success=False,
+    ),
+    ExecutorTest(
+        id="executor_fingerprint_vm_nonexistent",
+        tags=["executor","fingerprint"],
+        description="fingerprint_vm on a VM that doesn't exist returns success=False",
+        tool="fingerprint_vm",
+        input_args={"name": "nonexistent-vm-xyz-99999", "summary": True},
+        expect_success=False,
+    ),
 ]
 
 
@@ -245,7 +271,7 @@ _PF_DANGEROUS_MONITOR_CMDS = ["quit", "system_reset", "system_powerdown", "drive
 _PF_CATEGORIES = ["placeholder", "destructive", "safe_monitor", "dangerous_monitor"]
 
 
-def generate_random_preflight_tests(n: int = 5, seed: int = 42) -> List[ExecutorTest]:
+def generate_random_preflight_tests(n: int = 5, seed: Optional[int] = None) -> List[ExecutorTest]:
     """
     Generate n randomised preflight tests covering:
     - Placeholder VM names that should always trigger ask_user

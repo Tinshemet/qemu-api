@@ -268,8 +268,8 @@ def _validate_with_internet(args: Dict[str, Any], verbose: bool = False) -> List
 
 
 # Checks a profile against the host for ARM binary, KVM/OVMF/hugepages/RAM/core constraints, and raspi binary mismatch.
-# In: str profile_name → Out: List[dict] issues
-def _validate_profile_for_host(profile_name: str) -> List[Dict[str, Any]]:
+# In: str profile_name, dict? profile_data → Out: List[dict] issues
+def _validate_profile_for_host(profile_name: str, profile_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Validate any profile (built-in or custom) against the current host.
     Returns a list of issue dicts.
@@ -278,7 +278,7 @@ def _validate_profile_for_host(profile_name: str) -> List[Dict[str, Any]]:
 
     issues       = []
     all_profiles = get_all_profiles()
-    profile      = all_profiles.get(profile_name)
+    profile      = profile_data or all_profiles.get(profile_name)
     if not profile:
         return []
 
@@ -357,7 +357,7 @@ def _preflight_check(
     ok = {"action": "ok"}
 
     if tool_name not in (
-        "create_vm", "launch_vm", "delete_vm", "resize_disk",
+        "create_vm", "create_profile", "launch_vm", "delete_vm", "resize_disk",
         "clone_vm", "snapshot_restore", "snapshot_delete",
         "set_resource_limits", "send_monitor_cmd",
     ):
@@ -449,6 +449,53 @@ def _preflight_check(
                             fixed[issue["fix_field"]] = issue["fix_value"]
                             fix_notes.append(f"{issue['fix_field']}={issue['fix_value']}")
                     return {"action":"auto_fix","reason":f"Profile '{profile_name}': auto-fixed "+", ".join(fix_notes),"correction":" | ".join(i["message"] for i in auto_fixes),"fixed_args":fixed,"warnings":[i["message"] for i in warnings]}
+
+    elif tool_name == "create_profile":
+        profile_name  = str(args.get("profile_name", "")).strip()
+        profile_data  = {k: v for k, v in args.items() if k not in ("profile_name", "force")}
+
+        _HW_FIELDS = {"cpu_model", "machine_type", "memory_mb", "cpu_cores", "cpu_threads",
+                      "machine_arch", "machine_class", "disk_size_gb", "display", "gpu",
+                      "audio", "kvm", "uefi", "hugepages", "manufacturer", "product_name"}
+        if not any(f in profile_data for f in _HW_FIELDS):
+            return {
+                "action":     "abort",
+                "reason":     f"Profile '{profile_name}' has no hardware configuration — only a description was provided.",
+                "correction": "Provide at least cpu_model, machine_type, and memory_mb when creating a profile.",
+            }
+
+        profile_issues = (
+            _validate_profile_for_host(profile_name, profile_data=profile_data)
+            + _validate_with_internet(profile_data, verbose=verbose)
+        )
+        if profile_issues:
+            blockers   = [i for i in profile_issues if i["severity"] == "error"]
+            auto_fixes = [i for i in profile_issues if i.get("auto_fix") and i["severity"] != "error"]
+            warnings   = [i for i in profile_issues if i["severity"] == "warning" and not i.get("auto_fix")]
+            if blockers:
+                return {
+                    "action":      "ask_user",
+                    "reason":      " | ".join(i["message"] for i in blockers),
+                    "question":    f"Profile '{profile_name}' has compatibility issues. Save anyway or cancel?",
+                    "fix_field":   None,
+                    "options":     ["Save anyway", "Cancel"],
+                    "correction":  " | ".join(i["fix"] for i in blockers if i.get("fix")),
+                    "issues":      profile_issues,
+                }
+            if auto_fixes:
+                fixed      = dict(args)
+                fix_notes  = []
+                for issue in auto_fixes:
+                    if issue.get("fix_field") and issue.get("fix_value") is not None:
+                        fixed[issue["fix_field"]] = issue["fix_value"]
+                        fix_notes.append(f"{issue['fix_field']}={issue['fix_value']!r}")
+                return {
+                    "action":      "auto_fix",
+                    "reason":      "Pre-flight auto-fixed: " + ", ".join(fix_notes),
+                    "correction":  " | ".join(i["message"] for i in auto_fixes),
+                    "fixed_args":  fixed,
+                    "warnings":    [i["message"] for i in warnings],
+                }
 
     elif tool_name == "launch_vm":
         name   = str(args.get("name", "")).strip()

@@ -7,7 +7,7 @@ from the gate config by randomly omitting required fields.
 """
 
 import json, pathlib, random, time, traceback
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from .shared import TestResult
@@ -438,7 +438,7 @@ _SAMPLE_VALUES: Dict[str, Any] = {
 }
 
 
-def generate_random_gate_tests(n: int = 20, seed: int = 42) -> List[GateTest]:
+def generate_random_gate_tests(n: int = 20, seed: Optional[int] = None) -> List[GateTest]:
     """
     Auto-generate gate tests from the config by randomly omitting required fields.
 

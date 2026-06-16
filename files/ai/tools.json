@@ -2,6 +2,14 @@
     {
         "type": "function",
         "function": {
+            "name": "revert",
+            "description": "Undo the last reversible tool call. Works for: create_vm, clone_vm, launch_vm, stop_vm, update_config, create_profile, snapshot_create, create_network. Does not work after delete_vm, delete_profile, delete_network, snapshot_delete, snapshot_restore, or resize_disk (those are irreversible). Call this when the user says 'undo', 'revert', or 'undo that'.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "clarify",
             "description": "Ask the user for a specific missing required piece of information. Only use for truly required fields that cannot be defaulted. Ask ONE thing at a time.",
             "parameters": {
@@ -62,7 +70,7 @@
         "type": "function",
         "function": {
             "name": "create_profile",
-            "description": "Create and save a custom hardware profile.",
+            "description": "Create or overwrite a hardware profile template (a reusable blueprint stored under a profile name). Use this ONLY for managing profile templates — never for changing a specific VM's settings. To change a VM's memory, CPU, or other config fields, use update_config instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -86,7 +94,8 @@
                     "product_name":  {"type": "string"},
                     "bios_vendor":   {"type": "string"},
                     "bios_version":  {"type": "string"},
-                    "notes":         {"type": "string"}
+                    "notes":         {"type": "string"},
+                    "force":         {"type": "boolean", "description": "Skip pre-flight checks and save the profile as-is. Only set this if the user explicitly confirmed they want to proceed despite warnings."}
                 },
                 "required": ["profile_name", "description"]
             }
@@ -113,8 +122,8 @@
                 "type": "object",
                 "properties": {
                     "name":         {"type": "string"},
-                    "os_type":      {"type": "string"},
-                    "os_name":      {"type": "string"},
+                    "os_type":      {"type": "string", "description": "OS family: 'linux', 'windows', 'macos', or 'other'. If user names a distro (mint, ubuntu, kali…) set to 'linux'. Only clarify if completely unknown."},
+                    "os_name":      {"type": "string", "description": "Specific distro or OS name the user mentioned (e.g. 'mint', 'ubuntu', 'kali', 'fedora'). Always set this when the user names a distro — the system uses it to auto-find the matching ISO."},
                     "profile":      {"type": "string"},
                     "cpu_cores":    {"type": "integer"},
                     "cpu_threads":  {"type": "integer"},
@@ -137,7 +146,8 @@
                     "battery":      {"type": "boolean"},
                     "hugepages":    {"type": "boolean"},
                     "description":  {"type": "string"},
-                    "extra_args":   {"type": "array", "items": {"type": "string"}}
+                    "extra_args":   {"type": "array", "items": {"type": "string"}},
+                    "manual":       {"type": "boolean", "description": "Set to true when the user said 'manual' and wants to configure each VM individually during batch creation. The CLI will prompt for os_type, memory_mb, cpu_cores, and disk_size_gb before creating each VM."}
                 },
                 "required": ["name", "os_type"]
             }
@@ -229,7 +239,7 @@
         "type": "function",
         "function": {
             "name": "update_config",
-            "description": "Update config fields of a stopped VM.",
+            "description": "Update one or more config fields of a specific VM (memory_mb, cpu_cores, cpu_model, disk_size_gb, iso_path, network_mode, uefi, etc.). Use this whenever the user wants to change a VM's settings — e.g. 'give it more RAM', 'halve the memory', 'change the CPU'. The VM must be stopped first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -404,12 +414,25 @@
         "type": "function",
         "function": {
             "name": "delete_vm",
-            "description": "Delete and remove an entire VM configuration and optionally its disk files. Use delete_disks=true to also remove disk images. Call this when the user says delete, remove, or destroy a whole VM. Do NOT use this to delete a snapshot — use snapshot_delete for that.",
+            "description": "Delete and remove an entire VM configuration and its disk files. Call this when the user says delete, remove, or destroy a whole VM. Do NOT use this to delete a snapshot — use snapshot_delete for that.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name":         {"type": "string"},
-                    "delete_disks": {"type": "boolean"}
+                    "name": {"type": "string"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_disk",
+            "description": "Check whether a VM's disk images are blank (no OS installed). Call this when a VM boots but shows a PXE network boot screen, 'no bootable device', or TianoCore UEFI with no OS found — those symptoms mean the disk is empty, not a QEMU crash. Returns has_blank_disk, per-disk size info, and a suggested_iso auto-matched from available ISOs using the VM's os_type and os_name fields, filtered for arch compatibility. When has_blank_disk is true: use suggested_iso directly if present (do not ask the user), call update_config with that iso_path, then call launch_vm. Only ask the user if suggested_iso is null.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "VM name"}
                 },
                 "required": ["name"]
             }
@@ -438,6 +461,21 @@
             "parameters": {
                 "type": "object",
                 "properties": {"name": {"type": "string"}},
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fingerprint_vm",
+            "description": "Analyse a VM's config and report what a fingerprinting tool (inxi -M -N -C -D -A -G) would see from inside the guest. Scores SMBIOS fields, MAC OUI, CPU model, disk interface, audio, and GPU for VM detectability. Call this when the user asks about VM fingerprinting, detectability, or how realistic a VM looks. Use summary=true when fingerprinting multiple VMs to skip the full report and only return the score — required when computing an average across VMs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name":    {"type": "string",  "description": "VM name to analyse"},
+                    "summary": {"type": "boolean", "description": "Return score only, skip full report rendering. Use when fingerprinting multiple VMs or computing averages."}
+                },
                 "required": ["name"]
             }
         }

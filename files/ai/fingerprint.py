@@ -31,7 +31,7 @@ _SCORE_WARN        = _FP["score_warn"]
 
 # Simulates what inxi -M -N -C -D -A -G would report from inside the guest, scoring each field and printing a recommendation panel.
 # In: str VM name → Out: nothing (console output)
-def _tf_report(name: str) -> None:
+def _tf_report(name: str, summary: bool = False) -> dict:
     """
     Simulate inxi -M -N -C -D -A -G output for a VM config.
     Reports what a fingerprinting tool would see from inside the guest.
@@ -40,7 +40,7 @@ def _tf_report(name: str) -> None:
         cfg = MachineConfig.load(name)
     except Exception as e:
         console.print(f"[error]Cannot load VM '{name}': {e}[/error]")
-        return
+        return {"success": False, "error": str(e)}
 
     checks = []
 
@@ -225,6 +225,17 @@ def _tf_report(name: str) -> None:
         "fail": "[red]VM tell  [/red]",
     }
 
+    result = {
+        "success": True,
+        "name":    name,
+        "score":   pct,
+        "clean":   n_ok,
+        "detectable": n_warn,
+        "vm_tells":   n_fail,
+    }
+    if summary:
+        return result
+
     # ── Render ────────────────────────────────────────────────────────────────
     score_colour = "green" if pct >= _SCORE_GOOD else "yellow" if pct >= _SCORE_WARN else "red"
     console.print()
@@ -271,3 +282,4 @@ def _tf_report(name: str) -> None:
             border_style="yellow",
         ))
     console.print()
+    return result

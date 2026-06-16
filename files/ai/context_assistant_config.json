@@ -141,32 +141,34 @@
 
   "slot_patterns": {
     "name": [
-      "called ([\\w][\\w\\-_\\.]*)",
-      "named ([\\w][\\w\\-_\\.]*)",
-      "vm ([\\w][\\w\\-_\\.]*)",
-      "on ([\\w][\\w\\-_\\.]*)",
-      "for ([\\w][\\w\\-_\\.]*)",
-      "(?:start|launch|run|boot|stop|halt|kill|delete|remove|destroy|clone|monitor|watch|resize|snapshot|restore|revert|configure|update|show|open|display) ([\\w][\\w\\-_\\.]+)",
-      "(?:shut down|power off|turn off|bring up|spin up|fire up|set up|back up) ([\\w][\\w\\-_\\.]+)",
+      "\\bcalled ([\\w][\\w\\-_\\.]*)",
+      "\\bnamed ([\\w][\\w\\-_\\.]*)",
+      "\\bvm ([\\w][\\w\\-_\\.]*)",
+      "\\bon ([\\w][\\w\\-_\\.]*)",
+      "\\bfor ([\\w][\\w\\-_\\.]*)",
+      "\\b(?:start|launch|run|boot|stop|halt|kill|delete|remove|destroy|clone|monitor|watch|resize|snapshot|restore|revert|configure|update|show|open|display) ([\\w][\\w\\-_\\.]+)",
+      "\\b(?:shut down|power off|turn off|bring up|spin up|fire up|set up|back up) ([\\w][\\w\\-_\\.]+)",
       "\"([\\w][\\w\\-_\\.]*)\"",
       "'([\\w][\\w\\-_\\.]*)'",
       "([\\w]+[\\-_][\\w][\\w\\-_\\.]*)"
     ],
     "snap_name": [
-      "snapshot ([\\w][\\w\\-_\\.]*)",
-      "snap ([\\w][\\w\\-_\\.]*)",
-      "called ([\\w][\\w\\-_\\.]*)",
-      "named ([\\w][\\w\\-_\\.]*)"
+      "\\bsnapshot ([\\w][\\w\\-_\\.]*)",
+      "\\bsnap ([\\w][\\w\\-_\\.]*)",
+      "\\bcalled ([\\w][\\w\\-_\\.]*)",
+      "\\bnamed ([\\w][\\w\\-_\\.]*)"
     ],
     "os_type":      ["linux", "windows", "macos", "ubuntu", "debian",
-                     "fedora", "arch", "kali", "centos", "win"],
+                     "fedora", "arch", "kali", "centos", "win",
+                     "mint", "rhel", "suse", "osx", "darwin", "mac",
+                     "freebsd", "openbsd", "android"],
     "network_mode": ["nat", "bridge"],
     "new_name": [
-      "to ([\\w][\\w\\-_\\.]*)",
-      "as ([\\w][\\w\\-_\\.]*)",
-      "into ([\\w][\\w\\-_\\.]*)",
-      "called ([\\w][\\w\\-_\\.]*)",
-      "named ([\\w][\\w\\-_\\.]*)"
+      "\\bto ([\\w][\\w\\-_\\.]*)",
+      "\\bas ([\\w][\\w\\-_\\.]*)",
+      "\\binto ([\\w][\\w\\-_\\.]*)",
+      "\\bcalled ([\\w][\\w\\-_\\.]*)",
+      "\\bnamed ([\\w][\\w\\-_\\.]*)"
     ]
   },
 
@@ -206,7 +208,7 @@
     "clone", "copy", "duplicate", "mirror", "replicate",
     "resize", "expand", "grow", "enlarge", "extend",
     "snapshot", "snap", "backup", "checkpoint", "restore", "revert", "rollback",
-    "update", "configure", "reconfigure", "config", "setting", "settings",
+    "update", "configure", "reconfigure", "config", "configuration", "setting", "settings",
     "monitor", "watch", "observe", "status", "state",
     "logs", "log", "debug", "diagnose",
     "list", "show", "view", "display", "print",
@@ -215,7 +217,11 @@
     "system", "hardware", "resource", "limit",
     "new", "add", "build", "make", "deploy", "provision", "setup", "spin",
     "open", "connect", "attach", "link", "join",
-    "check", "scan", "find", "search"
+    "check", "scan", "find", "search",
+    "vm", "virtual", "machine", "window", "terminal", "screen", "gui",
+    "up", "down", "off", "on", "out", "into", "back", "over",
+    "running", "alive", "active", "doing", "going",
+    "all", "some", "any", "every"
   ],
 
   "opposing_pairs": [

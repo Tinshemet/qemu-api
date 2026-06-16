@@ -26,6 +26,7 @@ from .fingerprint        import _tf_report
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots
 from sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
+from sanitizer.sanitizer    import OS_TYPE_ALIASES
 from executioner.tool_executor import execute_tool, manager
 from preflight.validator    import set_custom_mode, _preflight_check, _show_preflight_warning
 
@@ -207,6 +208,7 @@ def chat_loop(verbose: bool = False):
         _just_clarified_fields: set = set()  # field names answered via clarify gate this turn
         _just_clarified_values: set = set()  # (field, value) pairs answered via clarify gate
         _confirmed_values: set = set()       # (field, value) pairs confirmed via safety gate
+        _confirmed_tool_types: set = set()  # tool names batch-confirmed this turn
         _context_assistant_fired  = False
         _tool_executed_this_turn  = False    # True only when execute_tool actually ran
         _last_had_tools           = False    # True when last Ollama response had tool_calls
@@ -284,6 +286,16 @@ def chat_loop(verbose: bool = False):
                         f"  [tool]→ {tool_name}[/tool]  [dim]{json.dumps(raw_args)}[/dim]"
                     )
 
+                # ── Custom mode: "custom" in prompt disables HTTP check for profiles ──
+                if tool_name == "create_profile":
+                    _profile_ctx = _ui + " " + " ".join(
+                        m.get("content", "").lower() for m in messages[-6:]
+                        if m.get("role") == "user"
+                    )
+                    if "custom" in _profile_ctx:
+                        set_custom_mode(True)
+                        console.print("[dim]Custom mode active — product verification disabled[/dim]")
+
                 # ── Context assistant ──────────────────────────────────────
                 # Only runs once per user turn — if it already fired and the
                 # AI still chose a bad tool, let the downstream layers handle it.
@@ -336,13 +348,21 @@ def chat_loop(verbose: bool = False):
                 # ──────────────────────────────────────────────────────────
 
                 # ── os_type guard ──────────────────────────────────────────
-                # Strip AI-inferred os_type when the user didn't mention an OS
-                # in their message — unless they already answered it via the
-                # gate this turn (in which case keep what they said).
+                # When the user names an OS (e.g. "mint"), resolve it to the
+                # canonical type (e.g. "linux") and set it directly — don't
+                # let the AI guess from session history.  When no OS is
+                # mentioned, strip any AI-inferred value so the gate can ask.
                 if tool_name == "create_vm" \
-                        and "os_type" in raw_args \
                         and "os_type" not in _just_clarified_fields:
-                    if not (_OS_KEYWORDS & set(_ui.split())):
+                    _ui_tokens = {t.strip('.,!?;:') for t in _ui.split()}
+                    _matched_kw = next(iter(_OS_KEYWORDS & _ui_tokens), None)
+                    if _matched_kw:
+                        _canonical = OS_TYPE_ALIASES.get(_matched_kw, _matched_kw)
+                        raw_args = dict(raw_args)
+                        raw_args["os_type"] = _canonical
+                        _just_clarified_fields.add("os_type")
+                        _just_clarified_values.add(("os_type", _canonical))
+                    elif "os_type" in raw_args:
                         raw_args.pop("os_type")
                 # ──────────────────────────────────────────────────────────
 
@@ -405,6 +425,18 @@ def chat_loop(verbose: bool = False):
                         raw_args = dict(raw_args)
                         raw_args[fix_field] = pf_answer
                         _just_clarified_fields.add(fix_field)
+                    elif tool_name == "create_profile":
+                        # User approved "Save anyway" — bypass the executor's
+                        # duplicate preflight so we don't double-prompt.
+                        raw_args = dict(raw_args)
+                        raw_args["force"] = True
+
+                # After the CLI has handled preflight for create_profile (ok,
+                # auto_fix, or ask_user-approved), always mark force=True so the
+                # executor skips its own duplicate preflight check entirely.
+                if tool_name == "create_profile" and _pf_action in ("ok", "auto_fix"):
+                    raw_args = dict(raw_args)
+                    raw_args["force"] = True
                 # ──────────────────────────────────────────────────────────
 
                 # ── Safety confirmation gate ───────────────────────────────
@@ -457,18 +489,24 @@ def chat_loop(verbose: bool = False):
                             break
 
                     elif tool_name in _CONFIRM_YN:
-                        # y/n confirm for reversible modify and launch/stop
-                        hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
-                        console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
-                        try:
-                            answer = console.input("[bold cyan]Proceed? (y/n):[/bold cyan] ").strip().lower()
-                        except (KeyboardInterrupt, EOFError):
-                            console.print("\n[dim]Cancelled.[/dim]")
-                            return
-                        if answer != "y":
-                            _cancel_op()
-                            _op_cancelled = True
-                            break
+                        # y/n confirm for reversible modify and launch/stop.
+                        # If this tool type was already confirmed earlier in the
+                        # same turn (batch), skip re-prompting.
+                        if tool_name in _confirmed_tool_types:
+                            console.print(f"  [dim]auto-confirmed: {verb}: {proposed}[/dim]")
+                        else:
+                            hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
+                            console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
+                            try:
+                                answer = console.input("[bold cyan]Proceed? (y/n):[/bold cyan] ").strip().lower()
+                            except (KeyboardInterrupt, EOFError):
+                                console.print("\n[dim]Cancelled.[/dim]")
+                                return
+                            if answer not in ("y", "yes", "1"):
+                                _cancel_op()
+                                _op_cancelled = True
+                                break
+                            _confirmed_tool_types.add(tool_name)
 
                     else:
                         # Name confirm for destructive operations — exact match required
@@ -514,7 +552,11 @@ def chat_loop(verbose: bool = False):
                         and not (
                             raw_args.get(f)
                             and isinstance(raw_args.get(f), str)
-                            and raw_args[f].lower() in _recent_context
+                            and (
+                                raw_args[f].lower() in _recent_context
+                                # "test1" grounded in context even when user wrote "test 1"
+                                or raw_args[f].lower().replace(" ", "") in _recent_context.replace(" ", "")
+                            )
                         )
                     ]
                     if _missing_early:
@@ -530,6 +572,61 @@ def chat_loop(verbose: bool = False):
                                 f"{[m['field'] for m in _missing_early]}"
                             ),
                         }
+                # ──────────────────────────────────────────────────────────────
+
+                # ── Manual per-VM config prompt ────────────────────────────────
+                if tool_name == "create_vm" and raw_args.get("manual"):
+                    raw_args = dict(raw_args)
+                    raw_args.pop("manual", None)
+                    _def_os   = raw_args.get("os_type", "linux")
+                    _def_cpu  = raw_args.get("cpu_cores", 2)
+                    _def_mem  = raw_args.get("memory_mb", 4096)
+                    _def_disk = raw_args.get("disk_size_gb", 20)
+                    console.print(
+                        f"\n  [cyan]Configuring [bold]{raw_args.get('name')}[/bold]"
+                        f"  [{_def_os} | {_def_cpu} CPU | {_def_mem} MB | {_def_disk} GB][/cyan]"
+                    )
+                    console.print("  [dim]Press Enter for defaults, or specify: e.g. 'windows, 8GB, 4 CPU, 50GB'[/dim]")
+                    try:
+                        _man_input = console.input("[bold cyan]  Config:[/bold cyan] ").strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                        console.print("\n[dim]Cancelled.[/dim]")
+                        return
+                    if _man_input:
+                        import re as _re
+                        # os_type
+                        for _kw in _OS_KEYWORDS:
+                            if _kw in _man_input.split():
+                                raw_args["os_type"] = OS_TYPE_ALIASES.get(_kw, _kw)
+                                break
+                        # memory: "8gb" / "8192mb" / "8192"
+                        _m = _re.search(r'(\d+)\s*gb(?!\s*disk)', _man_input)
+                        if _m:
+                            raw_args["memory_mb"] = int(_m.group(1)) * 1024
+                        _m = _re.search(r'(\d+)\s*mb', _man_input)
+                        if _m:
+                            raw_args["memory_mb"] = int(_m.group(1))
+                        # cpu cores: "4 cpu" / "4 cores" / "4 core"
+                        _m = _re.search(r'(\d+)\s*(?:cpu|core)', _man_input)
+                        if _m:
+                            raw_args["cpu_cores"] = int(_m.group(1))
+                        # disk: "50gb disk" / "50 gb disk"
+                        _m = _re.search(r'(\d+)\s*gb\s*disk', _man_input)
+                        if _m:
+                            raw_args["disk_size_gb"] = int(_m.group(1))
+                    # Ensure os_type has a value and mark it clarified so the
+                    # pre-gate doesn't re-ask — manual config owns this field.
+                    if not raw_args.get("os_type"):
+                        raw_args["os_type"] = _def_os
+                    _just_clarified_fields.add("os_type")
+                    _just_clarified_values.add(("os_type", raw_args["os_type"]))
+                    # Clear any pre-gate result — manual config handled missing fields.
+                    _pre_gate_result = None
+                    # Don't auto-confirm next VM — each needs its own config
+                    _confirmed_tool_types.discard("create_vm")
+                elif tool_name == "create_vm" and "manual" in raw_args:
+                    raw_args = dict(raw_args)
+                    raw_args.pop("manual", None)
                 # ──────────────────────────────────────────────────────────────
 
                 if _pre_gate_result:
@@ -566,6 +663,50 @@ def chat_loop(verbose: bool = False):
                         q    = mf["question"]
                         opts = mf["options"]
                         f    = mf["field"]
+
+                        # No field to fill. Two distinct cases:
+                        #
+                        # 1. tool_name == "clarify": the AI asked the user a question
+                        #    (e.g. "Did you mean 'loq'?"). Pass the answer back verbatim
+                        #    so the AI decides the next step — don't override intent.
+                        #
+                        # 2. tool_name != "clarify": executor returned a "Save anyway /
+                        #    Cancel" prompt. Tell the AI to retry with force=true.
+                        if not f:
+                            if opts:
+                                console.print(
+                                    f"[yellow]?[/yellow] {q}  "
+                                    + "  ".join(f"[{o}]" for o in opts)
+                                )
+                            else:
+                                console.print(f"[yellow]?[/yellow] {q}")
+                            try:
+                                _conf = console.input("[bold cyan]You:[/bold cyan] ").strip()
+                            except (KeyboardInterrupt, EOFError):
+                                console.print("\n[dim]Goodbye.[/dim]")
+                                return
+                            _cancelled = (
+                                not _conf
+                                or (opts and _conf.lower() == opts[-1].lower())
+                                or _conf.lower() in ("no", "cancel", "n")
+                            )
+                            if tool_name == "clarify":
+                                # AI-initiated question — return the answer verbatim
+                                if _conf:
+                                    filled[f] = _conf
+                                    messages.append({"role": "user", "content": _conf})
+                            elif _cancelled:
+                                messages.append({"role": "user", "content": "_INTERNAL_ The user cancelled. Do not retry this operation."})
+                                _op_cancelled = True
+                            else:
+                                hint = result.get("hint", "")
+                                messages.append({"role": "user", "content": _conf})
+                                messages.append({"role": "user", "content": f"_INTERNAL_ The user confirmed. {hint} Keep ALL original arguments exactly as they were."})
+                            _clarify_happened = True
+                            _clarify_answer   = _conf
+                            _clarify_field    = ""
+                            break
+
                         if opts:
                             console.print(
                                 f"[yellow]?[/yellow] {q}  "
@@ -581,13 +722,22 @@ def chat_loop(verbose: bool = False):
                         if clarified:
                             filled[f] = clarified
                             messages.append({"role": "user", "content": clarified})
+                            # If the user named a specific distro, inject os_name so the
+                            # executor can auto-find the matching ISO.
+                            if f == "os_type" and clarified.lower().strip() in OS_TYPE_ALIASES:
+                                filled["os_name"] = clarified.lower().strip()
                     _just_clarified_fields.update(filled.keys())
                     _just_clarified_values.update(filled.items())
                     if filled:
                         _field_summary = ", ".join(f"{k}='{v}'" for k, v in filled.items())
+                        _iso_hint = (
+                            " The user named a specific distro — you MUST call scan_isos first,"
+                            f" then pass the matching ISO path as iso_path in create_vm."
+                            if "os_name" in filled else ""
+                        )
                         messages.append({
                             "role":    "user",
-                            "content": f"_INTERNAL_ The user provided the missing values: {_field_summary}. Call the correct tool using these EXACT values — do not invent different ones.",
+                            "content": f"_INTERNAL_ The user provided the missing values: {_field_summary}. Call the correct tool using these EXACT values — do not invent different ones.{_iso_hint}",
                         })
                     _clarify_happened = True
                     _clarify_answer   = str(filled)
