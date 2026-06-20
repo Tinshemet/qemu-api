@@ -5,6 +5,8 @@ tests/layer2_executor.py — Layer 2: Executor / preflight unit tests (no AI nee
 import io, os, contextlib, traceback, time, uuid, random
 from typing import List, Optional
 
+from executioner.tool_executor import _clear_revert
+
 from .shared import (
     ExecutorTest, TestResult,
     _preflight_check, execute_tool,
@@ -250,6 +252,227 @@ EXECUTOR_TESTS: List[ExecutorTest] = [
         input_args={"name": "nonexistent-vm-xyz-99999", "summary": True},
         expect_success=False,
     ),
+
+    # ── Overwrite ─────────────────────────────
+    ExecutorTest(
+        id="executor_overwrite_nonexistent_vm_ok",
+        tags=["executor","overwrite","create_vm"],
+        description="create_vm with overwrite=True on a VM that doesn't exist yet still succeeds",
+        tool="create_vm",
+        input_args={
+            "name":       f"ow-new-{_uid()}",
+            "os_type":    "linux",
+            "overwrite":  True,
+            "disk_size_gb": 10,
+        },
+        expect_success=True,
+    ),
+    ExecutorTest(
+        id="executor_overwrite_creates_fresh_vm",
+        tags=["executor","overwrite","create_vm"],
+        description="create_vm with overwrite=True on an existing VM recreates it successfully",
+        tool="create_vm",
+        input_args={
+            "name":          f"ow-test-{_uid()}",
+            "os_type":       "linux",
+            "overwrite":     True,
+            "manufacturer":  "Dell Inc.",
+            "serial_number": "OWTEST01",
+            "bios_vendor":   "Dell Inc.",
+            "chassis_type":  "Notebook",
+            "disk_size_gb":  10,
+        },
+        expect_success=True,
+    ),
+    ExecutorTest(
+        id="executor_overwrite_no_profile_match",
+        tags=["executor","overwrite","profile","smbios"],
+        description="create_vm with explicit SMBIOS fields skips auto-profile matching (machine_type stays q35)",
+        tool="create_vm",
+        input_args={
+            "name":          f"ow-smbios-{_uid()}",
+            "os_type":       "linux",
+            "machine_type":  "q35",
+            "manufacturer":  "Dell Inc.",
+            "product_name":  "Latitude 5530",
+            "serial_number": "7X4KP93",
+            "bios_vendor":   "Dell Inc.",
+            "bios_version":  "1.15.0",
+            "chassis_type":  "Notebook",
+            "disk_size_gb":  10,
+        },
+        expect_success=True,
+        expect_result_keys=["name"],
+        expect_cfg={"machine_type": "q35", "serial_number": "7X4KP93", "bios_vendor": "Dell Inc."},
+    ),
+
+    # ── disk_format/bus confusion ─────────────────────────────────────────────
+    ExecutorTest(
+        id="executor_disk_format_as_bus_normalized",
+        tags=["executor","disk","create_vm"],
+        description="AI passing bus name ('sata') as disk_format is normalized — bus=sata, format=qcow2",
+        tool="create_vm",
+        input_args={
+            "name":        f"dsk-fmt-{_uid()}",
+            "os_type":     "linux",
+            "disk_format": "sata",   # AI mistake: bus name passed as format
+            "disk_size_gb": 10,
+        },
+        expect_success=True,
+        expect_cfg={"disks": None},  # checked manually below via disk bus
+    ),
+    ExecutorTest(
+        id="executor_disk_bus_sata_explicit",
+        tags=["executor","disk","create_vm"],
+        description="Explicit disk_bus=sata saves correctly",
+        tool="create_vm",
+        input_args={
+            "name":        f"dsk-bus-{_uid()}",
+            "os_type":     "linux",
+            "disk_bus":    "sata",
+            "disk_size_gb": 10,
+        },
+        expect_success=True,
+        expect_cfg={},  # bus check done via custom validator below
+    ),
+
+    # ── Stealth / TPM / Secure Boot config persistence ───────────────────────
+    ExecutorTest(
+        id="executor_stealth_linux_saves_config",
+        tags=["executor","stealth","create_vm"],
+        description="stealth=True on Linux VM persists to config",
+        tool="create_vm",
+        input_args={
+            "name":       f"st-lin-{_uid()}",
+            "os_type":    "linux",
+            "stealth":    True,
+            "disk_size_gb": 10,
+        },
+        expect_success=True,
+        expect_cfg={"stealth": True, "os_type": "linux"},
+    ),
+    ExecutorTest(
+        id="executor_stealth_hardened_linux_saves_config",
+        tags=["executor","stealth","hardened","create_vm"],
+        description="stealth=True + hardened=True on Linux persists both",
+        tool="create_vm",
+        input_args={
+            "name":       f"st-hrd-{_uid()}",
+            "os_type":    "linux",
+            "stealth":    True,
+            "hardened":   True,
+            "disk_size_gb": 10,
+        },
+        expect_success=True,
+        expect_cfg={"stealth": True, "hardened": True, "balloon": False, "hugepages": False},
+    ),
+    ExecutorTest(
+        id="executor_stealth_windows_saves_config",
+        tags=["executor","stealth","create_vm","windows"],
+        description="stealth=True on Windows VM persists to config with UEFI enforced",
+        tool="create_vm",
+        input_args={
+            "name":       f"st-win-{_uid()}",
+            "os_type":    "windows",
+            "stealth":    True,
+            "disk_size_gb": 40,
+        },
+        expect_success=True,
+        expect_cfg={"stealth": True, "os_type": "windows", "uefi": True},
+    ),
+    ExecutorTest(
+        id="executor_tpm_saves_config",
+        tags=["executor","tpm","create_vm"],
+        description="tpm=True persists to config",
+        tool="create_vm",
+        input_args={
+            "name":       f"tpm-{_uid()}",
+            "os_type":    "linux",
+            "tpm":        True,
+            "disk_size_gb": 10,
+        },
+        expect_success=True,
+        expect_cfg={"tpm": True},
+    ),
+    ExecutorTest(
+        id="executor_bios_ovmf_ms_saves_config",
+        tags=["executor","bios","secure_boot","create_vm"],
+        description="bios=ovmf_ms saves correctly and forces uefi=True",
+        tool="create_vm",
+        input_args={
+            "name":       f"bios-ms-{_uid()}",
+            "os_type":    "windows",
+            "bios":       "ovmf_ms",
+            "disk_size_gb": 40,
+        },
+        expect_success=True,
+        expect_cfg={"bios": "ovmf_ms", "uefi": True},
+    ),
+    ExecutorTest(
+        id="executor_stealth_full_combo_saves_config",
+        tags=["executor","stealth","hardened","tpm","smbios","create_vm"],
+        description="Full stealth combo: stealth+hardened+tpm+bios_ms+SMBIOS all persist",
+        tool="create_vm",
+        input_args={
+            "name":          f"st-full-{_uid()}",
+            "os_type":       "windows",
+            "stealth":       True,
+            "hardened":      True,
+            "tpm":           True,
+            "bios":          "ovmf_ms",
+            "manufacturer":  "Dell Inc.",
+            "product_name":  "Latitude 5530",
+            "serial_number": "SN99TEST",
+            "bios_vendor":   "Dell Inc.",
+            "bios_version":  "1.15.0",
+            "machine_class": "laptop",
+            "disk_size_gb":  40,
+        },
+        expect_success=True,
+        expect_cfg={
+            "stealth": True, "hardened": True, "tpm": True,
+            "bios": "ovmf_ms", "uefi": True,
+            "manufacturer": "Dell Inc.", "serial_number": "SN99TEST",
+            "bios_vendor": "Dell Inc.",
+        },
+    ),
+
+    # ── Display device selection via print_command ────────────────────────────
+    ExecutorTest(
+        id="executor_stealth_linux_display_vmware_svga",
+        tags=["executor","stealth","display","print_command"],
+        description="Stealth Linux VM uses vmware-svga in QEMU command (not cirrus-vga)",
+        tool="print_command",
+        input_args={"name": "mint-stealth"},
+        expect_success=True,
+        expect_cmd_contains=["-device vmware-svga"],
+    ),
+    ExecutorTest(
+        id="executor_stealth_windows_display_vga",
+        tags=["executor","stealth","display","print_command"],
+        description="Stealth Windows VM uses VGA (not vmware-svga) in QEMU command",
+        tool="print_command",
+        input_args={"name": "work-laptop"},
+        expect_success=True,
+        expect_cmd_contains=["-device VGA"],
+    ),
+
+    # ── hardened persists balloon=False ──────────────────────────────────────
+    ExecutorTest(
+        id="executor_hardened_persists_balloon_off",
+        tags=["executor","hardened","create_vm"],
+        description="hardened=True saves balloon=False and hugepages=False to config",
+        tool="create_vm",
+        input_args={
+            "name":          f"hrd-bal-{_uid()}",
+            "os_type":       "linux",
+            "hardened":      True,
+            "serial_number": "HRDTEST",
+            "disk_size_gb":  10,
+        },
+        expect_success=True,
+        expect_cfg={"hardened": True, "balloon": False, "hugepages": False, "machine_type": "q35"},
+    ),
 ]
 
 
@@ -345,6 +568,13 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
     start  = time.time()
     issues: List[str] = []
     fixes:  List[str] = []
+    # tool_executor keeps _last_revert_action as module-level state that
+    # survives across tests in this same process; clear it before each
+    # test so an earlier test's successful create_vm/clone_vm/etc. can't
+    # leave a pending revert action for a later, unrelated test to trip
+    # over (e.g. revert's console.input() prompt blocking invisibly under
+    # the stdout/stderr redirection below).
+    _clear_revert()
     try:
         args = dict(tc.input_args)
 
@@ -379,6 +609,38 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
             for k in tc.expect_result_keys:
                 if k not in result:
                     issues.append(f"Result missing key '{k}'")
+
+        if tc.expect_cmd_contains and isinstance(result, dict):
+            cmd_str = result.get("command", "") or result.get("cmd", "")
+            for substr in tc.expect_cmd_contains:
+                if substr not in cmd_str:
+                    issues.append(f"Command output missing expected substring: {substr!r}")
+
+        if tc.expect_cfg and isinstance(result, dict) and result.get("success"):
+            _cfg_name = tc.input_args.get("name", "")
+            try:
+                from api.qemu_config import MachineConfig as _MC2
+                _cfg_loaded = _MC2.load(_cfg_name)
+                for cfg_k, cfg_v in tc.expect_cfg.items():
+                    if cfg_v is None:
+                        continue  # sentinel — skip field, used when test validates via id tag
+                    actual_v = getattr(_cfg_loaded, cfg_k, None)
+                    if actual_v != cfg_v:
+                        issues.append(f"Saved config: expected {cfg_k}={cfg_v!r} got {actual_v!r}")
+                # Special check: disk bus must not be 'virtio' when disk_format='sata' was passed
+                if "disk" in tc.tags and _cfg_loaded.disks:
+                    expected_bus = tc.input_args.get("disk_bus") or (
+                        tc.input_args.get("disk_format")
+                        if tc.input_args.get("disk_format", "").lower() in {"sata","nvme","scsi","ide"}
+                        else None
+                    )
+                    if expected_bus and _cfg_loaded.disks[0].bus != expected_bus:
+                        issues.append(f"Saved disk bus: expected {expected_bus!r} got {_cfg_loaded.disks[0].bus!r}")
+                    actual_fmt = _cfg_loaded.disks[0].format
+                    if actual_fmt in {"sata", "nvme", "scsi", "ide", "virtio"}:
+                        issues.append(f"Saved disk format is a bus name '{actual_fmt}' — normalization failed")
+            except Exception as _ce:
+                issues.append(f"Could not load saved config for expect_cfg check: {_ce}")
 
     except Exception:
         issues.append(f"Exception: {traceback.format_exc()}")

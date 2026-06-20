@@ -9,6 +9,7 @@ the manager singleton so all other modules share one instance.
 import json
 import os
 import re
+import sys
 from typing import Any, Dict
 
 _CFG                 = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
@@ -45,6 +46,16 @@ manager = QemuManager()
 # None means nothing to revert (either no tool ran yet or last tool was irreversible).
 _last_revert_action: Dict[str, Any] = {}
 
+# Tools that manage _last_revert_action themselves (set it on success, or
+# explicitly clear it) — excluded from the blanket clear below so a failed
+# attempt doesn't wipe out a still-valid revert from an earlier success.
+_REVERT_AWARE_TOOLS = {
+    "revert", "create_vm", "clone_vm", "launch_vm", "stop_vm",
+    "create_profile", "update_config", "snapshot_create", "create_network",
+    "resize_disk", "snapshot_restore", "snapshot_delete", "delete_network",
+    "delete_vm",
+}
+
 
 def _set_revert(tool: str, args: dict, description: str) -> None:
     global _last_revert_action
@@ -77,12 +88,23 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         if resolved:
             args["name"] = resolved
 
+    # A revert action is only meaningful immediately after the call that set
+    # it — any unrelated tool call in between means "undo my last action"
+    # would target something the caller probably isn't thinking about
+    # anymore, so drop it. Tools that manage the state themselves are
+    # exempted (they set/clear it explicitly based on their own outcome).
+    if tool_name not in _REVERT_AWARE_TOOLS:
+        _clear_revert()
+
     # ── revert ────────────────────────────────────────────────────────────────
     if tool_name == "revert":
         if not _last_revert_action:
             return {"success": False, "error": "No reversible action to revert."}
         rev = dict(_last_revert_action)
         console.print(f"\n[yellow]↩ Revert: {rev['description']}[/yellow]")
+        if not sys.stdin.isatty():
+            console.print("[dim]Cancelled (no interactive terminal to confirm).[/dim]")
+            return {"success": False, "error": "Revert cancelled: not running interactively."}
         try:
             answer = console.input("[bold cyan]Proceed? (y/n):[/bold cyan] ").strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -193,6 +215,14 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
             }
         args["name"] = name
 
+        # Handle overwrite: delete the existing VM before recreating.
+        if args.get("overwrite"):
+            vm_dir = os.path.expanduser(f"~/.qemu_vms/{name}")
+            if os.path.exists(vm_dir):
+                result = manager.delete_vm(name, delete_disks=True)
+                if not result.get("success"):
+                    return {"success": False, "error": f"Could not overwrite '{name}': {result.get('error')}"}
+
         cfg = MachineConfig(
             name=name,
             os_type=args.get("os_type", "linux"),
@@ -200,8 +230,12 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
             description=args.get("description", ""),
         )
 
-        profile = args.get("profile")
-        if not profile:
+        # When explicit SMBIOS fingerprinting fields are present the user is doing
+        # manual identity — suppress ALL profile application (auto-matched or AI-passed)
+        # so the profile can't override machine_type, cpu_model, or other settings.
+        _manual_smbios = any(args.get(f) for f in ("serial_number", "bios_vendor", "chassis_type", "smbios_type"))
+        profile = None if _manual_smbios else args.get("profile")
+        if not profile and not _manual_smbios:
             product = (args.get("product_name", "") + " " + args.get("manufacturer", "")).lower()
             for pname, pdata in get_all_profiles().items():
                 pp = (pdata.get("product_name", "") + " " + pdata.get("manufacturer", "")).lower()
@@ -216,12 +250,33 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
 
         for f in ("machine_class", "cpu_model", "cpu_cores", "cpu_threads", "memory_mb",
                   "display", "gpu", "audio", "manufacturer", "product_name", "bios_version",
-                  "uefi", "kvm", "battery", "hugepages", "machine_type", "os_type", "os_name"):
+                  "serial_number", "board_product", "bios_vendor", "smbios_type",
+                  "uefi", "kvm", "battery", "hugepages", "machine_type", "os_type", "os_name",
+                  "hardened", "stealth", "tpm", "bios"):
             if f in args and args[f] is not None and args[f] != "":
                 setattr(cfg, f, args[f])
 
+        if args.get("chassis_type"):
+            cfg.smbios_type = args["chassis_type"]
+
         if args.get("extra_args"):
             cfg.extra_args = args["extra_args"]
+
+        # stealth implies hardened — __post_init__ only runs at construction so
+        # stealth applied via setattr or profile won't have triggered it yet.
+        if cfg.stealth:
+            cfg.hardened = True
+
+        # Windows 11 requires TPM 2.0 — auto-enable unless explicitly disabled.
+        if "windows" in cfg.os_type.lower() and not args.get("tpm") is False:
+            cfg.tpm = True
+
+        # hardened mode requires q35 (smm=off is only valid on q35);
+        # also persist the settings that _harden() enforces at build time.
+        if cfg.hardened:
+            cfg.machine_type = "q35"
+            cfg.balloon      = False
+            cfg.hugepages    = False
 
         # Reject profile names used as machine_type
         if cfg.machine_type:
@@ -232,7 +287,9 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         # Windows 11 requires UEFI + q35
         if "windows" in cfg.os_type.lower() or "windows" in cfg.os_name.lower():
             cfg.uefi = True
-            cfg.bios = "ovmf"
+            # Preserve ovmf_ms (Secure Boot) if explicitly set; fall back to plain ovmf
+            if cfg.bios not in ("ovmf", "ovmf_ms"):
+                cfg.bios = "ovmf"
             if cfg.machine_type not in ("q35",):
                 cfg.machine_type = "q35"
 
@@ -286,11 +343,13 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         disk_path   = os.path.expanduser(f"~/.qemu_vms/{cfg.name}/disk0.{disk_format}")
         is_windows  = "windows" in cfg.os_type.lower() or "windows" in cfg.os_name.lower()
         disk_bus    = args.get("disk_bus", "sata" if is_windows else _VM_DEFS.get("disk_bus", "virtio"))
-        cfg.disks   = [DiskConfig(path=disk_path, size_gb=disk_size, format=disk_format, bus=disk_bus)]
+        disk_model  = args.get("disk_model", "")
+        cfg.disks   = [DiskConfig(path=disk_path, size_gb=disk_size, format=disk_format, bus=disk_bus, disk_model=disk_model)]
 
         net = NetworkConfig(
             mode=args.get("network_mode", _VM_DEFS["network_mode"]),
             bridge=args.get("bridge_iface", _VM_DEFS["bridge"]) or _VM_DEFS["bridge"],
+            manufacturer_hint=args.get("manufacturer", ""),
         )
         if args.get("mac_address"):
             net.mac = args["mac_address"]
@@ -325,13 +384,17 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         if cfg.machine_class == "laptop" or args.get("battery"):
             cfg.battery = True
         if "windows" in cfg.os_type.lower() and not profile:
-            cfg.bios = "ovmf"
+            if cfg.bios not in ("ovmf", "ovmf_ms"):
+                cfg.bios = "ovmf"
             cfg.uefi = True
 
         result = manager.create_vm(cfg)
         if not verbose:
             if result.get("success"):
                 console.print(f"[green]✓ VM '{result['name']}' created at {result['vm_dir']}[/green]")
+                if cfg.stealth:
+                    manager.generate_guest_setup(name)
+                    console.print(f"[dim]  Stealth guest setup script ready — will prompt automatically on first launch.[/dim]")
             else:
                 console.print(f"[red]✗ create_vm failed: {result.get('error', 'unknown error')}[/red]")
         if result.get("success"):
@@ -476,7 +539,7 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         result = manager.print_command(args["name"])
         if result.get("success") and not verbose:
             console.print(Panel(result["command"], title="QEMU Command", border_style="cyan"))
-            return {"success": True}
+            return {"success": True, "command": result["command"]}
         return result
 
     elif tool_name == "fingerprint_vm":

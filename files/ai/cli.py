@@ -6,28 +6,31 @@ Provides the interactive AI chat loop and the direct sub-command CLI
 for both modes; ollama_wrapper.py is a thin shim that re-exports from here.
 """
 
+import http.server
 import json
 import os
+import socket
 import sys
+import threading
 from typing import List
 
 from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-from api.qemu_config  import OVMF, check_profile_compatibility, check_system_capabilities, list_profiles
+from api.qemu_config  import _MC, OVMF, check_profile_compatibility, check_system_capabilities, get_all_profiles, list_profiles
 from .session      import AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session, save_session, set_auto_clear, set_loop_max, get_loop_max
 from .display      import (
     console,
     _print_banner, _render_compat, _render_monitor, _render_profiles,
-    _render_snapshots, _render_status, _render_system, _render_vm_list,
+    _render_snapshots, _render_status, _render_system, _render_vm_list, _render_vm_specs,
 )
 from .fingerprint        import _tf_report
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots
 from sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from sanitizer.sanitizer    import OS_TYPE_ALIASES
-from executioner.tool_executor import execute_tool, manager
+from executioner.tool_executor import execute_tool, manager, _VM_DEFS
 from preflight.validator    import set_custom_mode, _preflight_check, _show_preflight_warning
 
 _CFG            = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
@@ -43,6 +46,130 @@ _RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
 def _is_critical(tool_name: str, args: dict) -> bool:
     """True when the operation requires double confirmation (irreversible + data loss)."""
     return tool_name == "delete_vm"
+
+
+# Builds (label, value) rows describing the specs create_vm is about to use,
+# falling back to the same defaults the executor applies so the preview
+# matches what will actually be created.
+# In: dict args → Out: List[tuple[str, str]]
+def _build_vm_spec_rows(args: dict) -> list:
+    name    = args.get("name") or "?"
+    os_type = args.get("os_type") or _MC["os_type"]
+    os_name = args.get("os_name") or ""
+
+    # Suppress profile when user explicitly set SMBIOS fingerprinting fields —
+    # mirrors the same logic in tool_executor so the preview matches what gets created.
+    _manual_smbios = any(args.get(f) for f in ("serial_number", "bios_vendor", "chassis_type", "smbios_type"))
+    profile = "" if _manual_smbios else (args.get("profile") or "")
+    if not profile and not _manual_smbios:
+        product = (args.get("product_name", "") + " " + args.get("manufacturer", "")).lower()
+        for pname, pdata in get_all_profiles().items():
+            pp = (pdata.get("product_name", "") + " " + pdata.get("manufacturer", "")).lower()
+            if any(kw in pp for kw in product.split() if len(kw) > 3):
+                profile = pname
+                break
+
+    _pdata = get_all_profiles().get(profile, {}) if profile else {}
+
+    cpu_cores    = args.get("cpu_cores")    or _pdata.get("cpu_cores")    or _MC["cpu_cores"]
+    memory_mb    = int(args.get("memory_mb") or _pdata.get("memory_mb")    or _MC["memory_mb"])
+    machine_type = args.get("machine_type") or _pdata.get("machine_type") or _MC["machine_type"]
+    if args.get("hardened"):
+        machine_type = "q35"
+    disk_gb      = args.get("disk_size_gb") or _VM_DEFS["disk_size_gb"]
+    _DISK_BUS_VALUES = {"sata", "nvme", "scsi", "ide", "virtio"}
+    _raw_fmt     = args.get("disk_format") or ""
+    disk_bus_preview = args.get("disk_bus") or (_raw_fmt if _raw_fmt.lower() in _DISK_BUS_VALUES else "") or _VM_DEFS.get("disk_bus", "virtio")
+    disk_fmt     = disk_bus_preview
+    net_mode     = args.get("network_mode") or _VM_DEFS["network_mode"]
+    iso_path     = args.get("iso_path") or ""
+
+    is_windows = "windows" in str(os_type).lower() or "windows" in str(os_name).lower()
+    uefi       = True if is_windows else bool(args.get("uefi", _pdata.get("uefi", _MC["uefi"])))
+    if is_windows:
+        machine_type = "q35"
+
+    rows = [
+        ("Name", name),
+        ("OS",   f"{os_type}" + (f" ({os_name})" if os_name else "")),
+    ]
+    if profile:
+        rows.append(("Profile", f"{profile}" + (f"  ({_pdata.get('description')})" if _pdata.get("description") else "")))
+    rows += [
+        ("CPU Cores", str(cpu_cores)),
+        ("Memory",    f"{memory_mb // 1024} GB" if memory_mb >= 1024 else f"{memory_mb} MB"),
+        ("Disk",      f"{disk_gb} GB ({disk_fmt})"),
+        ("Network",   net_mode),
+        ("Machine",   f"{machine_type}  {'UEFI' if uefi else 'BIOS'}"),
+        ("ISO",       iso_path if iso_path else "[dim]auto-detect / none[/dim]"),
+    ]
+    return rows
+
+
+def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
+    import platform
+    import subprocess
+    is_win_guest = setup_cmd.startswith("irm ")
+    if is_win_guest:
+        how    = "Open PowerShell inside the VM and run:"
+        reboot = "No reboot required."
+    else:
+        how    = "Open a terminal inside the VM and run:"
+        reboot = "Then reboot the VM."
+    text = (
+        f"Stealth VM \"{vm_name}\" needs one-time guest setup.\n\n"
+        f"{how}\n\n"
+        f"  {setup_cmd}\n\n"
+        f"{reboot}\n\n"
+        f"When done, run on the host:\n"
+        f"  qemu-api setup-done {vm_name}"
+    )
+    title = f"Stealth Setup: {vm_name}"
+
+    # ── Windows host ──────────────────────────────────────────────────────────
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            # Run in a daemon thread so the CLI doesn't block on the dialog
+            threading.Thread(
+                target=lambda: ctypes.windll.user32.MessageBoxW(0, text, title, 0x40),
+                daemon=True,
+            ).start()
+            return
+        except Exception:
+            pass
+
+    # ── Linux/macOS host: zenity first (GNOME/Cinnamon) ──────────────────────
+    try:
+        subprocess.Popen([
+            "zenity", "--info",
+            f"--title={title}",
+            f"--text={text}",
+            "--width=520",
+            "--no-wrap",
+        ])
+        return
+    except FileNotFoundError:
+        pass
+    # notify-send (desktop notification, non-blocking)
+    try:
+        subprocess.Popen([
+            "notify-send", title, setup_cmd,
+            "--urgency=critical", "--expire-time=0",
+        ])
+        return
+    except FileNotFoundError:
+        pass
+    # tkinter (universal fallback)
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo(title, text)
+        root.destroy()
+    except Exception:
+        pass
 
 
 def _show_drift_report(messages: list, runtime_drift_count: int) -> None:
@@ -495,6 +622,8 @@ def chat_loop(verbose: bool = False):
                         if tool_name in _confirmed_tool_types:
                             console.print(f"  [dim]auto-confirmed: {verb}: {proposed}[/dim]")
                         else:
+                            if tool_name == "create_vm":
+                                _render_vm_specs(_build_vm_spec_rows(raw_args))
                             hint = f"[bold]{proposed}[/bold]" if proposed else "[dim]unknown[/dim]"
                             console.print(f"\n[yellow]⚠  {verb}: {hint}[/yellow]")
                             try:
@@ -720,6 +849,23 @@ def chat_loop(verbose: bool = False):
                             console.print("\n[dim]Goodbye.[/dim]")
                             return
                         if clarified:
+                            # Overwrite shortcut: user said "overwrite" for a name conflict.
+                            if f == "name" and "overwrite" in clarified.lower():
+                                orig = result.get("original_name", "")
+                                if orig:
+                                    filled["name"]      = orig
+                                    filled["overwrite"] = "true"
+                                    messages.append({"role": "user", "content": clarified})
+                                    messages.append({
+                                        "role":    "user",
+                                        "content": f"_INTERNAL_ The user chose to overwrite. Call create_vm again with name='{orig}' and overwrite=true, keeping ALL other original arguments exactly as they were.",
+                                    })
+                                    _just_clarified_fields.update(filled.keys())
+                                    _just_clarified_values.update(filled.items())
+                                    _clarify_happened = True
+                                    _clarify_answer   = clarified
+                                    _clarify_field    = "overwrite"
+                                    break
                             filled[f] = clarified
                             messages.append({"role": "user", "content": clarified})
                             # If the user named a specific distro, inject os_name so the
@@ -855,6 +1001,21 @@ def cli_direct(args: List[str], verbose: bool = False):
         r     = manager.launch_vm(rest[0], display=rest[1] if len(rest) > 1 else None)
         style = "success" if r.get("success") else "error"
         console.print(f"[{style}]{r.get('message', r.get('error', ''))}[/{style}]")
+        if r.get("setup_cmd"):
+            setup_cmd  = r["setup_cmd"]
+            is_windows = setup_cmd.startswith("irm ")
+            how_line   = (
+                "Open [bold]PowerShell[/bold] inside the VM and run:"
+                if is_windows else
+                "Open a terminal inside the VM and run (then reboot):"
+            )
+            console.print(Panel(
+                f"[bold]Stealth guest setup required.[/bold] {how_line}\n\n"
+                f"[cyan]{setup_cmd}[/cyan]\n\n"
+                f"[dim]When done, run:[/dim] [bold]qemu-api setup-done {rest[0]}[/bold]",
+                title="Stealth Setup", border_style="yellow",
+            ))
+            _show_stealth_popup(rest[0], setup_cmd)
 
     elif cmd == "stop" and rest:
         r     = manager.stop_vm(rest[0])
@@ -948,6 +1109,53 @@ def cli_direct(args: List[str], verbose: bool = False):
         r = manager.print_command(rest[0])
         if r.get("success"):
             console.print(Panel(r["command"], title="QEMU Command", border_style="cyan"))
+
+    elif cmd == "setup-done" and rest:
+        r = manager.mark_stealth_done(rest[0])
+        style = "success" if r.get("success") else "error"
+        console.print(f"[{style}]{r.get('message', r.get('error', ''))}[/{style}]")
+
+    elif cmd == "guest-setup" and rest:
+        vm_name = rest[0]
+        r = manager.generate_guest_setup(vm_name)
+        if not r.get("success"):
+            console.print(f"[error]{r['error']}[/error]")
+            return
+
+        script_path = r["path"]
+        script_dir  = os.path.dirname(script_path)
+        script_file = os.path.basename(script_path)
+
+        # Find a free port and serve the script via HTTP so the VM can pull it
+        with socket.socket() as s:
+            s.bind(('', 0))
+            port = s.getsockname()[1]
+
+        class _Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, directory=script_dir, **kw)
+            def log_message(self, *_):
+                pass  # silence access log
+
+        srv = http.server.HTTPServer(('0.0.0.0', port), _Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        host_ip = "10.0.2.2"  # QEMU user-networking default gateway = host
+        url     = f"http://{host_ip}:{port}/{script_file}"
+
+        console.print(Panel(
+            f"[bold]Script:[/bold] {script_path}\n\n"
+            f"[bold]Inside the VM, run:[/bold]\n"
+            f"[cyan]curl {url} | sudo bash[/cyan]\n\n"
+            f"[dim]Server will exit when you press Ctrl+C.[/dim]",
+            title=f"Guest Setup — {vm_name}",
+            border_style="green",
+        ))
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            srv.shutdown()
+            console.print("[dim]Server stopped.[/dim]")
 
     elif cmd == "clear-session":
         clear_session()

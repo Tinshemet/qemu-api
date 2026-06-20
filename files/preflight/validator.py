@@ -344,6 +344,257 @@ def _validate_profile_for_host(profile_name: str, profile_data: Optional[Dict[st
 
 # Gate run before destructive tools: validates name, ISO, machine type, Windows requirements, disk size, and profile compatibility.
 # In: str tool_name, dict args, QemuManager, bool verbose → Out: dict with action (ok/auto_fix/ask_user/abort)
+_QEMU_CPU_MODELS = {"qemu64", "qemu32", "kvm64", "kvm32", "max", "base", "host-phys-bits-limit"}
+
+# keyword (lowercase, checked via 'in') → (manufacturer, bios_vendor, smbios_type or None)
+# smbios_type=None means we can't infer chassis from the product name alone.
+_STEALTH_PRODUCT_HINTS: List[tuple] = [
+    # Dell
+    ("latitude",    "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
+    ("inspiron",    "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
+    ("xps",         "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
+    ("precision",   "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
+    ("vostro",      "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
+    ("alienware",   "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
+    ("optiplex",    "Dell Inc.",                   "Dell Inc.",                   "Desktop"),
+    ("poweredge",   "Dell Inc.",                   "Dell Inc.",                   "Server"),
+    # Lenovo
+    ("thinkpad",    "Lenovo",                      "Lenovo",                      "Notebook"),
+    ("ideapad",     "Lenovo",                      "Lenovo",                      "Notebook"),
+    ("yoga",        "Lenovo",                      "Lenovo",                      "Notebook"),
+    ("legion",      "Lenovo",                      "Lenovo",                      "Notebook"),
+    ("thinkcentre", "Lenovo",                      "Lenovo",                      "Desktop"),
+    ("thinkstation","Lenovo",                      "Lenovo",                      "Desktop"),
+    # HP
+    ("elitebook",   "HP",                          "HP",                          "Notebook"),
+    ("probook",     "HP",                          "HP",                          "Notebook"),
+    ("pavilion",    "HP",                          "HP",                          "Notebook"),
+    ("spectre",     "HP",                          "HP",                          "Notebook"),
+    ("envy",        "HP",                          "HP",                          "Notebook"),
+    ("zbook",       "HP",                          "HP",                          "Notebook"),
+    ("omen",        "HP",                          "HP",                          "Notebook"),
+    ("elitedesk",   "HP",                          "HP",                          "Desktop"),
+    ("prodesk",     "HP",                          "HP",                          "Desktop"),
+    # Apple
+    ("macbook",     "Apple Inc.",                  "Apple Inc.",                  "Notebook"),
+    ("imac",        "Apple Inc.",                  "Apple Inc.",                  "Desktop"),
+    ("mac mini",    "Apple Inc.",                  "Apple Inc.",                  "Desktop"),
+    ("mac pro",     "Apple Inc.",                  "Apple Inc.",                  "Tower"),
+    # Microsoft
+    ("surface",     "Microsoft Corporation",       "Microsoft Corporation",       "Notebook"),
+    # ASUS
+    ("zephyrus",    "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
+    ("vivobook",    "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
+    ("zenbook",     "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
+    ("rog ",        "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
+    # Acer
+    ("aspire",      "Acer",                        "Acer",                        "Notebook"),
+    ("swift",       "Acer",                        "Acer",                        "Notebook"),
+    ("nitro",       "Acer",                        "Acer",                        "Notebook"),
+    ("predator",    "Acer",                        "Acer",                        "Notebook"),
+    # Samsung
+    ("galaxy book", "Samsung Electronics Co., Ltd.", "Samsung Electronics Co., Ltd.", "Notebook"),
+    # Huawei
+    ("matebook",    "HUAWEI",                      "HUAWEI",                      "Notebook"),
+    # LG
+    ("gram",        "LG Electronics",              "LG Electronics",              "Notebook"),
+    # Toshiba
+    ("portege",     "TOSHIBA",                     "TOSHIBA",                     "Notebook"),
+    ("satellite",   "TOSHIBA",                     "TOSHIBA",                     "Notebook"),
+    ("tecra",       "TOSHIBA",                     "TOSHIBA",                     "Notebook"),
+    # Fujitsu
+    ("lifebook",    "Fujitsu",                     "Fujitsu",                     "Notebook"),
+    ("celsius",     "Fujitsu",                     "Fujitsu",                     "Desktop"),
+    # Sony
+    ("vaio",        "Sony Corporation",            "Sony Corporation",            "Notebook"),
+    # Razer
+    ("razer blade", "Razer",                       "Razer",                       "Notebook"),
+    # MSI
+    ("msi ",        "Micro-Star International Co., Ltd.", "American Megatrends Inc.", "Notebook"),
+    # Gigabyte
+    ("aorus",       "GIGABYTE",                    "American Megatrends Inc.",    "Notebook"),
+    # Panasonic
+    ("toughbook",   "Panasonic",                   "Panasonic",                   "Notebook"),
+]
+
+
+def _stealth_infer_from_product(product_name: str) -> Dict[str, str]:
+    """Return inferred {manufacturer, bios_vendor, smbios_type} from product_name keywords."""
+    pn = product_name.lower()
+    for keyword, mfr, bios_vendor, smbios_type in _STEALTH_PRODUCT_HINTS:
+        if keyword in pn:
+            result: Dict[str, str] = {"manufacturer": mfr, "bios_vendor": bios_vendor}
+            if smbios_type:
+                result["smbios_type"] = smbios_type
+            return result
+    return {}
+
+
+def _validate_stealth_args(args: Dict[str, Any]) -> List[Dict]:
+    """
+    Return a list of issue dicts for a stealth VM config.
+    Severity "error"   = directly exposes the VM (inxi / lspci / dmidecode will detect it).
+    Severity "warning" = weakens stealth but doesn't break core detection bypass.
+    """
+    issues = []
+
+    product_name = str(args.get("product_name", "")).strip()
+    inferred     = _stealth_infer_from_product(product_name) if product_name else {}
+
+    # ── SMBIOS identity fields ────────────────────────────────────────────────
+
+    # manufacturer + product_name drive the inxi "System:" line.
+    # Blank fields are themselves a detection signal.
+    # If product_name was given and we can infer manufacturer, auto-fix rather than block.
+    if not str(args.get("manufacturer", "")).strip():
+        if inferred.get("manufacturer"):
+            issues.append({
+                "severity":  "auto_fix",
+                "message":   f"stealth VM missing 'manufacturer' — inferred '{inferred['manufacturer']}' from product_name",
+                "fix":       f"manufacturer set to '{inferred['manufacturer']}'",
+                "fix_field": "manufacturer",
+                "fix_value": inferred["manufacturer"],
+                "auto_fix":  True,
+            })
+        else:
+            issues.append({
+                "severity":  "error",
+                "message":   "stealth VM missing 'manufacturer' — inxi System line will be blank, a VM signal",
+                "fix":       "Set manufacturer to match the spoofed hardware (e.g. 'Dell Inc.')",
+                "fix_field": "manufacturer",
+            })
+
+    if not product_name:
+        issues.append({
+            "severity":  "error",
+            "message":   "stealth VM missing 'product_name' — inxi product field will be blank, a VM signal",
+            "fix":       "Set product_name to match the spoofed hardware (e.g. 'Latitude 5530')",
+            "fix_field": "product_name",
+        })
+
+    # smbios_type drives chassis_type byte injection.
+    # No smbios_type + no machine_class → chassis defaults to Desktop (type=3).
+    # That is fine for a desktop profile, but a laptop fingerprint requires type=9 (Notebook).
+    smbios_type   = str(args.get("smbios_type", "")).lower()
+    machine_class = str(args.get("machine_class", "desktop")).lower()
+    _LAPTOP_KW    = ("notebook", "laptop", "portable")
+    if not smbios_type:
+        if inferred.get("smbios_type"):
+            issues.append({
+                "severity":  "auto_fix",
+                "message":   f"stealth VM missing 'smbios_type' — inferred '{inferred['smbios_type']}' from product_name",
+                "fix":       f"smbios_type set to '{inferred['smbios_type']}'",
+                "fix_field": "smbios_type",
+                "fix_value": inferred["smbios_type"],
+                "auto_fix":  True,
+            })
+        elif any(k in machine_class for k in _LAPTOP_KW):
+            issues.append({
+                "severity":  "warning",
+                "message":   "stealth VM has laptop machine_class but no smbios_type — chassis defaults to Desktop (type=3) not Laptop (type=9); inxi may call check_vm()",
+                "fix":       "Set smbios_type='Notebook' to inject chassis_type=9",
+                "fix_field": "smbios_type",
+            })
+
+    # bios_vendor spoofs SMBIOS type=0 (BIOS info).
+    # Without it QEMU's "EFI Development Kit II" or "SeaBIOS" leaks through.
+    if not str(args.get("bios_vendor", "")).strip():
+        if inferred.get("bios_vendor"):
+            issues.append({
+                "severity":  "auto_fix",
+                "message":   f"stealth VM missing 'bios_vendor' — inferred '{inferred['bios_vendor']}' from product_name",
+                "fix":       f"bios_vendor set to '{inferred['bios_vendor']}'",
+                "fix_field": "bios_vendor",
+                "fix_value": inferred["bios_vendor"],
+                "auto_fix":  True,
+            })
+        else:
+            issues.append({
+                "severity":  "warning",
+                "message":   "stealth VM missing 'bios_vendor' — BIOS vendor will show QEMU/EFI defaults in dmidecode",
+                "fix":       "Set bios_vendor matching the spoofed hardware (e.g. 'Dell Inc.')",
+                "fix_field": "bios_vendor",
+            })
+
+    # bios_version appears in SMBIOS type=0 and is visible in dmidecode + WMI.
+    # OVMF default is something like "0.0.0" or an edk2 build string.
+    if not str(args.get("bios_version", "")).strip():
+        issues.append({
+            "severity":  "warning",
+            "message":   "stealth VM missing 'bios_version' — OVMF default version string leaks in SMBIOS type=0",
+            "fix":       "Set bios_version matching the spoofed hardware (e.g. '1.15.0' for a Dell)",
+            "fix_field": "bios_version",
+        })
+
+    # serial_number is in SMBIOS type=1 — not checked by inxi but visible to
+    # browser fingerprinting tools that read WMI (Windows) or dmidecode (Linux).
+    if not str(args.get("serial_number", "")).strip():
+        issues.append({
+            "severity":  "warning",
+            "message":   "stealth VM missing 'serial_number' — SMBIOS chassis/system serial will be empty (visible via dmidecode/WMI)",
+            "fix":       "Set serial_number matching the spoofed hardware",
+            "fix_field": "serial_number",
+        })
+
+    # ── GPU / display ─────────────────────────────────────────────────────────
+
+    # virtio-vga / virtio-vga-gl carries PCI vendor 0x1af4 (Red Hat/QEMU).
+    # lspci inside the guest shows this; it is one of the most common VM detection
+    # vectors. 'gpu' defaults to "virtio" if not set — both cases are errors.
+    gpu = str(args.get("gpu", "virtio")).lower()
+    if gpu == "virtio":
+        msg = (
+            "stealth VM GPU is 'virtio' (virtio-vga) — PCI vendor 0x1af4 (Red Hat/QEMU) "
+            "is trivially detectable via lspci"
+        ) if "gpu" in args else (
+            "stealth VM GPU not set — default is 'virtio' (virtio-vga) with detectable "
+            "Red Hat PCI vendor 0x1af4"
+        )
+        issues.append({
+            "severity":  "error",
+            "message":   msg,
+            "fix":       "Set gpu='none' (uses cirrus-vga, PCI vendor 0x1013 Cirrus Logic) or 'qxl' for better 2D",
+            "fix_field": "gpu",
+        })
+
+    # SPICE display requires the SPICE guest agent and virtio-serial inside the VM.
+    # The SPICE agent package name and the virtio-serial PCI device both reveal the VM.
+    if str(args.get("display", "")).lower() == "spice":
+        issues.append({
+            "severity":  "error",
+            "message":   "stealth VM using SPICE display — SPICE requires virtio-serial (PCI 0x1af4) and guest agent, both are VM signals",
+            "fix":       "Use display='sdl' or display='gtk' instead",
+            "fix_field": "display",
+        })
+
+    # ── Firmware ──────────────────────────────────────────────────────────────
+
+    # UEFI=False means SeaBIOS. SeaBIOS sets BIOS vendor to "SeaBIOS" and
+    # version to a build string — both are unambiguous VM signals in dmidecode.
+    if args.get("uefi") is False:
+        issues.append({
+            "severity":  "error",
+            "message":   "stealth VM has uefi=False — SeaBIOS sets BIOS vendor 'SeaBIOS', a clear VM signal in SMBIOS type=0",
+            "fix":       "Use uefi=True (OVMF) so BIOS vendor/version can be spoofed via smbios args",
+            "fix_field": "uefi",
+        })
+
+    # ── CPU model ─────────────────────────────────────────────────────────────
+
+    # QEMU-named CPU models (qemu64, kvm64, etc.) expose a CPU model string that
+    # doesn't match any real hardware — detectable via /proc/cpuinfo and CPUID tools.
+    cpu_model = str(args.get("cpu_model", "host")).lower()
+    if cpu_model in _QEMU_CPU_MODELS:
+        issues.append({
+            "severity":  "error",
+            "message":   f"stealth VM cpu_model='{cpu_model}' is a QEMU synthetic model — /proc/cpuinfo will show a non-existent CPU, detectable by any fingerprinting tool",
+            "fix":       "Use cpu_model='host' to pass through the real host CPU identity",
+            "fix_field": "cpu_model",
+        })
+
+    return issues
+
+
 def _preflight_check(
     tool_name:  str,
     args:       Dict[str, Any],
@@ -374,7 +625,7 @@ def _preflight_check(
 
         vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
         if os.path.exists(vm_dir):
-            return {"action":"ask_user","reason":f"A VM named '{name}' already exists","question":f"A VM called '{name}' already exists. Overwrite it, or use a different name?","fix_field":"name","options":[f"{name}-2",f"{name}-new","overwrite"],"correction":"Use a different name or delete the existing VM first."}
+            return {"action":"ask_user","reason":f"A VM named '{name}' already exists","question":f"A VM called '{name}' already exists. Overwrite it, or use a different name?","fix_field":"name","original_name":name,"options":[f"{name}-2",f"{name}-new","overwrite"],"correction":"Use a different name or delete the existing VM first."}
 
         if mt and mt not in VALID_MACHINE_TYPES and not mt.startswith("pc-"):
             fixed = dict(args)
@@ -417,6 +668,54 @@ def _preflight_check(
             _win_disk = _THRESHOLDS["auto_windows_disk_gb"]
             fixed = dict(args); fixed["disk_size_gb"] = _win_disk
             return {"action":"auto_fix","reason":f"Windows 11 needs at least {_win_disk}GB disk, got {disk_gb}GB","correction":f"Increased disk_size_gb from {disk_gb} to {_win_disk}","fixed_args":fixed}
+
+        if is_win and args.get("tpm") is not False:
+            import shutil
+            if not shutil.which("swtpm"):
+                return {
+                    "action":     "ask_user",
+                    "reason":     "Windows 11 requires TPM 2.0 but swtpm is not installed",
+                    "question":   "Install swtpm for TPM 2.0 support, or proceed without it (Windows 11 setup will block)?",
+                    "fix_field":  None,
+                    "options":    ["Install swtpm first (sudo apt install swtpm)", "Proceed without TPM (bypass during install)"],
+                    "correction": "sudo apt install swtpm",
+                }
+
+        if args.get("stealth"):
+            stealth_issues = _validate_stealth_args(args)
+            auto_fixes = [i for i in stealth_issues if i.get("auto_fix")]
+            blockers   = [i for i in stealth_issues if i["severity"] == "error"]
+            warnings   = [i for i in stealth_issues if i["severity"] == "warning"]
+
+            # Apply auto-fixes first (inferred from product_name)
+            if auto_fixes:
+                fixed = dict(args)
+                for issue in auto_fixes:
+                    if issue.get("fix_field") and issue.get("fix_value") is not None:
+                        fixed.setdefault(issue["fix_field"], issue["fix_value"])
+                fix_notes = [f"{i['fix_field']}={i['fix_value']!r}" for i in auto_fixes]
+                return {
+                    "action":     "auto_fix",
+                    "reason":     "Stealth preflight inferred missing SMBIOS fields from product_name: " + ", ".join(fix_notes),
+                    "correction": " | ".join(i["fix"] for i in auto_fixes),
+                    "fixed_args": fixed,
+                    "warnings":   [w["message"] for w in warnings],
+                }
+
+            if blockers:
+                return {
+                    "action":     "ask_user",
+                    "reason":     " | ".join(i["message"] for i in blockers),
+                    "question":   "Stealth mode requires hardware identity fields to spoof SMBIOS. Provide them or proceed with partial masking?",
+                    "fix_field":  blockers[0].get("fix_field"),
+                    "options":    ["Provide the missing fields", "Proceed anyway (partial masking)"],
+                    "correction": " | ".join(i["fix"] for i in blockers if i.get("fix")),
+                    "issues":     stealth_issues,
+                }
+            if warnings:
+                # Non-blocking — surface as warnings in the result but continue
+                args = dict(args)
+                args.setdefault("_stealth_warnings", [w["message"] for w in warnings])
 
         internet_issues = _validate_with_internet(args, verbose=verbose)
         if internet_issues:

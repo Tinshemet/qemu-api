@@ -258,6 +258,17 @@ def _render_system(caps: Dict):
     console.print(Panel(t, title="[bold]System Capabilities[/bold]", border_style="magenta"))
 
 
+# Prints a specs preview panel for create_vm before the user confirms.
+# In: List[tuple[str, str]] rows → Out: nothing (console output)
+def _render_vm_specs(rows: List[tuple]):
+    t = Table(box=box.SIMPLE, show_header=False)
+    t.add_column("Key",   style="dim",        width=20)
+    t.add_column("Value", style="bold white")
+    for label, value in rows:
+        t.add_row(label, value)
+    console.print(Panel(t, title="[bold]VM Specs Preview[/bold]", border_style="cyan"))
+
+
 # Prints the startup banner with model, Ollama URL, OVMF status, and verbose mode.
 # In: bool verbose, str ollama_url, str ollama_model, bool ovmf_available, str ovmf_code → Out: nothing (console output)
 def _print_banner(verbose: bool, ollama_url: str, ollama_model: str, ovmf_available: bool, ovmf_code: str):

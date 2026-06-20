@@ -626,7 +626,14 @@ SECTION 10 — DIRECTORY STRUCTURE
       ├── qmp.sock         QMP control socket
       ├── monitor.sock     Human monitor socket
       ├── serial.sock      Serial console socket
-      └── launch.log       stdout/stderr from last launch
+      ├── launch.log       stdout/stderr from last launch
+      ├── smbios_chassis.bin   Raw SMBIOS type-3 binary (chassis type byte)
+      ├── tpm/             swtpm persistent TPM state
+      ├── tpm.sock         swtpm control socket (live only)
+      ├── tpm.pid          swtpm PID file
+      ├── guest_setup.sh   Auto-generated Linux stealth setup script
+      ├── guest_setup.ps1  Auto-generated Windows stealth setup script
+      └── .stealth_done    Sentinel — suppresses HTTP server on subsequent launches
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 11 — KNOWN ISSUES
@@ -687,5 +694,201 @@ SECTION 12 — WHAT COMES NEXT (PART 2)
   File transfer:
     vm_shell.py copy dev-box ~/file.txt /tmp/
     vm_shell.py copy dev-box /tmp/output.log .
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 13 — STEALTH MODE & HARDWARE SPOOFING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+13.1  OVERVIEW
+───────────────
+  Stealth mode makes a VM pass casual and automated hardware fingerprinting.
+  Achieves ~7/10 stealth. Enable with:
+
+    "stealth": true,
+    "hardened": true
+
+  What the API does automatically at launch:
+    Display device   Linux → vmware-svga (loads vmwgfx, no "qemu" in name)
+                     Windows → VGA std (no VMware fingerprint)
+    CPUID            Hides -hypervisor bit, kvm=off, -vmx (hardened only)
+    ACPI OEM ID      Set to manufacturer name instead of BOCHS/BXPC
+    USB controller   nec-usb-xhci (real NEC PCI IDs, not Red Hat/QEMU)
+    Guest setup      Auto-serves guest_setup.sh / guest_setup.ps1 via HTTP
+                     on port 8080 on first launch. Suppressed after
+                     .stealth_done sentinel is created.
+
+13.2  SMBIOS / HARDWARE FINGERPRINT FIELDS
+───────────────────────────────────────────
+  These fields are set in config.json and map to SMBIOS tables visible via
+  inxi -F, dmidecode, and Windows System Information:
+
+    "manufacturer":  "Dell Inc."         inxi: System: Dell Inc.
+    "product_name":  "Latitude 5530"     inxi: product: Latitude 5530
+    "serial_number": "3K8LP52"           inxi: serial: 3K8LP52
+    "board_product": "0H34YX"            SMBIOS type 2 (baseboard)
+    "bios_vendor":   "Dell Inc."         inxi: BIOS: Dell Inc.
+    "bios_version":  "1.15.0"            inxi: v: 1.15.0
+    "machine_class": "laptop"            chassis type byte 9 (Laptop)
+    "smbios_type":   "Notebook"
+
+  machine_class / smbios_type chassis mapping:
+    laptop / notebook → 9   desktop → 3   server → 17   tablet → 30
+
+  The chassis type byte is injected via a raw binary (smbios_chassis.bin)
+  because QEMU's CLI cannot set this byte directly. Linux's DMI scanner
+  uses last-write-wins, so the appended binary overrides QEMU's default.
+
+  After setting these, inxi -F inside the guest shows:
+    System:    Type: Laptop  System: Dell Inc.  product: Latitude 5530
+               serial: 3K8LP52
+    BIOS:      Dell Inc.  v: 1.15.0
+
+13.3  LINUX GUEST SETUP  (guest_setup.sh)
+──────────────────────────────────────────
+  Run once inside the VM after OS installation. Supports Ubuntu, Mint,
+  Kali, Arch — any distro with update-initramfs, mkinitcpio, or dracut.
+
+  From inside the VM:
+    curl http://10.0.2.2:8080/guest_setup.sh | bash
+
+  Step 1 — Blacklist QEMU kernel modules:
+    Writes /etc/modprobe.d/blacklist-qemu.conf:
+      blacklist qemu_fw_cfg
+      blacklist cirrus_qemu
+    Rebuilds initramfs (auto-detects tool). Reboot required.
+
+  Step 2 — Firefox stealth profile:
+    Creates ~/.mozilla/firefox/stealth/user.js:
+      user_pref("webgl.renderer-string.override", "Intel(R) Iris(R) Xe Graphics");
+      user_pref("webgl.vendor-string.override",   "Intel");
+
+  Step 3 — Stealth browser launcher:
+    ~/Desktop/stealth-browser.sh — launches Firefox with the stealth profile.
+    Auto-detects firefox vs firefox-esr (Kali).
+
+  Step 4 — lspci / lsmod wrappers:
+    lspci wrapper: replaces VMware SVGA II → Intel Iris Xe in both standard
+                   and -mm (machine-readable) output formats.
+    lsmod wrapper: filters any module starting with "qemu".
+    Originals preserved as lspci.real / lsmod.real. Idempotent.
+
+  After reboot, verify:
+    lsmod | grep qemu                    # empty
+    lspci | grep VGA                     # Intel Iris Xe
+    cat /sys/class/dmi/id/chassis_type   # 9
+    inxi -F                              # Type: Laptop  System: Dell Inc.
+
+  Mark done (suppresses HTTP server on next launch):
+    touch ~/.qemu_vms/<name>/.stealth_done
+
+13.4  WINDOWS GUEST SETUP  (guest_setup.ps1)
+──────────────────────────────────────────────
+  Run once in an elevated PowerShell (right-click → Run as Administrator).
+
+  From inside the VM:
+    irm http://10.0.2.2:8080/guest_setup.ps1 | iex
+
+  Step 1 — Firefox stealth profile:
+    %APPDATA%\Mozilla\Firefox\Profiles\stealth\user.js
+    Same WebGL overrides as Linux.
+
+  Step 2 — Desktop shortcut:
+    Stealth Browser.lnk → Firefox --profile stealth --no-remote
+
+  Step 3 — GPU display name spoof (Admin required):
+    Strategy 1: edits DriverDesc in video class registry key
+      {4d36e968-e325-11ce-bfc1-08002be10318}
+      Targets entries matching VMware / SVGA / Standard VGA / Basic Display.
+    Strategy 2: sets FriendlyName in PCI enum key for VEN_1234
+      HKLM:\SYSTEM\CurrentControlSet\Enum\PCI\VEN_1234*
+      Works when Windows uses basicdisplay.sys (no driver installed).
+    Reboot required. Device Manager shows Intel(R) Iris(R) Xe Graphics.
+
+  Mark done:
+    touch ~/.qemu_vms/<name>/.stealth_done    (run on the HOST, not the VM)
+
+13.5  WINDOWS 11 SETUP WORKFLOW
+─────────────────────────────────
+  Pre-install config:
+    "bios":     "ovmf_ms"   (OVMF_CODE_4M.ms.fd — MS Secure Boot keys)
+    "tpm":      true
+    "stealth":  true
+    "hardened": true
+    "networks": []           Remove NIC → forces local account in OOBE
+
+  OOBE local account bypass (25H2+ — oobe\bypassnro removed):
+    Method 1 (recommended): networks:[] — OOBE shows "I don't have internet"
+                             → "Continue with limited setup"
+    Method 2: Shift+F10 → start ms-cxh:localonly
+    Method 3: email a@a.com + any password → fails → "Create a local account"
+    Method 4: Sign-in options → "Domain join instead"
+
+  Post-install steps:
+    1. Stop the VM
+    2. Add NIC back to config.json:
+         "networks": [{"mode":"nat","model":"e1000e","mac":"F0:1F:AF:XX:XX:XX"}]
+    3. Relaunch VM
+    4. On host: cd ~/.qemu_vms/<name> && python3 -m http.server 8080
+    5. In elevated PowerShell: irm http://10.0.2.2:8080/guest_setup.ps1 | iex
+    6. Install Firefox, reboot
+    7. On host: touch ~/.qemu_vms/<name>/.stealth_done
+
+  BIOS values:
+    "ovmf"    → OVMF_CODE_4M.fd     standard UEFI, no Secure Boot
+    "ovmf_ms" → OVMF_CODE_4M.ms.fd  Secure Boot with Microsoft keys (Win 11)
+
+  WARNING: never add smm=off to extra_args when using OVMF. OVMF requires
+  SMM enabled or Linux boot KVM-crashes at ~15 seconds.
+
+13.6  BRIDGE NETWORKING  (wired LAN, one-time host setup)
+──────────────────────────────────────────────────────────
+  By default VMs use QEMU NAT (10.0.2.x). For a real LAN IP, create a
+  bridge on the host once and attach the wired NIC to it.
+
+  Ubuntu / Debian (netplan):
+    # /etc/netplan/01-bridge.yaml
+    network:
+      version: 2
+      ethernets:
+        enp3s0:              # check your interface: ip link
+          dhcp4: false
+      bridges:
+        br0:
+          interfaces: [enp3s0]
+          dhcp4: true
+          parameters:
+            stp: false
+            forward-delay: 0
+
+    sudo netplan apply
+
+  Linux Mint / Debian (/etc/network/interfaces):
+    auto br0
+    iface br0 inet dhcp
+        bridge_ports enp3s0
+        bridge_stp off
+        bridge_fd 0
+
+    sudo systemctl restart networking
+
+  VM config for bridge mode:
+    "networks": [{"mode":"bridge","bridge":"br0","model":"e1000e"}]
+
+  Note: hardened:true forces NAT for non-stealth VMs, but stealth VMs
+  are allowed to use bridge so they get a real LAN IP instead of 10.0.2.x.
+
+13.7  STEALTH RATING REFERENCE
+────────────────────────────────
+  After running guest_setup, approximate stealth rating is 7/10:
+
+    Check                      Result    Notes
+    ──────────────────────────────────────────────────────────────────
+    inxi -F system/chassis     PASS      Dell Latitude SMBIOS + chassis binary
+    lsmod | grep qemu          PASS      Blacklist + lsmod wrapper
+    lspci GPU                  PASS      Intel Iris Xe (lspci wrapper / registry)
+    Firefox WebGL              PASS      user.js profile overrides
+    ACPI OEM strings           FAIL      Still BOCHS/BXPC (future project)
+    /sys PCI vendor IDs        FAIL      lspci wrapper doesn't cover /sys paths
+    dmesg QEMU strings         FAIL      Still visible (future project)
 
 ================================================================================

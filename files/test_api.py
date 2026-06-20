@@ -36,7 +36,7 @@ from rich.progress import track
 sys.path.insert(0, os.path.dirname(__file__))
 
 from tests.shared         import console, TestResult, OLLAMA_MODEL, OLLAMA_URL, _build_system_prompt
-from tests.layer1_sanitizer import SANITISER_TESTS, run_sanitiser_test
+from tests.layer1_sanitizer import SANITISER_TESTS, run_sanitiser_test, run_preview_tests, run_arg_builder_tests
 from tests.layer2_executor  import (
     EXECUTOR_TESTS, run_executor_test,
     generate_random_preflight_tests,
@@ -261,6 +261,14 @@ def main():
             all_results.append(r)
             console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
                            f"{tc.id} [{r.duration_s*1000:.0f}ms]")
+        for r in run_preview_tests():
+            all_results.append(r)
+            console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
+                           f"{r.test_id} [preview]")
+        for r in run_arg_builder_tests():
+            all_results.append(r)
+            console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
+                           f"{r.test_id} [argbld]")
 
     if exec_tests:
         console.print(f"\n[bold cyan]Layer 2 — Executor ({len(exec_tests)}) "

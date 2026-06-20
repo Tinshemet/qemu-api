@@ -164,14 +164,15 @@ NETWORK_MODELS:  List[str]                = _CFG["network_models"]
 
 @dataclass
 class DiskConfig:
-    path:    str
-    size_gb: int  = _DC["size_gb"]
-    format:  str  = _DC["format"]
-    bus:     str  = _DC["bus"]
-    cache:   str  = _DC["cache"]
-    discard: bool = _DC["discard"]
-    ssd:     bool = _DC["ssd"]
-    boot:    bool = _DC["boot"]
+    path:       str
+    size_gb:    int  = _DC["size_gb"]
+    format:     str  = _DC["format"]
+    bus:        str  = _DC["bus"]
+    cache:      str  = _DC["cache"]
+    discard:    bool = _DC["discard"]
+    ssd:        bool = _DC["ssd"]
+    boot:       bool = _DC["boot"]
+    disk_model: str  = ""
 
     # Coerces size_gb to int — guards against AI sending strings like "60".
     # In: self (post-construction) → Out: nothing (self-mutation)
@@ -193,21 +194,26 @@ class DiskConfig:
             + (",discard=unmap" if self.discard else ""),
         ]
         if self.bus == "nvme":
-            args += ["-device", f"nvme,drive={drive_id},serial=nvme{index}"]
+            model_suffix = f",model={self.disk_model}" if self.disk_model else ""
+            args += ["-device", f"nvme,drive={drive_id},serial=nvme{index}{model_suffix}"]
         elif self.bus == "virtio":
             ssd_hint = ",rotation_rate=1" if self.ssd else ""
             args += ["-device", f"virtio-blk-pci,drive={drive_id}{ssd_hint}"]
         elif self.bus == "scsi":
-            args += ["-device", f"scsi-hd,drive={drive_id}"]
+            product_suffix = f",product={self.disk_model}" if self.disk_model else ""
+            args += ["-device", f"scsi-hd,drive={drive_id}{product_suffix}"]
         elif self.bus == "sata":
+            model_suffix = f",model={self.disk_model}" if self.disk_model else ""
             # q35 uses ICH9-AHCI — the controller is added by QemuArgBuilder._disks()
-            args += ["-device", f"ide-hd,drive={drive_id},bus=ahci.{index}"]
+            args += ["-device", f"ide-hd,drive={drive_id},bus=ahci.{index}{model_suffix}"]
         else:
             # ide fallback — only works on non-q35 machines
+            model_suffix = f",model={self.disk_model}" if self.disk_model else ""
             args = [
                 "-drive",
                 f"file={self.path},format={self.format},if=ide,cache={self.cache}"
-                + (",discard=unmap" if self.discard else ""),
+                + (",discard=unmap" if self.discard else "")
+                + model_suffix,
             ]
         return args
 
@@ -218,13 +224,14 @@ class DiskConfig:
 
 @dataclass
 class NetworkConfig:
-    mode:          str           = _NC["mode"]
-    model:         str           = _NC["model"]
-    mac:           Optional[str] = None
-    bridge:        str           = _NC["bridge"]
-    ip:            Optional[str] = None
-    hostname:      Optional[str] = None
-    port_forwards: List[tuple]   = field(default_factory=list)
+    mode:              str           = _NC["mode"]
+    model:             str           = _NC["model"]
+    mac:               Optional[str] = None
+    bridge:            str           = _NC["bridge"]
+    ip:                Optional[str] = None
+    hostname:          Optional[str] = None
+    port_forwards:     List[tuple]   = field(default_factory=list)
+    manufacturer_hint: Optional[str] = None
 
     # Generates or validates the MAC address on init.
     # In: self (post-construction) → Out: nothing (self-mutation)
@@ -235,43 +242,77 @@ class NetworkConfig:
             # Validate and fix incoming MAC — must be exactly 6 octets
             self.mac = self._fix_mac(self.mac)
 
-    # Real vendor OUIs — globally administered, unicast (bit0=0, bit1=0 of first byte).
-    _VENDOR_OUIS = [
-        "00:1A:2B",  # Hewlett-Packard
-        "00:1B:21",  # Intel
-        "00:1C:C0",  # Cisco
-        "00:50:56",  # VMware (real HW line)
-        "00:E0:4C",  # Realtek
-        "08:00:27",  # PCS Systemtechnik (VirtualBox, also used in real gear)
-        "10:02:B5",  # Intel
-        "18:66:DA",  # Intel
-        "1C:1B:0D",  # Hewlett-Packard
-        "28:D2:44",  # Intel
-        "2C:44:FD",  # Intel
-        "3C:FD:FE",  # Intel
-        "40:A3:6B",  # Intel
-        "48:51:B7",  # Intel
-        "4C:79:6E",  # Realtek
-        "54:BF:64",  # Intel
-        "60:57:18",  # Intel
-        "70:85:C2",  # Intel
-        "74:D0:2B",  # Intel
-        "78:2B:CB",  # Intel
-        "8C:8D:28",  # Intel
-        "90:E2:BA",  # Intel
-        "A0:36:9F",  # Intel
-        "B0:83:FE",  # Intel
-        "C8:5B:76",  # Intel
-        "D0:50:99",  # Realtek
-        "E4:B9:7A",  # Intel
-        "F0:1F:AF",  # Intel
-    ]
+    # OUIs keyed by normalized manufacturer keyword — used to pick a vendor-consistent MAC.
+    _VENDOR_OUI_MAP = {
+        "intel":    ["00:1B:21", "10:02:B5", "18:66:DA", "28:D2:44", "2C:44:FD",
+                     "3C:FD:FE", "40:A3:6B", "48:51:B7", "54:BF:64", "60:57:18",
+                     "70:85:C2", "74:D0:2B", "78:2B:CB", "8C:8D:28", "90:E2:BA",
+                     "A0:36:9F", "B0:83:FE", "C8:5B:76", "E4:B9:7A", "F0:1F:AF"],
+        "hp":       ["00:1A:2B", "00:17:A4", "00:1C:C4", "1C:1B:0D", "38:EA:A7",
+                     "3C:D9:2B", "98:4B:E1", "98:E7:F4", "C4:34:6B", "D0:BF:9C"],
+        "hewlett":  ["00:1A:2B", "00:17:A4", "00:1C:C4", "1C:1B:0D", "38:EA:A7",
+                     "3C:D9:2B", "98:4B:E1", "98:E7:F4", "C4:34:6B", "D0:BF:9C"],
+        "dell":     ["00:14:22", "00:15:C5", "00:1A:A0", "00:21:70", "14:18:77",
+                     "18:03:73", "18:60:24", "34:17:EB", "44:A8:42", "B8:AC:6F",
+                     "F8:DB:88", "F8:BC:12", "00:22:19"],
+        "lenovo":   ["00:23:AE", "04:7D:7B", "28:D2:44", "40:74:E0", "54:EE:75",
+                     "70:5A:0F", "88:70:8C", "98:FA:9B", "C8:D3:FF", "E8:6A:64"],
+        "thinkpad": ["00:23:AE", "04:7D:7B", "54:EE:75", "88:70:8C", "98:FA:9B",
+                     "C8:D3:FF", "E8:6A:64"],
+        "asus":     ["00:26:18", "04:42:1A", "10:BF:48", "2C:FD:A1", "70:8B:CD",
+                     "BC:EE:7B", "C8:60:00", "E0:3F:49", "F8:32:E4"],
+        "acer":     ["00:1E:68", "40:B0:34", "A4:C3:F0", "E4:D5:3D", "74:29:AF",
+                     "6C:88:14", "00:27:10"],
+        "toshiba":  ["00:00:39", "00:1C:7E", "98:4F:EE", "D0:DF:9A", "00:0C:F1",
+                     "00:1C:BE", "98:FD:B4"],
+        "samsung":  ["00:12:FB", "00:15:B9", "00:1A:8A", "00:26:37", "50:85:69",
+                     "8C:71:F8", "CC:07:AB", "F4:42:8F", "00:21:D1"],
+        "apple":    ["00:1C:B3", "00:25:BC", "28:CF:E9", "3C:07:54", "68:5B:35",
+                     "A4:83:E7", "AC:BC:32", "F0:18:98", "8C:85:90", "D4:61:9D"],
+        "sony":     ["00:01:4A", "00:13:A9", "00:1D:BA", "00:24:BE", "30:17:C8",
+                     "58:48:22", "A8:26:D9"],
+        "vaio":     ["00:01:4A", "00:13:A9", "00:1D:BA", "00:24:BE", "58:48:22"],
+        "msi":      ["00:D8:61", "A4:C3:F0", "C0:25:A5", "00:26:6C", "7C:8B:CA"],
+        "micro-star": ["00:D8:61", "C0:25:A5", "00:26:6C", "7C:8B:CA"],
+        "gigabyte": ["00:1A:4B", "1C:AF:F7", "C8:9C:DC", "50:46:5D", "68:1D:EF"],
+        "giga-byte": ["00:1A:4B", "1C:AF:F7", "C8:9C:DC", "50:46:5D", "68:1D:EF"],
+        "fujitsu":  ["00:26:FB", "28:09:86", "38:90:A5", "90:1B:0E", "00:00:49"],
+        "panasonic": ["00:00:DA", "00:0B:BF", "00:14:C2", "00:80:45", "18:E7:F4"],
+        "toughbook": ["00:00:DA", "00:0B:BF", "00:14:C2", "18:E7:F4"],
+        "lg":       ["00:1E:75", "00:24:E8", "00:26:E2", "C8:08:73", "CC:FA:00"],
+        "huawei":   ["00:18:82", "00:46:4B", "28:6E:D4", "40:4D:8E", "54:89:98",
+                     "70:72:3C", "AC:E2:D3", "C4:07:2F"],
+        "microsoft": ["00:03:FF", "28:18:78", "7C:ED:8D", "00:15:5D", "60:45:BD"],
+        "surface":  ["00:03:FF", "28:18:78", "7C:ED:8D"],
+        "razer":    ["00:1D:0F", "7C:83:34", "D0:73:D5", "1C:75:08"],
+        "nec":      ["00:00:4C", "00:0B:38", "00:22:97", "A4:1F:72"],
+        "clevo":    ["00:23:8B", "00:26:2D", "54:04:A6"],
+        "sager":    ["00:23:8B", "00:26:2D", "54:04:A6"],
+        "realtek":  ["00:E0:4C", "00:13:46", "4C:79:6E", "D0:50:99", "E0:CB:4E"],
+        "broadcom": ["00:10:18", "00:16:CF", "00:90:4C", "BC:30:5B", "00:1A:73"],
+        "qualcomm": ["00:02:A5", "00:03:7F", "00:1D:E0", "00:23:14", "00:26:58",
+                     "4C:BC:A5", "5C:93:A2"],
+        "atheros":  ["00:03:7F", "00:1D:E0", "00:23:14", "00:26:58", "4C:BC:A5"],
+        "xiaomi":   ["00:9E:C8", "28:6C:07", "34:CE:00", "64:09:80", "F4:8B:32"],
+        "honor":    ["00:1E:42", "04:25:C5", "28:D1:27", "5C:C3:07"],
+        "medion":   ["00:0C:6E", "44:87:FC", "C0:25:A5"],
+        "packard bell": ["40:B0:34", "00:1E:68", "A4:C3:F0"],
+        "gateway":  ["00:1B:9E", "00:24:54", "00:25:64"],
+    }
 
-    # Generates a MAC using a real vendor OUI + 3 random device bytes.
+    # All OUIs flattened — used when no manufacturer hint matches.
+    _ALL_OUIS = [oui for ouis in _VENDOR_OUI_MAP.values() for oui in ouis]
+
+    # Generates a MAC using a vendor-matched OUI when possible, otherwise any real OUI.
     # In: nothing → Out: sets self.mac
     def _generate_mac(self):
         import random
-        oui = random.choice(self._VENDOR_OUIS)
+        hint = (self.manufacturer_hint or "").lower()
+        pool = next(
+            (ouis for key, ouis in self._VENDOR_OUI_MAP.items() if key in hint),
+            self._ALL_OUIS,
+        )
+        oui = random.choice(pool)
         device = uuid.uuid4().bytes[:3]
         self.mac = oui + ":" + ":".join(f"{b:02X}" for b in device)
 
@@ -359,6 +400,7 @@ class MachineConfig:
     product_name:    str           = _MC["product_name"]
     manufacturer:    str           = _MC["manufacturer"]
     serial_number:   str           = _MC["serial_number"]
+    board_product:   str           = _MC["board_product"]
     bios_version:    str           = _MC["bios_version"]
     bios_vendor:     str           = _MC["bios_vendor"]
     kernel_path:     Optional[str] = None
@@ -372,6 +414,9 @@ class MachineConfig:
     rtc_clock:       str           = _MC["rtc_clock"]
     tsc_deadline:    bool          = _MC["tsc_deadline"]
     kvm_pv_features: bool          = _MC["kvm_pv_features"]
+    hardened:        bool          = _MC["hardened"]
+    stealth:         bool          = _MC.get("stealth", False)
+    tpm:             bool          = _MC.get("tpm", False)
     hugepages_path:  str           = _MC["hugepages_path"]
     extra_args:      List[str]     = field(default_factory=list)
     # ARM / non-x86 support
@@ -392,10 +437,14 @@ class MachineConfig:
         self.cpu_cores   = int(self.cpu_cores)
         self.cpu_threads = int(self.cpu_threads)
         self.memory_mb   = int(self.memory_mb)
-        if self.uefi and self.bios == "ovmf" and not OVMF["available"]:
-            # Auto-fallback to seabios if OVMF not found
-            self.bios = "seabios"
-            self.uefi = False
+        if self.stealth:
+            self.hardened = True   # stealth implies hardened
+        if self.bios in ("ovmf", "ovmf_ms"):
+            if OVMF["available"]:
+                self.uefi = True   # bios=ovmf always implies uefi=True
+            else:
+                self.bios = "seabios"
+                self.uefi = False
 
     # Returns the VM's directory path (~/.qemu_vms/<name>).
     # In: nothing → Out: str

@@ -124,7 +124,7 @@
   },
   "network_config_defaults": {
     "mode":   "nat",
-    "model":  "virtio-net-pci",
+    "model":  "e1000e",
     "bridge": "virbr0"
   },
   "machine_config_defaults": {
@@ -153,6 +153,7 @@
     "product_name":     "",
     "manufacturer":     "",
     "serial_number":    "",
+    "board_product":    "",
     "bios_version":     "",
     "bios_vendor":      "",
     "kernel_cmdline":   "",
@@ -167,7 +168,10 @@
     "kvm_pv_features":  true,
     "hugepages_path":   "/dev/hugepages",
     "qemu_binary":      "qemu-system-x86_64",
-    "machine_arch":     "x86_64"
+    "machine_arch":     "x86_64",
+    "hardened":         false,
+    "stealth":          false,
+    "tpm":              false
   },
   "log_default_lines": 50,
   "valid_machine_types": ["q35", "pc", "pc-i440fx", "microvm", "virt", "raspi3b", "raspi2b", "raspi0"],

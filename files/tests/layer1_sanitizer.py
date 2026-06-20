@@ -542,6 +542,35 @@ SANITISER_TESTS: List[SanitiserTest] = [
         unchanged_fields=["machine_type"],
     ),
 
+    # ── disk_format / disk_bus confusion ─────
+    SanitiserTest(
+        id="disk_format_bus_name_promoted",
+        tags=["disk","hallucination"],
+        description="Bus name passed as disk_format is promoted to disk_bus",
+        tool="create_vm",
+        input_args={"name": "test", "os_type": "linux", "disk_format": "sata"},
+        expect_fields={"disk_bus": "sata"},
+        removed_fields=["disk_format"],
+    ),
+    SanitiserTest(
+        id="disk_format_nvme_promoted",
+        tags=["disk","hallucination"],
+        description="'nvme' as disk_format is promoted to disk_bus",
+        tool="create_vm",
+        input_args={"name": "test", "os_type": "linux", "disk_format": "nvme"},
+        expect_fields={"disk_bus": "nvme"},
+        removed_fields=["disk_format"],
+    ),
+    SanitiserTest(
+        id="disk_format_qcow2_preserved",
+        tags=["disk"],
+        description="Legitimate disk_format 'qcow2' is not touched",
+        tool="create_vm",
+        input_args={"name": "test", "os_type": "linux", "disk_format": "qcow2"},
+        expect_fields={"disk_format": "qcow2"},
+        unchanged_fields=["disk_format"],
+    ),
+
     # ── Empty field cleanup ───────────────────
     SanitiserTest(
         id="empty_optional_fields_removed",
@@ -608,3 +637,127 @@ def run_sanitiser_test(tc: SanitiserTest) -> TestResult:
         duration_s=time.time()-start,
         detail={"original": original, "sanitised": sanitised},
     )
+
+
+# ─────────────────────────────────────────────
+#  VM SPEC PREVIEW UNIT TESTS
+# ─────────────────────────────────────────────
+
+def run_preview_tests() -> List[TestResult]:
+    import time as _time
+    from ai.cli import _build_vm_spec_rows
+
+    cases = [
+        {
+            "id":    "preview_disk_bus_from_disk_bus_arg",
+            "desc":  "disk_bus='sata' shows 'sata' in preview",
+            "args":  {"name": "t", "os_type": "linux", "disk_bus": "sata", "disk_size_gb": 60},
+            "check": lambda rows: dict(rows).get("Disk", "").startswith("60 GB (sata)"),
+        },
+        {
+            "id":    "preview_disk_bus_from_disk_format_bus_name",
+            "desc":  "disk_format='sata' (AI mistake) still shows 'sata' in preview",
+            "args":  {"name": "t", "os_type": "linux", "disk_format": "sata", "disk_size_gb": 60},
+            "check": lambda rows: dict(rows).get("Disk", "").startswith("60 GB (sata)"),
+        },
+        {
+            "id":    "preview_hardened_forces_q35",
+            "desc":  "hardened=True shows q35 in Machine row even without explicit machine_type",
+            "args":  {"name": "t", "os_type": "linux", "hardened": True, "serial_number": "X"},
+            "check": lambda rows: dict(rows).get("Machine", "").startswith("q35"),
+        },
+        {
+            "id":    "preview_no_profile_when_smbios_set",
+            "desc":  "Profile row absent when serial_number is provided",
+            "args":  {"name": "t", "os_type": "linux", "serial_number": "X",
+                      "manufacturer": "Dell Inc.", "profile": "dell_g15_5520"},
+            "check": lambda rows: "Profile" not in dict(rows),
+        },
+    ]
+
+    results = []
+    for case in cases:
+        start = _time.time()
+        issues = []
+        try:
+            rows = _build_vm_spec_rows(case["args"])
+            if not case["check"](rows):
+                issues.append(f"Preview check failed. Rows: {dict(rows)}")
+        except Exception:
+            import traceback as _tb
+            issues.append(f"Exception: {_tb.format_exc()}")
+        results.append(TestResult(
+            test_id=case["id"], layer=1, passed=len(issues) == 0,
+            issues=issues, fixes_applied=[], duration_s=_time.time() - start,
+        ))
+    return results
+
+
+# ─────────────────────────────────────────────
+#  ARG BUILDER INVARIANT TESTS
+#  Regression tests for crash-causing arg bugs.
+# ─────────────────────────────────────────────
+
+def run_arg_builder_tests() -> List[TestResult]:
+    import time as _time, traceback as _tb
+    from api.qemu_config import MachineConfig
+    from api.qemu_arg_builder import QemuArgBuilder
+
+    results: List[TestResult] = []
+
+    def _build(overrides: dict) -> List[str]:
+        defaults = dict(name="argtest", os_type="linux", machine_type="q35",
+                        bios="seabios", uefi=False, hardened=False,
+                        gpu="none", display="sdl", memory_mb=512,
+                        cpu_cores=1, cpu_threads=1)
+        defaults.update(overrides)
+        cfg = MachineConfig(**defaults)
+        return QemuArgBuilder(cfg).build()
+
+    cases = [
+        {
+            "id":    "argbld_smm_off_absent_in_hardened",
+            "desc":  "hardened=True must NOT add smm=off (crashes OVMF/KVM at Linux boot)",
+            "build": lambda: _build({"hardened": True, "machine_type": "q35"}),
+            "check": lambda cmd: "smm=off" not in " ".join(cmd),
+        },
+        {
+            "id":    "argbld_gpu_none_no_nographic",
+            "desc":  "gpu=none + display=sdl must NOT produce -nographic (hides window)",
+            "build": lambda: _build({"gpu": "none", "display": "sdl"}),
+            "check": lambda cmd: "-nographic" not in cmd,
+        },
+        {
+            "id":    "argbld_no_smbios_type3_duplicate_type",
+            "desc":  "-smbios type=3 must NOT be emitted (invalid type= field crashes QEMU)",
+            "build": lambda: _build({"smbios_type": "Notebook", "manufacturer": "Dell"}),
+            "check": lambda cmd: not any("type=3" in a and a.count("type=") > 1 for a in cmd),
+        },
+        {
+            "id":    "argbld_ovmf_bios_sets_uefi_true",
+            "desc":  "MachineConfig with bios=ovmf must coerce uefi=True (prevents missing VARS)",
+            "build": lambda: [MachineConfig(name="t", bios="ovmf", uefi=False).uefi],
+            "check": lambda result: result == [True],
+        },
+        {
+            "id":    "argbld_kvm_pv_unhalt_suppressed_with_kvm_off",
+            "desc":  "kvm_pv_unhalt must not appear when kvm=off is active (conflicts with hidden KVM)",
+            "build": lambda: _build({"hardened": True, "kvm_pv_features": True}),
+            "check": lambda cmd: not any("kvm_pv_unhalt" in a and "kvm=off" in " ".join(cmd) for a in cmd),
+        },
+    ]
+
+    for case in cases:
+        start = _time.time()
+        issues = []
+        try:
+            result = case["build"]()
+            if not case["check"](result):
+                issues.append(f"Invariant violated. Built: {result}")
+        except Exception:
+            issues.append(f"Exception: {_tb.format_exc()}")
+        results.append(TestResult(
+            test_id=case["id"], layer=1, passed=len(issues) == 0,
+            issues=issues, fixes_applied=[], duration_s=_time.time() - start,
+        ))
+    return results

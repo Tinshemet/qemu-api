@@ -11,13 +11,14 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 from typing import List, Tuple
 
 from .qemu_config import (
-    AUDIO_PRESETS, BIOS_OPTIONS, CPU_PRESETS, GPU_PRESETS, MachineConfig, OVMF,
+    AUDIO_PRESETS, BIOS_OPTIONS, CPU_PRESETS, GPU_PRESETS, MachineConfig, NetworkConfig, OVMF,
 )
 
 _CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
@@ -180,6 +181,8 @@ class QemuArgBuilder:
     def build(self) -> List[str]:
         self.args = [self.cfg.qemu_binary]
         self._base()
+        if self.cfg.hardened and not self.is_arm:
+            self._harden()
         self._machine()
         self._cpu()
         self._memory()
@@ -199,6 +202,8 @@ class QemuArgBuilder:
         self._serial()
         if not self.is_arm:
             self._misc()       # virtio-rng not needed on ARM
+        if self.cfg.tpm and not self.is_arm:
+            self._tpm()
         self.args += self.cfg.extra_args
         return [a for a in self.args if a]
 
@@ -212,6 +217,38 @@ class QemuArgBuilder:
         if self.is_arm:
             self.cfg.kvm = False  # KVM never works for ARM guests on x86 host
 
+    # Hardens the VM against guest escape and fingerprinting. Mutates cfg before
+    # other builders run so their output already reflects the hardened state.
+    # In: nothing → Out: mutates self.cfg + appends seccomp args
+    def _harden(self):
+        # Hide hypervisor CPUID bit and KVM paravirt leaves — keeps KVM perf,
+        # removes the flag that tells the guest it's inside a hypervisor.
+        # -vmx: remove VMX flag so kvm_intel.ko cannot load inside the guest
+        # (if the guest sees vmx, it loads kvm_intel, which lsmod exposes to inxi).
+        for flag in ("-hypervisor", "kvm=off", "-vmx"):
+            if flag not in self.cfg.cpu_features:
+                self.cfg.cpu_features.append(flag)
+        # cpu=host already inherits all host mitigations (ssbd, ibrs, md-clear,
+        # etc.) so don't force-add them — KVM rejects flags the host doesn't
+        # actually expose (e.g. spec-ctrl on Enhanced IBRS CPUs).
+        # Disable memory balloon — it can leak timing information between tenants.
+        self.cfg.balloon = False
+        # Disable hugepages in hardened mode — cross-tenant side-channel risk.
+        self.cfg.hugepages = False
+        # Force NAT for hardened VMs — prevents guest from seeing or attacking
+        # the LAN. Exception: stealth VMs use bridge intentionally so they get
+        # a real LAN IP and don't expose the 10.0.2.x QEMU NAT subnet.
+        if not self.cfg.stealth:
+            for net in self.cfg.networks:
+                if net.mode == "bridge":
+                    net.mode = "nat"
+        # QEMU seccomp sandbox — prevents the QEMU process itself from making
+        # dangerous syscalls even if the guest achieves code execution in QEMU.
+        self.args += [
+            "-sandbox",
+            "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
+        ]
+
     # Adds -machine with KVM/IOMMU accelerators and -rtc.
     # In: nothing → Out: appends to self.args
     def _machine(self):
@@ -221,6 +258,14 @@ class QemuArgBuilder:
             extras.append("accel=kvm")
         if self.cfg.iommu and not self.is_arm:
             extras.append("kernel_irqchip=on")
+        # Override ACPI OEM ID (defaults to "BOCHS  ") to match the declared
+        # manufacturer — inxi and systemd-detect-virt can read ACPI table headers.
+        if self.cfg.manufacturer and not self.is_arm:
+            oem_id = self.cfg.manufacturer[:6].ljust(6)
+            extras.append(f"x-oem-id={oem_id}")
+            if self.cfg.product_name:
+                oem_table = (self.cfg.product_name.replace(" ", ""))[:8]
+                extras.append(f"x-oem-table-id={oem_table}")
         if extras:
             machine_str += "," + ",".join(extras)
         self.args += ["-machine", machine_str]
@@ -239,7 +284,7 @@ class QemuArgBuilder:
         cpu_str  = CPU_PRESETS.get(self.cfg.cpu_model, self.cfg.cpu_model)
         cpu_name = cpu_str.replace("-cpu ", "").split(",")[0]
         features = list(self.cfg.cpu_features)
-        if self.cfg.kvm_pv_features and not self.is_arm:
+        if self.cfg.kvm_pv_features and not self.is_arm and "kvm=off" not in features:
             features.append("+kvm_pv_unhalt")
         feature_str = "".join(f",{f}" for f in features)
         self.args += ["-cpu", f"{cpu_name}{feature_str}"]
@@ -280,8 +325,51 @@ class QemuArgBuilder:
             if vars_path and os.path.exists(vars_path):
                 self.args += ["-drive", f"if=pflash,format=raw,file={vars_path}"]
 
-    # Adds -smbios type=1 (manufacturer/product) and type=0 (BIOS vendor); skipped on ARM.
+    # Adds -smbios type=0 (BIOS), type=1 (system), type=3 (chassis); skipped on ARM.
     # In: nothing → Out: appends to self.args
+    def _chassis_type_byte(self) -> int:
+        mapping = {
+            "notebook": 9, "laptop": 9, "portable": 8,
+            "desktop": 3, "server": 17, "tower": 7, "tablet": 30,
+        }
+        guess = mapping.get((self.cfg.smbios_type or "").lower(), 0)
+        if not guess:
+            guess = mapping.get((self.cfg.machine_class or "").lower(), 3)
+        return guess
+
+    def _write_smbios_chassis_bin(self, chassis_type: int) -> str:
+        """Write a raw SMBIOS type=3 structure with the given chassis_type byte.
+
+        QEMU appends -smbios file= entries after its built-in structures.
+        Linux dmi_scan overwrites dmi_chassis_type for every type=3 hit, so
+        our appended entry overrides QEMU's default chassis_type=1 (Other).
+        Returns the file path, or '' on failure.
+        """
+        if self.is_arm or not chassis_type:
+            return ''
+        mfr = self.cfg.manufacturer or ''
+        mfr_idx = 1 if mfr else 0
+        # SMBIOS type=3 header: type, length, handle, then 9 field bytes
+        header = struct.pack('<BBHBBBBBBBBB',
+            3, 0x0D, 0x0301,          # type, length=13, handle (unique from built-in)
+            mfr_idx, chassis_type,    # manufacturer string-index, chassis_type byte
+            0, 0, 0,                  # version, serial, asset (no strings)
+            3, 3, 3, 3,               # boot-up, psu, thermal, security states = Safe
+        )
+        strings = (mfr.encode('ascii', errors='replace') + b'\x00') if mfr else b''
+        strings += b'\x00'  # end-of-strings marker
+        blob = header + strings
+
+        try:
+            vm_dir = os.path.expanduser(f"~/.qemu_vms/{self.cfg.name}")
+            os.makedirs(vm_dir, exist_ok=True)
+            path = os.path.join(vm_dir, 'smbios_chassis.bin')
+            with open(path, 'wb') as f:
+                f.write(blob)
+            return path
+        except OSError:
+            return ''
+
     def _smbios(self):
         if self.is_arm:
             return
@@ -297,6 +385,29 @@ class QemuArgBuilder:
             if self.cfg.bios_vendor:  parts.append(f"vendor={self.cfg.bios_vendor}")
             if self.cfg.bios_version: parts.append(f"version={self.cfg.bios_version}")
             self.args += ["-smbios", ",".join(parts)]
+        # type=2 (baseboard): override board_vendor/board_name which default to
+        # "QEMU" and "Standard PC (Q35+ICH9)" — inxi reads these via DMI and
+        # uses them to identify KVM even when CPUID is hidden.
+        board_vendor  = self.cfg.manufacturer
+        board_product = self.cfg.board_product or self.cfg.product_name
+        if board_vendor or board_product:
+            parts = ["type=2"]
+            if board_vendor:  parts.append(f"manufacturer={board_vendor}")
+            if board_product: parts.append(f"product={board_product}")
+            self.args += ["-smbios", ",".join(parts)]
+        # type=3 (chassis): override chassis_vendor which defaults to "QEMU".
+        # chassis_type byte is NOT settable via -smbios CLI in QEMU 8.x, so we
+        # inject a raw SMBIOS type=3 binary. QEMU appends -smbios file= entries
+        # AFTER its built-in structures; the Linux DMI scanner overwrites
+        # dmi_chassis_type on each type=3 hit, so the last entry (ours) wins.
+        chassis_type = self._chassis_type_byte()
+        chassis_bin  = self._write_smbios_chassis_bin(chassis_type)
+        if chassis_bin:
+            # Binary already includes manufacturer; QEMU rejects both file= and
+            # type=3 CLI for the same structure type simultaneously.
+            self.args += ["-smbios", f"file={chassis_bin}"]
+        elif self.cfg.manufacturer:
+            self.args += ["-smbios", f"type=3,manufacturer={self.cfg.manufacturer}"]
 
     # Adds disk drives (SD card for raspi, virtio/NVMe/SCSI/IDE for x86) and ISO cdrom.
     # In: nothing → Out: appends to self.args
@@ -319,7 +430,7 @@ class QemuArgBuilder:
         if self.cfg.iso_path:
             self.args += [
                 "-drive",  f"file={self.cfg.iso_path},if=none,id=cdrom0,readonly=on,media=cdrom",
-                "-device", "ide-cd,drive=cdrom0,bootindex=1",
+                "-device", "ide-cd,drive=cdrom0,bootindex=1,model=HL-DT-ST DVDRAM GU90N",
             ]
             if not self.cfg.uefi:
                 # Legacy BIOS only — UEFI uses bootindex and ignores -boot order
@@ -332,7 +443,8 @@ class QemuArgBuilder:
     # In: nothing → Out: appends to self.args
     def _network(self):
         if not self.cfg.networks:
-            self.args += ["-nic", "user,model=virtio-net-pci"]
+            net = NetworkConfig(manufacturer_hint=self.cfg.manufacturer)
+            self.args += net.to_qemu_args()
             return
         for net in self.cfg.networks:
             self.args += net.to_qemu_args()
@@ -359,9 +471,20 @@ class QemuArgBuilder:
             self.args += ["-nographic"]  # raspi3b has NO video output in QEMU
             return
         gpu_device = GPU_PRESETS.get(self.cfg.gpu)
-        if self.cfg.display == "none" or self.cfg.gpu == "none":
+        if self.cfg.display == "none":
             self.args += ["-nographic"]
             return
+        if self.cfg.gpu == "none":
+            # Linux stealth: vmware-svga loads vmwgfx (no "qemu" in module name).
+            # Windows stealth: std VGA — no VMware driver needed, avoids "VMware SVGA"
+            #   showing up in Device Manager before any driver install.
+            # Non-stealth: cirrus-vga (loads cirrus_qemu, reveals hypervisor via lsmod).
+            # Bochs VGA (QEMU default) uses PCI ID 1234:1111 which inxi flags as QEMU.
+            if self.cfg.stealth:
+                device = "VGA" if self.cfg.os_type == "windows" else "vmware-svga"
+            else:
+                device = "cirrus-vga"
+            self.args += ["-device", device]
 
         gl_wanted = self.cfg.opengl and not self.is_arm
         gl_ok     = gl_wanted and self._gl_available()
@@ -435,14 +558,13 @@ class QemuArgBuilder:
     # Adds xHCI controller, keyboard, and tablet/mouse device.
     # In: nothing → Out: appends to self.args
     def _usb(self):
-        self.args += ["-device", "qemu-xhci,id=usb", "-device", "usb-kbd"]
+        # nec-usb-xhci: NEC uPD720200 USB 3.0 (PCI 1033:0194) — real chip PCI IDs.
+        # qemu-xhci uses 1b36 (Red Hat/QEMU) which inxi detects as virtual.
+        self.args += ["-device", "nec-usb-xhci,id=usb", "-device", "usb-kbd"]
         self.args += ["-device", "usb-tablet" if self.cfg.tablet else "usb-mouse"]
 
-    # Adds acpi-battery device for laptop profiles (x86 only).
-    # In: nothing → Out: appends to self.args
     def _battery(self):
-        if self.cfg.battery and not self.is_arm:
-            self.args += ["-device", "acpi-battery"]
+        pass  # acpi-battery is not a valid QEMU device; battery via ACPI tables is not yet implemented
 
     # Adds -kernel, -initrd, -append for direct kernel boot if paths are set.
     # In: nothing → Out: appends to self.args
@@ -508,7 +630,21 @@ class QemuArgBuilder:
             sock = os.path.join(self.vm_dir, "serial.sock")
             self.args += ["-serial", f"unix:{sock},server,nowait"]
 
-    # Adds virtio-rng-pci entropy device and -no-user-config (x86 only).
+    # Adds entropy device and -no-user-config (x86 only).
+    # virtio-rng-pci uses PCI vendor 1af4 (Red Hat/QEMU) — detectable by inxi.
+    # Hardened VMs skip it; non-hardened get it for performance.
     # In: nothing → Out: appends to self.args
+    def _tpm(self):
+        tpm_sock = os.path.join(self.cfg.get_vm_dir(), "tpm.sock")
+        self.args += [
+            "-chardev", f"socket,id=chrtpm,path={tpm_sock}",
+            "-tpmdev",  "emulator,id=tpm0,chardev=chrtpm",
+            "-device",  "tpm-tis,tpmdev=tpm0",
+        ]
+
     def _misc(self):
-        self.args += ["-device", "virtio-rng-pci", "-no-user-config"]
+        if not self.cfg.hardened:
+            self.args += ["-device", "virtio-rng-pci"]
+        if self.cfg.iso_path:
+            self.args += ["-no-reboot"]
+        self.args += ["-no-user-config"]

@@ -140,11 +140,23 @@ def _tf_report(name: str, summary: bool = False) -> dict:
                             "value": oui.upper(), "status": "ok",
                             "detail": "OUI not in known QEMU range"})
 
-    # Bug fix: use network_mode resolved above, not cfg.network_mode
+    _VM_NIC_MODELS = {"virtio-net-pci", "virtio-net", "vmxnet3"}
+    nic_model = ""
+    if cfg.networks:
+        nic_model = (cfg.networks[0].model or "").strip()
     if network_mode not in ("none", ""):
-        checks.append({"section": "inxi -N", "field": "NIC driver",
-                        "value": "virtio-net-pci", "status": "warn",
-                        "detail": "virtio-net is a paravirtual driver — VM indicator (e1000 is less detectable)"})
+        if nic_model in _VM_NIC_MODELS:
+            checks.append({"section": "inxi -N", "field": "NIC driver",
+                            "value": nic_model, "status": "warn",
+                            "detail": f"'{nic_model}' is a paravirtual driver — VM indicator; use e1000e or rtl8139"})
+        elif nic_model:
+            checks.append({"section": "inxi -N", "field": "NIC driver",
+                            "value": nic_model, "status": "ok",
+                            "detail": f"'{nic_model}' emulates real hardware NIC"})
+        else:
+            checks.append({"section": "inxi -N", "field": "NIC driver",
+                            "value": "(default)", "status": "ok",
+                            "detail": "e1000e emulates real Intel NIC"})
 
     # ── inxi -C: CPU ──────────────────────────────────────────────────────────
     cpu = (cfg.cpu_model or "host").lower()
@@ -171,12 +183,29 @@ def _tf_report(name: str, summary: bool = False) -> dict:
                         "detail": "Named CPU model set"})
 
     # ── inxi -D: Disk ─────────────────────────────────────────────────────────
-    checks.append({"section": "inxi -D", "field": "Disk interface",
-                    "value": "virtio-blk (vda/vdb)", "status": "warn",
-                    "detail": "virtio-blk device names (vda, vdb) are a strong VM indicator"})
-    checks.append({"section": "inxi -D", "field": "Disk model string",
-                    "value": "QEMU HARDDISK (default)", "status": "fail",
-                    "detail": "QEMU sets disk model to 'QEMU HARDDISK' — add model= to extra_args to override"})
+    disk = cfg.disks[0] if cfg.disks else None
+    disk_bus = (disk.bus if disk else "virtio").lower()
+    if disk_bus == "virtio":
+        checks.append({"section": "inxi -D", "field": "Disk interface",
+                        "value": "virtio-blk (vda/vdb)", "status": "warn",
+                        "detail": "virtio-blk device names (vda, vdb) are a strong VM indicator; use sata, nvme, or scsi"})
+    else:
+        checks.append({"section": "inxi -D", "field": "Disk interface",
+                        "value": disk_bus, "status": "ok",
+                        "detail": f"'{disk_bus}' uses real hardware device names (sda/nvme0n1)"})
+    disk_model = (disk.disk_model if disk else "").strip()
+    if not disk_model:
+        checks.append({"section": "inxi -D", "field": "Disk model string",
+                        "value": "QEMU HARDDISK (default)", "status": "fail",
+                        "detail": "QEMU default disk model is 'QEMU HARDDISK' — set disk_model to a real drive name"})
+    elif disk_bus == "virtio":
+        checks.append({"section": "inxi -D", "field": "Disk model string",
+                        "value": disk_model, "status": "warn",
+                        "detail": f"Model set to '{disk_model}' but virtio-blk does not expose model to guest — switch bus to sata/nvme/scsi"})
+    else:
+        checks.append({"section": "inxi -D", "field": "Disk model string",
+                        "value": disk_model, "status": "ok",
+                        "detail": f"'{disk_model}' will be reported by inxi -D"})
 
     # ── inxi -A: Audio ────────────────────────────────────────────────────────
     audio = (cfg.audio or "none").lower()
@@ -211,6 +240,25 @@ def _tf_report(name: str, summary: bool = False) -> dict:
         checks.append({"section": "inxi -G", "field": "GPU driver",
                         "value": gpu, "status": "ok",
                         "detail": "Non-standard GPU type"})
+
+    # ── Hardened / host security ──────────────────────────────────────────────
+    if getattr(cfg, "hardened", False):
+        checks.append({"section": "host security", "field": "QEMU seccomp sandbox",
+                        "value": "enabled", "status": "ok",
+                        "detail": "QEMU process is seccomp-sandboxed — guest code execution in QEMU cannot make dangerous syscalls"})
+        checks.append({"section": "host security", "field": "Hypervisor CPUID bit",
+                        "value": "hidden (-hypervisor, kvm=off)", "status": "ok",
+                        "detail": "Guest cannot detect KVM via CPUID; KVM acceleration still active for performance"})
+        checks.append({"section": "host security", "field": "CPU speculation mitigations",
+                        "value": "spec-ctrl, ssbd, md-clear, ibrs, stibp", "status": "ok",
+                        "detail": "Spectre/Meltdown mitigation flags exposed to guest — reduces cross-VM leakage risk"})
+        checks.append({"section": "host security", "field": "SMM (ring-below-ring0)",
+                        "value": "disabled (smm=off)", "status": "ok",
+                        "detail": "System Management Mode disabled — removes a common firmware-level escape vector"})
+    else:
+        checks.append({"section": "host security", "field": "Hardened mode",
+                        "value": "off", "status": "warn",
+                        "detail": "hardened=True adds seccomp sandbox, hides hypervisor CPUID, disables SMM, and adds speculation mitigations"})
 
     # ── Score ─────────────────────────────────────────────────────────────────
     n_ok   = sum(1 for c in checks if c["status"] == "ok")

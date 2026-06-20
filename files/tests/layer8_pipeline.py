@@ -113,6 +113,59 @@ def _m(tool, args, note=""):
         expect_success=False, expect_layer="executor",
     )
 
+def _c(tool, args, note="", exp_success=True):
+    """Conflict pair: valid required fields + contradictory optional pair; sanitizer should resolve."""
+    return PipelineTest(
+        id=f"p8_conflict_{tool}_{_uid(args)}",
+        tags=["pipeline", "conflict", tool],
+        description=note or f"{tool} conflict pair",
+        tool=tool, input_args=args, category="conflict",
+        expect_success=exp_success,
+        expect_layer="ok" if exp_success is True else ("executor" if exp_success is False else None),
+    )
+
+def _cs(tool, args, note=""):
+    """Conflict pair, state-dependent outcome."""
+    return PipelineTest(
+        id=f"p8_conflict_{tool}_{_uid(args)}",
+        tags=["pipeline", "conflict", "state_dep", tool],
+        description=f"[state-dep] {note or tool}",
+        tool=tool, input_args=args, category="conflict",
+        expect_success=None, expect_layer=None,
+    )
+
+def _fk(tool, args, note="", exp_success=True):
+    """Foreign keys: valid required fields + keys from another tool's schema (executor ignores)."""
+    return PipelineTest(
+        id=f"p8_foreign_{tool}_{_uid(args)}",
+        tags=["pipeline", "foreign", tool],
+        description=note or f"{tool} + foreign keys",
+        tool=tool, input_args=args, category="foreign",
+        expect_success=exp_success,
+        expect_layer="ok" if exp_success is True else ("executor" if exp_success is False else None),
+    )
+
+def _fks(tool, args, note=""):
+    """Foreign keys, state-dependent."""
+    return PipelineTest(
+        id=f"p8_foreign_{tool}_{_uid(args)}",
+        tags=["pipeline", "foreign", "state_dep", tool],
+        description=f"[state-dep] {note or tool}",
+        tool=tool, input_args=args, category="foreign",
+        expect_success=None, expect_layer=None,
+    )
+
+def _jk(tool, args, note="", exp_success=True):
+    """Junk keys: valid required fields + completely made-up field names (executor ignores)."""
+    return PipelineTest(
+        id=f"p8_junk_{tool}_{_uid(args)}",
+        tags=["pipeline", "junk", tool],
+        description=note or f"{tool} + junk keys",
+        tool=tool, input_args=args, category="junk",
+        expect_success=exp_success,
+        expect_layer="ok" if exp_success is True else ("executor" if exp_success is False else None),
+    )
+
 
 # ── Fixed test cases ───────────────────────────────────────────────────────────
 
@@ -164,6 +217,11 @@ PIPELINE_TESTS: List[PipelineTest] = [
     _bs("create_profile", {"profile_name":"probe8_bgpu",   "description":"bad","gpu":"foobar"},              "invalid gpu — sanitizer resets"),
     _bs("create_profile", {"profile_name":"probe8_bmem",   "description":"bad","memory_mb":-1},              "negative memory — sanitizer clamps to min"),
     _bs("create_profile", {"profile_name":"probe8_barch",  "description":"bad","machine_arch":"foobar"},     "invalid arch — sanitizer resets to default"),
+    _bs("create_profile", {"profile_name":"probe8_bcores", "description":"bad","cpu_cores":-1},              "negative cpu_cores — sanitizer clamps to 1"),
+    _bs("create_profile", {"profile_name":"probe8_bmxcores","description":"bad","cpu_cores":9999},           "exceeds host cores — sanitizer clamps"),
+    _bs("create_profile", {"profile_name":"probe8_bthreads","description":"bad","cpu_threads":-1},           "negative cpu_threads — sanitizer converts type but doesn't clamp, profile saves"),
+    _bs("create_profile", {"profile_name":"probe8_bbios",  "description":"bad","bios":"foobar","cpu_model":"host","memory_mb":2048}, "invalid bios — sanitizer resets to default, hardware present so profile saves"),
+    _bs("create_profile", {"profile_name":"probe8_bclass", "description":"bad","machine_class":"foobar"},    "invalid machine_class — sanitizer resets to default"),
     _m ("create_profile", {"profile_name":"probe8_nodesc"},                                                   "no description"),
     _m ("create_profile", {"description":"test"},                                                             "no profile_name"),
     _m ("create_profile", {},                                                                                 "both missing"),
@@ -198,11 +256,28 @@ PIPELINE_TESTS: List[PipelineTest] = [
     _bs("create_vm", {"name":"probe8_baudio", "os_type":"linux","audio":"foobar"},                             "invalid audio — sanitizer resets"),
     _bs("create_vm", {"name":"probe8_bnet",   "os_type":"linux","network_mode":"foobar"},                      "invalid network mode — sanitizer resets"),
     _bs("create_vm", {"name":"probe8_bfmt",   "os_type":"linux","disk_format":"foobar"},                       "invalid disk format — sanitizer resets"),
+    _bs("create_vm", {"name":"probe8_busfmt", "os_type":"linux","disk_format":"sata"},                          "bus name as disk_format — sanitizer promotes to disk_bus"),
+    _v ("create_vm", {"name":"probe8_bprod",  "os_type":"linux","board_product":"XPS 15 9530"},                                    "board_product — sets SMBIOS type=2 baseboard product"),
+    _v ("create_vm", {"name":"probe8_bprod2", "os_type":"linux","board_product":"ThinkPad T14s","manufacturer":"Lenovo"},           "board_product + manufacturer — both used for type=2 baseboard"),
+    _v ("create_vm", {"name":"probe8_bprod3", "os_type":"linux","board_product":"XPS 15 9530","product_name":"Latitude 7420"},      "board_product + product_name — type=2 uses board_product, type=1 uses product_name"),
+    _c ("create_vm", {"name":"probe8_bprod_c","os_type":"linux","board_product":"XPS 15 9530","product_name":"Latitude 7420","manufacturer":"Dell"}, "board_product differs from product_name — type=2 silently uses board_product"),
+    _v ("create_vm", {"name":"probe8_harden",  "os_type":"linux","hardened":True,"manufacturer":"Dell","serial_number":"SN12345"}, "hardened + SMBIOS — no profile applied"),
+    _v ("create_vm", {"name":"probe8_stealth", "os_type":"linux","stealth":True},                                                  "stealth=True Linux"),
+    _v ("create_vm", {"name":"probe8_stlhrd",  "os_type":"linux","stealth":True,"hardened":True},                                  "stealth + hardened Linux"),
+    _v ("create_vm", {"name":"probe8_stlwin",  "os_type":"windows","stealth":True,"bios":"ovmf_ms","tpm":True,"disk_size_gb":40},  "stealth Windows + ovmf_ms + tpm"),
+    _v ("create_vm", {"name":"probe8_tpm",     "os_type":"linux","tpm":True},                                                      "tpm=True"),
+    _v ("create_vm", {"name":"probe8_ovmfms",  "os_type":"windows","bios":"ovmf_ms","disk_size_gb":40},                           "bios=ovmf_ms Secure Boot"),
+    _v ("create_vm", {"name":"probe8_stlsmbios","os_type":"linux","stealth":True,"manufacturer":"Dell Inc.","product_name":"Latitude 5530","serial_number":"SN12345","bios_vendor":"Dell Inc.","bios_version":"1.15.0","machine_class":"laptop"}, "full stealth SMBIOS cluster"),
+    _v ("create_vm", {"name":"probe8_ovrw",   "os_type":"linux","overwrite":True},                              "overwrite=True on fresh name — sanitizer passes, executor creates"),
     _bs("create_vm", {"name":"probe8_bmac",   "os_type":"linux","mac_address":"not-a-mac"},                    "invalid MAC — sanitizer strips, VM created without custom MAC"),
     _bs("create_vm", {"name":"probe8_bmem",   "os_type":"linux","memory_mb":999999999},                        "exceeds host RAM — sanitizer clamps"),
     _bs("create_vm", {"name":"probe8_bcores", "os_type":"linux","cpu_cores":9999},                             "exceeds host cores — sanitizer clamps"),
     _bs("create_vm", {"name":"probe8_bbr",    "os_type":"linux","bridge_iface":"eth0"},                        "raw ethernet iface — sanitizer replaces with default bridge"),
     _bs("create_vm", {"name":"probe8_biso",   "os_type":"linux","iso_path":"/home/fakeuser/fake.iso"},         "hallucinated ISO path — sanitizer resolves or clears"),
+    _bs("create_vm", {"name":"probe8_bthreads","os_type":"linux","cpu_threads":-1},                            "negative cpu_threads — sanitizer converts type, VM created with value saved"),
+    _bs("create_vm", {"name":"probe8_bdisk",  "os_type":"linux","disk_size_gb":-1},                            "negative disk_size — sanitizer clamps to minimum"),
+    _bs("create_vm", {"name":"probe8_bgpu",   "os_type":"linux","gpu":"foobar"},                               "invalid gpu — sanitizer resets to default"),
+    _bs("create_vm", {"name":"probe8_bmtype", "os_type":"linux","machine_type":"foobar"},                      "invalid machine_type — sanitizer removes field, VM created with default"),
     _m ("create_vm", {"os_type":"linux"},                                                                      "no name — executor has own check, returns clarify"),
     _vs("create_vm", {"name":"probe8_noos"},                                                                   "no os_type — executor picks a default and succeeds"),
     _m ("create_vm", {},                                                                                       "both missing — executor catches missing name"),
@@ -268,7 +343,9 @@ PIPELINE_TESTS: List[PipelineTest] = [
     _b ("resize_disk", {"name":"probe8_min","new_size_gb":10},               "shrink — 10 < 60GB default, qemu-img rejects without --shrink"),
     _b ("resize_disk", {"name":"ghost_xyz","new_size_gb":80},            "VM doesn't exist"),
     _b ("resize_disk", {"name":"probe8_min","new_size_gb":-500},             "negative size — sanitizer clamps but resulting size still causes shrink error"),
+    _b ("resize_disk", {"name":"probe8_min","new_size_gb":99999,"disk_index":-1}, "negative disk_index — sanitizer passes through, executor fails finding disk"),
     _vs("resize_disk", {"name":"probe8_min","new_size_gb":99999},            "99999GB — qemu-img succeeds (sparse file, no host space check)"),
+    _vs("resize_disk", {"name":"probe8_min","new_size_gb":99999,"disk_index":0},  "disk_index=0 — explicit primary disk, grow"),
     _m ("resize_disk", {"name":"probe8_min"},                                "no new_size_gb"),
     _m ("resize_disk", {"new_size_gb":80},                               "no name"),
     _m ("resize_disk", {},                                               "both missing"),
@@ -299,6 +376,7 @@ PIPELINE_TESTS: List[PipelineTest] = [
     _b ("snapshot_delete", {"name":"probe8_min","snap_name":"ghost_snap"},   "snap doesn't exist"),
     _b ("snapshot_delete", {"name":"ghost_xyz","snap_name":"snap1"},     "VM doesn't exist"),
     _m ("snapshot_delete", {"name":"probe8_min"},                            "no snap_name"),
+    _m ("snapshot_delete", {"snap_name":"probe8_snap"},                      "no name"),
     _m ("snapshot_delete", {},                                           "both missing"),
 
     # ── set_resource_limits ───────────────────────────────────────────────────
@@ -389,6 +467,136 @@ PIPELINE_TESTS: List[PipelineTest] = [
     _m ("send_monitor_cmd", {"cmd":"info status"},                   "no name"),
     _m ("send_monitor_cmd", {},                                      "both missing"),
     # Running-VM monitor tests excluded — state-dependent
+
+    # ── conflict pairs ────────────────────────────────────────────────────────
+    # Sanitizer resolves: ARM arch forces kvm=False
+    _c ("create_vm", {"name":"probe8_conf_kvm", "os_type":"linux","kvm":True,"machine_arch":"aarch64"},             "kvm=True + aarch64 — sanitizer forces kvm=False"),
+    # Sanitizer resolves: ARM CPU on x86 reset to 'host'
+    _c ("create_vm", {"name":"probe8_conf_cpu", "os_type":"linux","cpu_model":"cortex-a72","machine_arch":"x86_64"},"ARM CPU + x86 arch — sanitizer resets cpu_model to host"),
+    # Sanitizer resolves: raw ethernet iface replaced with default bridge
+    _c ("create_vm", {"name":"probe8_conf_br",  "os_type":"linux","network_mode":"bridge","bridge_iface":"eth0"},   "bridge + raw iface — sanitizer replaces with virbr0"),
+    # Sanitizer does NOT resolve: both pass through; executor uses uefi=True and ignores bios field
+    _c ("create_vm", {"name":"probe8_conf_uefi","os_type":"linux","uefi":True,"bios":"seabios"},                    "uefi=True + seabios — unresolved; executor picks uefi path"),
+    # Sanitizer promotes disk_format=sata to disk_bus, overwriting disk_bus=nvme
+    _c ("create_vm", {"name":"probe8_conf_bus",    "os_type":"linux","disk_format":"sata","disk_bus":"nvme"},                              "bus-as-format + disk_bus — sanitizer promotes format, overwrites disk_bus"),
+    # bios=ovmf_ms (Secure Boot) + uefi=False — executor enforces uefi=True for OVMF bios values
+    _c ("create_vm", {"name":"probe8_conf_secboot","os_type":"windows","bios":"ovmf_ms","uefi":False,"disk_size_gb":40},                   "ovmf_ms + uefi=False — executor overrides uefi to True for OVMF bios"),
+    # stealth=True + hardened=False — no sanitizer resolution, both saved as-is
+    _c ("create_vm", {"name":"probe8_conf_stlhrd", "os_type":"linux","stealth":True,"hardened":False},                                     "stealth=True + hardened=False — unresolved, both saved independently"),
+    # Profile: arch/cpu inconsistency — sanitizer does not reject x86 cpu_model on ARM arch profile
+    _c ("create_profile", {"profile_name":"probe8_confp1","description":"test","memory_mb":2048,"cpu_model":"host","uefi":True,"bios":"seabios"}, "uefi=True + bios=seabios — sanitizer promotes bios to ovmf, profile saves"),
+    _c ("create_profile", {"profile_name":"probe8_confp2","description":"test","uefi":True,"bios":"seabios"},               "uefi + seabios — unresolved, profile saves both"),
+    # launch_vm with display + dry_run=False — live launch is state-dependent
+    _cs("launch_vm", {"name":"probe8_cpu","display":"sdl","dry_run":False}, "display + dry_run=False — live launch is state-dep"),
+
+    # ── foreign keys (valid keys from a different tool's schema) ─────────────
+    _fk ("create_vm",     {"name":"probe8_fk1","os_type":"linux","snap_name":"snap1","net_name":"mynet"},                                     "foreign: snapshot + network keys alongside create_vm args"),
+    _fk ("create_vm",     {"name":"probe8_fkst","os_type":"linux","stealth":True,"snap_name":"snap1","cmd":"info status"},                         "foreign: stealth VM + snapshot + monitor keys"),
+    _fk ("create_vm",     {"name":"probe8_fkwin","os_type":"windows","stealth":True,"tpm":True,"disk_size_gb":40,"snap_name":"snap1","net_name":"x"}, "foreign: stealth Windows + foreign keys"),
+    _fk ("create_vm",     {"name":"probe8_fk2","os_type":"linux","cmd":"info status","new_size_gb":80},              "foreign: monitor + resize keys alongside create_vm args"),
+    _fk ("create_vm",     {"name":"probe8_fk3","os_type":"linux","source_name":"probe8_cpu","profile_name":"rpi"},   "foreign: clone + profile-compat keys alongside create_vm args"),
+    _fk ("show_config",   {"name":"probe8_min","snap_name":"snap1","cpu_percent":50,"dry_run":True},                 "foreign: snapshot + resource + launch keys on show_config"),
+    _fk ("list_vms",      {"snap_name":"snap1","net_name":"mynet","cmd":"info"},                                     "foreign: zero-arg tool — all foreign keys ignored"),
+    _fk ("fingerprint_vm",{"name":"probe8_min","summary":True,"cmd":"info","net_name":"net1"},                       "foreign: monitor + network keys alongside fingerprint args"),
+    _fks("launch_vm",     {"name":"probe8_cpu","snap_name":"prev_snap","profile_name":"rpi","dry_run":True},         "foreign: snapshot + profile keys on launch (dry_run=True, state-dep)"),
+    _fk ("update_config", {"name":"probe8_min","updates":{"memory_mb":2048},"snap_name":"snap1","cmd":"quit"},       "foreign: snapshot + monitor keys on update_config"),
+
+    # ── junk keys (completely made-up field names) ────────────────────────────
+    _jk("create_vm",      {"name":"probe8_jk1","os_type":"linux","foo":"bar","not_a_field":42},                                "junk: two nonsense keys alongside valid required fields"),
+    _jk("create_vm",      {"name":"probe8_jkst","os_type":"linux","stealth":True,"foo":"bar","not_a_field":42},                    "junk: stealth VM + junk keys"),
+    _jk("create_vm",      {"name":"probe8_jkwin","os_type":"windows","stealth":True,"tpm":True,"disk_size_gb":40,"blorp":True},    "junk: stealth Windows + junk key"),
+    _jk("create_vm",      {"name":"probe8_jk2","os_type":"linux","blorp":True,"zxqy":"garbage","zzz":0},            "junk: three nonsense keys alongside valid required fields"),
+    _jk("show_config",    {"name":"probe8_min","foo":"bar","xyz":999,"totally_made_up":True},                       "junk: nonsense keys on simple read tool"),
+    _jk("list_vms",       {"totally_made_up":"yes","another_junk":42,"not_real":True},                              "junk: zero-arg tool receives only junk keys"),
+    _jk("fingerprint_vm", {"name":"probe8_min","summary":True,"foo":"bar","blorp":99},                              "junk: nonsense alongside valid optional field"),
+    _jk("create_profile", {"profile_name":"probe8_jkp","description":"test","cpu_model":"host","memory_mb":2048,"foo":"bar","xyz":True}, "junk: nonsense keys alongside valid hardware fields — junk stripped, profile saves"),
+
+    # ── additional valid (state-dep) — tools that had no valid case ───────────
+    # N/A note: delete_vm valid is intentionally omitted (irreversible, needs dedicated VM setup)
+    _vs("revert",            {},                                                                                   "needs a prior reversible action to exist"),
+    _vs("stop_vm",           {"name":"probe8_min"},                                                               "valid name — needs running VM"),
+    _vs("open_display",      {"name":"probe8_min"},                                                               "valid name — needs running VM with display"),
+    _vs("open_shell",        {"name":"probe8_min"},                                                               "valid name — needs running VM with SSH"),
+    _vs("send_monitor_cmd",  {"name":"probe8_min","cmd":"info status"},                                           "valid args — needs running VM with monitor socket"),
+    _vs("snapshot_delete",   {"name":"probe8_min","snap_name":"probe8_snap"},                                     "valid args — needs an existing snapshot"),
+    _vs("snapshot_restore",  {"name":"probe8_min","snap_name":"probe8_snap"},                                     "valid args — needs an existing snapshot"),
+    _vs("add_vm_to_network", {"net_name":"probe8_net","vm_name":"probe8_min"},                                    "valid args — needs both network and VM to exist"),
+
+    # ── additional conflict pairs ─────────────────────────────────────────────
+    # clone_vm: source and destination are the same VM — self-clone
+    _c ("clone_vm",       {"source_name":"probe8_min","new_name":"probe8_min"},                                   "source = destination — self-clone should fail", exp_success=False),
+    # update_config: conflicting fields nested inside the updates dict (sanitizer doesn't reach inside)
+    _c ("update_config",  {"name":"probe8_min","updates":{"kvm":True,"machine_arch":"aarch64"}},                 "conflicting fields in updates dict — sanitizer doesn't sanitize nested updates"),
+
+    # ── junk keys — remaining tools ───────────────────────────────────────────
+    # broken/missing/conflict are N/A for zero-arg tools; junk and foreign always apply
+    _jk("scan_isos",              {"foo":"bar","not_real":42},                                                    "junk: zero-arg scan tool"),
+    _jk("list_profiles",          {"foo":"bar","not_real":42},                                                    "junk: zero-arg list tool"),
+    _jk("list_networks",          {"foo":"bar","not_real":42},                                                    "junk: zero-arg list tool"),
+    # broken N/A for key-only tools (they don't return success=False on bad input)
+    _jk("check_system",           {"foo":"bar","not_a_field":42},                                                 "junk: zero-arg key-only tool", exp_success=None),
+    _jk("vm_status",              {"name":"probe8_min","foo":"bar","xyz":42},                                     "junk: key-only tool", exp_success=None),
+    _jk("clarify",                {"question":"Which OS?","foo":"bar","xyz":"test"},                              "junk: key-only tool", exp_success=None),
+    _jk("check_profile_compatibility", {"profile_name":"minimal","foo":"bar"},                                    "junk: key-only tool", exp_success=None),
+    _jk("get_vm_logs",            {"name":"probe8_min","foo":"bar"},                                              "junk: key-only tool", exp_success=None),
+    _jk("monitor_vm",             {"name":"probe8_min","foo":"bar"},                                              "junk: key-only tool", exp_success=None),
+    # tools where the base call succeeds
+    _jk("check_disk",             {"name":"probe8_min","foo":"bar","xyz":42},                                     "junk: alongside valid required fields"),
+    _jk("print_command",          {"name":"probe8_min","foo":"bar","xyz":42},                                     "junk: alongside valid required fields"),
+    _jk("snapshot_list",          {"name":"probe8_min","foo":"bar","xyz":True},                                   "junk: alongside valid required fields"),
+    _jk("update_config",          {"name":"probe8_min","updates":{"memory_mb":2048},"foo":"bar"},                 "junk: alongside valid required fields"),
+    _jk("launch_vm",              {"name":"probe8_cpu","dry_run":True,"foo":"bar","xyz":42},                      "junk: alongside dry-run launch"),
+    # tools where base call is state-dep
+    _jk("clone_vm",               {"source_name":"probe8_cpu","new_name":"probe8r_cljk","foo":"bar"},             "junk: state-dep clone", exp_success=None),
+    _jk("create_network",         {"net_name":"probe8r_jknet","foo":"bar","xyz":True},                            "junk: state-dep (may conflict if name exists)", exp_success=None),
+    _jk("resize_disk",            {"name":"probe8_min","new_size_gb":99999,"foo":"bar"},                          "junk: state-dep resize", exp_success=None),
+    _jk("set_resource_limits",    {"name":"probe8_min","cpu_percent":50,"foo":"bar"},                             "junk: state-dep (needs running VM)", exp_success=None),
+    _jk("snapshot_create",        {"name":"probe8_min","snap_name":"probe8r_jksnap","foo":"bar"},                 "junk: state-dep (needs running VM)", exp_success=None),
+    _jk("revert",                 {"foo":"bar","xyz":42},                                                         "junk: zero-arg, outcome depends on prior action", exp_success=None),
+    # tools where the base call fails (VM stopped / entity doesn't exist)
+    _jk("stop_vm",                {"name":"probe8_min","foo":"bar","xyz":True},                                   "junk: VM not running — junk doesn't change outcome", exp_success=False),
+    _jk("open_display",           {"name":"probe8_min","foo":"bar","xyz":True},                                   "junk: VM stopped — junk doesn't change outcome", exp_success=False),
+    _jk("open_shell",             {"name":"probe8_min","foo":"bar","xyz":True},                                   "junk: VM stopped — junk doesn't change outcome", exp_success=False),
+    _jk("send_monitor_cmd",       {"name":"probe8_min","cmd":"info status","foo":"bar"},                          "junk: VM stopped — junk doesn't change outcome", exp_success=False),
+    _jk("snapshot_delete",        {"name":"probe8_min","snap_name":"ghost_snap","foo":"bar"},                     "junk: snapshot doesn't exist — junk doesn't change outcome", exp_success=False),
+    _jk("snapshot_restore",       {"name":"probe8_min","snap_name":"ghost_snap","foo":"bar"},                     "junk: snapshot doesn't exist — junk doesn't change outcome", exp_success=False),
+    _jk("delete_network",         {"net_name":"ghost_r_net","foo":"bar"},                                         "junk: network doesn't exist — junk doesn't change outcome", exp_success=False),
+    _jk("delete_profile",         {"profile_name":"ghost_r_xyz","foo":"bar","xyz":42},                            "junk: profile doesn't exist — junk doesn't change outcome", exp_success=False),
+    _jk("delete_vm",              {"name":"ghost_r_del","foo":"bar","xyz":True},                                  "junk: VM doesn't exist — junk doesn't change outcome", exp_success=False),
+    _jk("add_vm_to_network",      {"net_name":"ghost_r_net","vm_name":"probe8_min","foo":"bar"},                  "junk: network doesn't exist — junk doesn't change outcome", exp_success=False),
+
+    # ── foreign keys — remaining tools ───────────────────────────────────────
+    _fk("scan_isos",              {"name":"probe8_min","os_type":"linux"},                                        "foreign: vm keys on zero-arg scan"),
+    _fk("list_profiles",          {"name":"probe8_min","net_name":"mynet"},                                       "foreign: vm+network keys on zero-arg list"),
+    _fk("list_networks",          {"name":"probe8_min","snap_name":"snap1"},                                      "foreign: vm+snapshot keys on zero-arg list"),
+    _fk("check_system",           {"name":"probe8_min","snap_name":"snap1","os_type":"linux"},                    "foreign: vm+snapshot keys on zero-arg key-only tool", exp_success=None),
+    _fk("vm_status",              {"name":"probe8_min","snap_name":"snap1","cpu_percent":50},                     "foreign: snapshot+resource keys", exp_success=None),
+    _fk("clarify",                {"question":"Which OS?","name":"probe8_min","snap_name":"snap1"},               "foreign: vm+snapshot keys", exp_success=None),
+    _fk("check_profile_compatibility", {"profile_name":"minimal","snap_name":"snap1","os_type":"linux"},          "foreign: snapshot+vm keys", exp_success=None),
+    _fk("get_vm_logs",            {"name":"probe8_min","snap_name":"snap1","profile_name":"minimal"},             "foreign: snapshot+profile keys", exp_success=None),
+    _fk("monitor_vm",             {"name":"probe8_min","snap_name":"snap1","cpu_percent":50},                     "foreign: snapshot+resource keys", exp_success=None),
+    _fk("check_disk",             {"name":"probe8_min","snap_name":"snap1","net_name":"mynet"},                   "foreign: snapshot+network keys"),
+    _fk("print_command",          {"name":"probe8_min","snap_name":"snap1","os_type":"linux"},                    "foreign: snapshot+vm keys"),
+    _fk("snapshot_list",          {"name":"probe8_min","cmd":"info status","os_type":"linux"},                    "foreign: monitor+vm keys"),
+    _fk("create_profile",         {"profile_name":"probe8_fkp","description":"test","cpu_model":"host","memory_mb":2048,"name":"probe8_min","cmd":"info status"}, "foreign: vm+monitor keys alongside valid hardware — foreign stripped, profile saves"),
+    _fk("update_config",          {"name":"probe8_min","updates":{"memory_mb":2048},"snap_name":"snap1","cmd":"quit"}, "foreign: snapshot+monitor keys"),
+    _fks("launch_vm",             {"name":"probe8_cpu","dry_run":True,"snap_name":"snap1","os_type":"linux"},     "foreign: snapshot+vm keys on dry-run launch"),
+    _fk("clone_vm",               {"source_name":"probe8_cpu","new_name":"probe8r_clfk","snap_name":"snap1","os_type":"linux"}, "foreign: snapshot+vm keys", exp_success=None),
+    _fk("create_network",         {"net_name":"probe8r_fknet","name":"probe8_min","snap_name":"snap1"},           "foreign: vm+snapshot keys", exp_success=None),
+    _fk("resize_disk",            {"name":"probe8_min","new_size_gb":99999,"snap_name":"snap1","cmd":"info"},     "foreign: snapshot+monitor keys", exp_success=None),
+    _fk("set_resource_limits",    {"name":"probe8_min","cpu_percent":50,"snap_name":"snap1","os_type":"linux"},   "foreign: snapshot+vm keys", exp_success=None),
+    _fk("snapshot_create",        {"name":"probe8_min","snap_name":"probe8r_fksnap","cmd":"info","os_type":"linux"}, "foreign: monitor+vm keys", exp_success=None),
+    _fk("revert",                 {"name":"probe8_min","snap_name":"snap1"},                                      "foreign: vm+snapshot keys on zero-arg tool", exp_success=None),
+    _fk("stop_vm",                {"name":"probe8_min","snap_name":"snap1","os_type":"linux"},                    "foreign: snapshot+vm keys — VM not running", exp_success=False),
+    _fk("open_display",           {"name":"probe8_min","snap_name":"snap1","os_type":"linux"},                    "foreign: snapshot+vm keys — VM stopped", exp_success=False),
+    _fk("open_shell",             {"name":"probe8_min","snap_name":"snap1","cmd":"ls"},                           "foreign: snapshot+monitor keys — VM stopped", exp_success=False),
+    _fk("send_monitor_cmd",       {"name":"probe8_min","cmd":"info status","snap_name":"snap1","os_type":"linux"}, "foreign: snapshot+vm keys — VM stopped", exp_success=False),
+    _fk("snapshot_delete",        {"name":"probe8_min","snap_name":"ghost_snap","cmd":"info","net_name":"net1"},   "foreign: monitor+network keys — snapshot missing", exp_success=False),
+    _fk("snapshot_restore",       {"name":"probe8_min","snap_name":"ghost_snap","cmd":"info","net_name":"net1"},   "foreign: monitor+network keys — snapshot missing", exp_success=False),
+    _fk("delete_network",         {"net_name":"ghost_r_net","name":"probe8_min","snap_name":"snap1"},             "foreign: vm+snapshot keys — network missing", exp_success=False),
+    _fk("delete_profile",         {"profile_name":"ghost_r_xyz","name":"probe8_min","cmd":"info"},                "foreign: vm+monitor keys — profile missing", exp_success=False),
+    _fk("delete_vm",              {"name":"ghost_r_del","snap_name":"snap1","net_name":"mynet"},                  "foreign: snapshot+network keys — VM missing", exp_success=False),
+    _fk("add_vm_to_network",      {"net_name":"ghost_r_net","vm_name":"probe8_min","snap_name":"snap1","cmd":"info"}, "foreign: snapshot+monitor keys — network missing", exp_success=False),
 ]
 
 
@@ -433,6 +641,7 @@ _TOOL_SCHEMAS: Dict[str, Dict] = {
     "list_vms":        {"required": {}, "optional": {}},
     "list_profiles":   {"required": {}, "optional": {}},
     "list_networks":   {"required": {}, "optional": {}},
+    "revert":          {"required": {}, "optional": {}},
 
     "clarify": {
         "required": {
@@ -501,6 +710,11 @@ _TOOL_SCHEMAS: Dict[str, Dict] = {
             "machine_type": {"valid": ["q35","pc"],         "sanitized": ["foobar"],       "broken": None},
             "os_name":      {"valid": ["ubuntu","debian"],  "broken": None},
             "description":  {"valid": ["test vm"],          "broken": None},
+            "board_product": {"valid": ["XPS 15 9530","ThinkPad T14s"], "broken": None},
+            "stealth":       {"valid": [True, False],                   "broken": None},
+            "hardened":      {"valid": [True, False],                   "broken": None},
+            "tpm":           {"valid": [True, False],                   "broken": None},
+            "bios":          {"valid": ["ovmf","ovmf_ms","seabios"],    "sanitized": ["foobar"], "broken": None},
         },
     },
 
@@ -698,6 +912,32 @@ _TOOL_SCHEMAS: Dict[str, Dict] = {
 }
 
 
+_JUNK_POOL: Dict[str, Any] = {
+    "foo": "bar", "not_a_field": 42, "blorp": True,
+    "zxqy": "garbage", "zzz": 0, "xyz": "test",
+}
+
+_CONFLICT_PAIRS: Dict[str, List[Dict[str, Any]]] = {
+    "create_vm": [
+        {"kvm": True,               "machine_arch": "aarch64"},
+        {"cpu_model": "cortex-a72", "machine_arch": "x86_64"},
+        {"network_mode": "bridge",  "bridge_iface": "eth0"},
+        {"uefi": True,              "bios": "seabios"},
+        {"disk_format": "sata",     "disk_bus": "nvme"},
+        {"bios": "ovmf_ms",         "uefi": False},
+        {"stealth": True,           "hardened": False},
+    ],
+    "create_profile": [
+        {"uefi": True, "bios": "seabios"},
+        {"hugepages": True, "memory_mb": 512},
+    ],
+    "launch_vm": [
+        {"display": "sdl", "dry_run": False},
+        {"display": "vnc", "dry_run": True},
+    ],
+}
+
+
 def _pick(rng: random.Random, choices: list) -> Any:
     return rng.choice(choices)
 
@@ -731,7 +971,9 @@ def generate_random_pipeline_tests(n: int = 30, seed: Optional[int] = None) -> L
                        "snapshot_restore","snapshot_delete","update_config","add_vm_to_network",
                        "delete_profile","delete_network","clone_vm",
                        # create_profile fails without hardware fields; create_network may conflict
-                       "create_profile","create_network"}
+                       "create_profile","create_network",
+                       # revert outcome depends on whether a prior reversible action was executed
+                       "revert"}
 
     while len(tests) < n:
         tool    = rng.choice(tools)
@@ -739,9 +981,10 @@ def generate_random_pipeline_tests(n: int = 30, seed: Optional[int] = None) -> L
         req_def = schema.get("required", {})
         opt_def = schema.get("optional", {})
 
-        req_mode  = rng.choice(["all", "all", "all", "partial", "none"])
-        fill_mode = rng.choice(["none", "partial", "full"])
-        val_mode  = rng.choice(["valid", "valid", "sanitized", "broken"])
+        req_mode   = rng.choice(["all", "all", "partial", "none", "none"])
+        fill_mode  = rng.choice(["none", "partial", "full"])
+        val_mode   = rng.choice(["valid", "valid", "sanitized", "broken"])
+        noise_mode = rng.choice(["none", "none", "conflict", "foreign", "junk"])
 
         args: Dict[str, Any] = {}
         missing_req: List[str] = []
@@ -812,13 +1055,47 @@ def generate_random_pipeline_tests(n: int = 30, seed: Optional[int] = None) -> L
             exp_layer   = "ok"
             category    = "valid"
 
+        # Noise: inject conflict pairs, foreign keys, or junk keys on top of base args.
+        # Only applied when required fields are all present — noise tests the pipeline's
+        # tolerance for extra/contradictory args, not its missing-field behaviour.
+        applied_noise = "none"
+        if not has_missing_req:
+            if noise_mode == "conflict" and tool in _CONFLICT_PAIRS:
+                args.update(rng.choice(_CONFLICT_PAIRS[tool]))
+                applied_noise = "conflict"
+            elif noise_mode == "foreign":
+                other_tools = [t for t in tools if t != tool]
+                if other_tools:
+                    other   = rng.choice(other_tools)
+                    oschema = _TOOL_SCHEMAS[other]
+                    all_fk  = (list(oschema.get("required", {}).keys()) +
+                                list(oschema.get("optional", {}).keys()))
+                    for k in rng.sample(all_fk, min(2, len(all_fk))):
+                        if k in args:
+                            continue
+                        fdef = (oschema.get("required", {}).get(k) or
+                                oschema.get("optional", {}).get(k, {}))
+                        vals = fdef.get("valid", [])
+                        if vals:
+                            args[k] = _pick(rng, vals)
+                    applied_noise = "foreign"
+            elif noise_mode == "junk":
+                for k in rng.sample(list(_JUNK_POOL.keys()), min(3, len(_JUNK_POOL))):
+                    args[k] = _JUNK_POOL[k]
+                applied_noise = "junk"
+
+        if applied_noise != "none":
+            category = applied_noise
+
         uid_ctr += 1
         tests.append(PipelineTest(
             id=f"p8_rand_{tool}_{uid_ctr:04d}",
             tags=["pipeline", "random", category, tool,
-                  f"req={req_mode}", f"fill={fill_mode}", f"val={val_mode}"],
+                  f"req={req_mode}", f"fill={fill_mode}", f"val={val_mode}",
+                  *([] if applied_noise == "none" else [f"noise={applied_noise}"])],
             description=(
                 f"{tool} | req={req_mode} fill={fill_mode} val={val_mode}"
+                + (f" noise={applied_noise}" if applied_noise != "none" else "")
                 + (f" | missing={missing_req}" if missing_req else "")
             ),
             tool=tool, input_args=args, category=category,

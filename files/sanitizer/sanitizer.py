@@ -76,6 +76,8 @@ def _fix_path(p: str) -> str:
 # Resolves a vague VM reference (number, partial name, OS name) to a real VM name.
 # In: List[dict] vms, str ref → Out: str | None
 def _resolve_vm_name(vms: List[Dict], ref: str) -> Optional[str]:
+    if not ref or not ref.strip():
+        return None
     if ref == "all":
         return "all"
     for vm in vms:
@@ -235,6 +237,12 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             args["os_type"] = alias
 
     # Enum field validation
+    # Rescue bus names mis-sent as disk_format before enum validation strips them.
+    _DISK_BUS_VALUES = {"sata", "nvme", "scsi", "ide", "virtio"}
+    if args.get("disk_format", "").lower() in _DISK_BUS_VALUES:
+        args.setdefault("disk_bus", args["disk_format"])
+        del args["disk_format"]
+
     _ENUM_VALID_SETS = {
         "display":       VALID_DISPLAY_MODES,
         "gpu":           VALID_GPU_TYPES,

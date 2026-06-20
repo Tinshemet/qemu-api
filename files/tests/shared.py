@@ -86,6 +86,10 @@ class ExecutorTest:
     expect_result:      Dict[str, Any] = field(default_factory=dict)
     expect_clarify:     bool           = False
     expect_preflight:   Optional[str]  = None
+    # Check fields on the saved MachineConfig after create_vm succeeds.
+    expect_cfg:         Dict[str, Any] = field(default_factory=dict)
+    # Check that result["command"] contains all of these substrings (print_command / dry_run).
+    expect_cmd_contains: List[str]     = field(default_factory=list)
 
 
 @dataclass
@@ -140,7 +144,7 @@ class PipelineTest:
     description:        str
     tool:               str
     input_args:         Dict[str, Any]
-    category:           str            = "valid"    # "valid" | "broken" | "missing"
+    category:           str            = "valid"    # "valid" | "broken" | "missing" | "conflict" | "foreign" | "junk"
     expect_success:     Optional[bool] = None       # None = skip success check
     expect_clarify:     bool           = False      # True = context gate must fire
     expect_layer:       Optional[str]  = None       # "context_gate" | "executor" | "ok"
