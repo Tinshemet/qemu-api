@@ -1,0 +1,7 @@
+{
+  "url":        "local",
+  "token":      "",
+  "timeout":    120,
+  "verify_ssl": true,
+  "ca_cert":    ""
+}

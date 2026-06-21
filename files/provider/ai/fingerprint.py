@@ -13,7 +13,7 @@ import json
 import os
 from typing import Dict
 
-from api.qemu_config import MachineConfig
+from client.api.qemu_config import MachineConfig
 from .display     import console
 from rich        import box
 from rich.panel  import Panel

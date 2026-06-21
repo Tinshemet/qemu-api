@@ -271,7 +271,7 @@ def _render_vm_specs(rows: List[tuple]):
 
 # Prints the startup banner with model, Ollama URL, OVMF status, and verbose mode.
 # In: bool verbose, str ollama_url, str ollama_model, bool ovmf_available, str ovmf_code → Out: nothing (console output)
-def _print_banner(verbose: bool, ollama_url: str, ollama_model: str, ovmf_available: bool, ovmf_code: str):
+def _print_banner(verbose: bool, ollama_url: str, ollama_model: str, ovmf_available: bool, ovmf_code: str, api_url: str = "local"):
     ovmf_line = (
         f"[success]OVMF ✓[/success]  {ovmf_code}"
         if ovmf_available
@@ -281,12 +281,45 @@ def _print_banner(verbose: bool, ollama_url: str, ollama_model: str, ovmf_availa
         "[success]verbose mode ON[/success]" if verbose
         else "[dim]verbose OFF  (use -v to enable)[/dim]"
     )
+    executor_line = (
+        "[dim]Executor: local[/dim]"
+        if api_url == "local"
+        else f"[success]Executor: remote →[/success] [bold]{api_url}[/bold]"
+    )
     console.print(Panel(
         f"[bold cyan]QEMU/KVM AI Assistant[/bold cyan]  •  Llama 3.1 via Ollama\n"
         f"Model: [bold]{ollama_model}[/bold]  |  {ollama_url}\n"
+        f"{executor_line}\n"
         f"{ovmf_line}\n"
         f"{verb_line}\n"
         f"[dim]Commands: 'exit' · 'clear session' · 'list' · 'system' · 'drift'[/dim]",
         border_style="cyan",
         title="[bold]qemu-api[/bold]",
+    ))
+
+
+def _render_vnc_connect(con: Console, result: dict) -> None:
+    """Render an SSH tunnel + vncviewer panel for remote VNC launches."""
+    name        = result.get("name", "VM")
+    port        = result.get("vnc_port", "?")
+    tunnel_cmd  = result.get("ssh_tunnel_cmd", "")
+    connect_cmd = result.get("vnc_connect_cmd", "")
+    note        = result.get("vnc_note", "")
+    password    = result.get("vnc_password")
+
+    pw_row = (
+        f"\n[bold]VNC password:[/bold] [green]{password}[/green]"
+        if password
+        else "\n[dim](No VNC password — SSH tunnel provides authentication)[/dim]"
+    )
+
+    con.print(Panel(
+        f"[bold green]{name}[/bold green] is running via VNC on the client machine.\n\n"
+        f"[bold]Step 1 — open SSH tunnel[/bold] (run on your machine):\n"
+        f"  [bold yellow]{tunnel_cmd}[/bold yellow]\n\n"
+        f"[bold]Step 2 — connect VNC viewer[/bold]:\n"
+        f"  [bold yellow]{connect_cmd}[/bold yellow]"
+        f"{pw_row}",
+        border_style="green",
+        title=f"[bold]VNC Connection — port {port}[/bold]",
     ))

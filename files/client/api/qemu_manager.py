@@ -422,6 +422,42 @@ class QemuManager:
             "success": True, "name": name, "pid": proc.pid, "display": config.display,
             "message": f"VM '{name}' launched (PID {proc.pid}).",
         }
+
+        if config.display == "vnc" and config.vnc_bind_local:
+            import secrets
+            from datetime import datetime, timedelta, timezone
+            vnc_password = secrets.token_urlsafe(8)
+            result["vnc_port"] = config.vnc_port
+            # Retry connecting to QMP until QEMU's socket is ready (up to ~7.5 s).
+            _qmp = None
+            for _attempt in range(15):
+                try:
+                    _qmp = QMPClient(config.get_qmp_socket())
+                    _qmp.connect(timeout=2)
+                    break
+                except Exception:
+                    _qmp = None
+                    time.sleep(0.5)
+            if _qmp is not None:
+                try:
+                    _qmp.execute("set_password", {
+                        "protocol":  "vnc",
+                        "password":  vnc_password,
+                        "connected": "keep",
+                    })
+                    # 10-minute expiry window — enough time to connect, limits exposure
+                    try:
+                        _expire = int(
+                            (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp()
+                        )
+                        _qmp.execute("expire_password", {"protocol": "vnc", "time": str(_expire)})
+                    except Exception:
+                        pass  # expire_password not available on this QEMU build
+                    result["vnc_password"] = vnc_password
+                finally:
+                    _qmp.close()
+            else:
+                result["vnc_password"] = None  # tunnel-only auth; password set failed
         if auto_detached_iso:
             result["note"] = f"ISO detached automatically — disk has an installed OS. VM will boot from disk."
 
@@ -454,7 +490,7 @@ class QemuManager:
                 f"if os.path.exists(flag):\n"
                 f"    os.unlink(flag)\n"
                 f"    time.sleep(2)\n"
-                f"    from api.qemu_manager import QemuManager\n"
+                f"    from client.api.qemu_manager import QemuManager\n"
                 f"    mgr = QemuManager()\n"
                 f"    mgr.launch_vm(name)\n"
                 f"    stealth_done = os.path.join(os.path.expanduser('~/.qemu_vms'), name, '.stealth_done')\n"

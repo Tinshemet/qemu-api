@@ -21,8 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
-from sanitizer.sanitizer import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
+from client.api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
+from shared.sanitizer.sanitizer import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _THRESHOLDS = _CFG["thresholds"]
@@ -596,14 +596,23 @@ def _validate_stealth_args(args: Dict[str, Any]) -> List[Dict]:
 
 
 def _preflight_check(
-    tool_name:  str,
-    args:       Dict[str, Any],
-    manager,                    # QemuManager — passed in to avoid circular import
-    verbose:    bool = False,
+    tool_name:     str,
+    args:          Dict[str, Any],
+    manager,                       # QemuManager — passed in to avoid circular import
+    verbose:       bool = False,
+    stateless_only: bool = False,  # True on the AI provider (remote mode): skip checks
+                                   # that require real filesystem/binary/manager state.
+                                   # The client machine always runs the full check.
 ) -> Dict[str, Any]:
     """
     Validate tool call args before execution.
     Returns {"action": "ok"|"auto_fix"|"ask_user"|"abort", ...}
+
+    stateless_only=True  — shape/type/logic checks only (no fs, no manager, no subprocess).
+                           Used by the AI provider in remote mode so it can still catch
+                           AI hallucinations early without needing the client's real state.
+    stateless_only=False — full check including real VM/disk/binary state.
+                           Always used in local mode and by the client machine.
     """
     ok = {"action": "ok"}
 
@@ -623,9 +632,10 @@ def _preflight_check(
         if not name or name.lower() in PLACEHOLDER_VM_NAMES:
             return {"action":"ask_user","reason":f"VM name is missing or looks invented (got: '{name}')","question":"What would you like to name this VM?","fix_field":"name","options":["my-windows-vm","dev-box","test-ubuntu"]}
 
-        vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
-        if os.path.exists(vm_dir):
-            return {"action":"ask_user","reason":f"A VM named '{name}' already exists","question":f"A VM called '{name}' already exists. Overwrite it, or use a different name?","fix_field":"name","original_name":name,"options":[f"{name}-2",f"{name}-new","overwrite"],"correction":"Use a different name or delete the existing VM first."}
+        if not stateless_only:
+            vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
+            if os.path.exists(vm_dir):
+                return {"action":"ask_user","reason":f"A VM named '{name}' already exists","question":f"A VM called '{name}' already exists. Overwrite it, or use a different name?","fix_field":"name","original_name":name,"options":[f"{name}-2",f"{name}-new","overwrite"],"correction":"Use a different name or delete the existing VM first."}
 
         if mt and mt not in VALID_MACHINE_TYPES and not mt.startswith("pc-"):
             fixed = dict(args)
@@ -634,7 +644,7 @@ def _preflight_check(
             fixed.pop("machine_type", None)
             return {"action":"auto_fix","reason":f"machine_type='{mt}' is a profile name, not a machine type","correction":f"Set profile='{mt}' and removed invalid machine_type","fixed_args":fixed}
 
-        if iso_path:
+        if iso_path and not stateless_only:
             bad_path = any([
                 "/home/user/" in iso_path, "/path/to/" in iso_path,
                 "scan_isos" in iso_path, "<" in iso_path,
@@ -653,7 +663,7 @@ def _preflight_check(
                         fixed = dict(args); fixed.pop("iso_path", None)
                         return {"action":"auto_fix","reason":f"ISO '{iso_path}' not found — no ISOs found anywhere","correction":"Removed iso_path. VM will be created without an install ISO.","fixed_args":fixed}
 
-        if iso_path and os.path.exists(iso_path):
+        if iso_path and not stateless_only and os.path.exists(iso_path):
             iso_lower = os.path.basename(iso_path).lower()
             if any(k in iso_lower for k in ("arm64","aarch64")) and str(args.get("machine_arch","x86_64")).lower() == "x86_64":
                 return {"action":"ask_user","reason":f"ARM64 ISO '{os.path.basename(iso_path)}' with x86_64 VM — incompatible","question":"This is an ARM64 ISO. Do you want an ARM64 VM, or an x86_64 ISO instead?","fix_field":None,"options":["Use ARM64 VM","Get x86_64 ISO instead"],"correction":f"For x86_64: download Windows 11 x64 from microsoft.com"}
@@ -669,7 +679,7 @@ def _preflight_check(
             fixed = dict(args); fixed["disk_size_gb"] = _win_disk
             return {"action":"auto_fix","reason":f"Windows 11 needs at least {_win_disk}GB disk, got {disk_gb}GB","correction":f"Increased disk_size_gb from {disk_gb} to {_win_disk}","fixed_args":fixed}
 
-        if is_win and args.get("tpm") is not False:
+        if is_win and args.get("tpm") is not False and not stateless_only:
             import shutil
             if not shutil.which("swtpm"):
                 return {
@@ -717,37 +727,38 @@ def _preflight_check(
                 args = dict(args)
                 args.setdefault("_stealth_warnings", [w["message"] for w in warnings])
 
-        internet_issues = _validate_with_internet(args, verbose=verbose)
-        if internet_issues:
-            blockers   = [i for i in internet_issues if i["severity"] == "error"]
-            auto_fixes = [i for i in internet_issues if i.get("auto_fix") and i["severity"] != "error"]
-            warnings   = [i for i in internet_issues if i["severity"] == "warning" and not i.get("auto_fix")]
-            if blockers:
-                return {"action":"ask_user","reason":" | ".join(i["message"] for i in blockers),"question":"Pre-flight found issues with this VM config. Proceed anyway or fix first?","fix_field":None,"options":["Proceed anyway","Cancel and fix"],"correction":" | ".join(i["fix"] for i in blockers if i.get("fix")),"issues":internet_issues}
-            if auto_fixes:
-                fixed = dict(args); fix_notes = []
-                for issue in auto_fixes:
-                    if issue.get("fix_field") and issue.get("fix_value") is not None:
-                        fixed[issue["fix_field"]] = issue["fix_value"]
-                        fix_notes.append(f"{issue['fix_field']}={issue['fix_value']!r}")
-                return {"action":"auto_fix","reason":"Internet/QEMU validation auto-fixed: "+", ".join(fix_notes),"correction":" | ".join(i["message"] for i in auto_fixes),"fixed_args":fixed,"warnings":[i["message"] for i in warnings]}
-
-        profile_name = args.get("profile") or mt
-        if profile_name:
-            profile_issues = _validate_profile_for_host(profile_name)
-            if profile_issues:
-                blockers   = [i for i in profile_issues if i["severity"] == "error"]
-                warnings   = [i for i in profile_issues if i["severity"] == "warning"]
-                auto_fixes = [i for i in profile_issues if i.get("auto_fix")]
+        if not stateless_only:
+            internet_issues = _validate_with_internet(args, verbose=verbose)
+            if internet_issues:
+                blockers   = [i for i in internet_issues if i["severity"] == "error"]
+                auto_fixes = [i for i in internet_issues if i.get("auto_fix") and i["severity"] != "error"]
+                warnings   = [i for i in internet_issues if i["severity"] == "warning" and not i.get("auto_fix")]
                 if blockers:
-                    return {"action":"ask_user","reason":f"Profile '{profile_name}' has compatibility issues: {' | '.join(i['message'] for i in blockers)}","question":f"Profile '{profile_name}' may not work on this system. Proceed anyway or cancel?","fix_field":None,"options":["Proceed anyway","Cancel","Use minimal profile instead"],"correction":" | ".join(i["fix"] for i in blockers if i.get("fix")),"issues":profile_issues}
+                    return {"action":"ask_user","reason":" | ".join(i["message"] for i in blockers),"question":"Pre-flight found issues with this VM config. Proceed anyway or fix first?","fix_field":None,"options":["Proceed anyway","Cancel and fix"],"correction":" | ".join(i["fix"] for i in blockers if i.get("fix")),"issues":internet_issues}
                 if auto_fixes:
                     fixed = dict(args); fix_notes = []
                     for issue in auto_fixes:
                         if issue.get("fix_field") and issue.get("fix_value") is not None:
                             fixed[issue["fix_field"]] = issue["fix_value"]
-                            fix_notes.append(f"{issue['fix_field']}={issue['fix_value']}")
-                    return {"action":"auto_fix","reason":f"Profile '{profile_name}': auto-fixed "+", ".join(fix_notes),"correction":" | ".join(i["message"] for i in auto_fixes),"fixed_args":fixed,"warnings":[i["message"] for i in warnings]}
+                            fix_notes.append(f"{issue['fix_field']}={issue['fix_value']!r}")
+                    return {"action":"auto_fix","reason":"Internet/QEMU validation auto-fixed: "+", ".join(fix_notes),"correction":" | ".join(i["message"] for i in auto_fixes),"fixed_args":fixed,"warnings":[i["message"] for i in warnings]}
+
+            profile_name = args.get("profile") or mt
+            if profile_name:
+                profile_issues = _validate_profile_for_host(profile_name)
+                if profile_issues:
+                    blockers   = [i for i in profile_issues if i["severity"] == "error"]
+                    warnings   = [i for i in profile_issues if i["severity"] == "warning"]
+                    auto_fixes = [i for i in profile_issues if i.get("auto_fix")]
+                    if blockers:
+                        return {"action":"ask_user","reason":f"Profile '{profile_name}' has compatibility issues: {' | '.join(i['message'] for i in blockers)}","question":f"Profile '{profile_name}' may not work on this system. Proceed anyway or cancel?","fix_field":None,"options":["Proceed anyway","Cancel","Use minimal profile instead"],"correction":" | ".join(i["fix"] for i in blockers if i.get("fix")),"issues":profile_issues}
+                    if auto_fixes:
+                        fixed = dict(args); fix_notes = []
+                        for issue in auto_fixes:
+                            if issue.get("fix_field") and issue.get("fix_value") is not None:
+                                fixed[issue["fix_field"]] = issue["fix_value"]
+                                fix_notes.append(f"{issue['fix_field']}={issue['fix_value']}")
+                        return {"action":"auto_fix","reason":f"Profile '{profile_name}': auto-fixed "+", ".join(fix_notes),"correction":" | ".join(i["message"] for i in auto_fixes),"fixed_args":fixed,"warnings":[i["message"] for i in warnings]}
 
     elif tool_name == "create_profile":
         profile_name  = str(args.get("profile_name", "")).strip()
@@ -763,7 +774,7 @@ def _preflight_check(
                 "correction": "Provide at least cpu_model, machine_type, and memory_mb when creating a profile.",
             }
 
-        profile_issues = (
+        profile_issues = [] if stateless_only else (
             _validate_profile_for_host(profile_name, profile_data=profile_data)
             + _validate_with_internet(profile_data, verbose=verbose)
         )
@@ -796,7 +807,7 @@ def _preflight_check(
                     "warnings":    [i["message"] for i in warnings],
                 }
 
-    elif tool_name == "launch_vm":
+    elif tool_name == "launch_vm" and not stateless_only:
         name   = str(args.get("name", "")).strip()
         vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
         if name and not os.path.exists(vm_dir):
@@ -819,7 +830,7 @@ def _preflight_check(
         if name:
             return {"action":"ask_user","reason":f"Destructive operation: delete VM '{name}'","question":f"Are you sure you want to delete '{name}'?","fix_field":None,"options":["Yes, delete it","No, keep it"],"correction":"Deletion cannot be undone without recreating the VM."}
 
-    elif tool_name == "resize_disk":
+    elif tool_name == "resize_disk" and not stateless_only:
         name     = str(args.get("name", "")).strip()
         new_size = int(args.get("new_size_gb", 0))
         if name and new_size:

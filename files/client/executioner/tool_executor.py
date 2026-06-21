@@ -18,26 +18,26 @@ _TOOL_DEFS           = _CFG["tool_defaults"]
 _VALID_MACHINE_TYPES = set(_CFG["valid_machine_types"])
 _ARM_CPU_PREFIXES    = tuple(_CFG["arm_cpu_prefixes"])
 
-from api.qemu_config import (
+from client.api.qemu_config import (
     MachineConfig, DiskConfig, NetworkConfig,
     OVMF, apply_profile, check_profile_compatibility,
     check_system_capabilities, delete_custom_profile,
     get_all_profiles, list_profiles, save_custom_profile,
 )
-from api.qemu_manager import QemuManager
-from sanitizer.sanitizer import (
+from client.api.qemu_manager import QemuManager
+from shared.sanitizer.sanitizer import (
     PLACEHOLDER_VM_NAMES,
     _resolve_iso, _resolve_vm_name, _sanitise_args,
 )
-from sanitizer.context_gate import gate_check
-from preflight.validator import _preflight_check, _show_preflight_warning
-from ai.display import (
+from shared.sanitizer.context_gate import gate_check
+from shared.preflight.validator import _preflight_check, _show_preflight_warning
+from provider.ai.display import (
     console,
     _render_compat, _render_monitor, _render_profiles,
     _render_snapshots, _render_status, _render_system,
     _render_vm_failure, _render_vm_list,
 )
-from ai.fingerprint import _tf_report
+from provider.ai.fingerprint import _tf_report
 from rich.panel import Panel
 
 manager = QemuManager()

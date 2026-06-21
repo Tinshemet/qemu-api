@@ -1,0 +1,13 @@
+{
+  "port":    8080,
+  "token":   "",
+  "timeout": 120,
+  "allowed_remote_tools": [
+    "create_vm", "launch_vm", "stop_vm", "list_vms", "vm_status",
+    "delete_vm", "clone_vm", "resize_disk", "snapshot", "restore_snapshot",
+    "check_system", "list_profiles", "check_profile_compatibility",
+    "fingerprint_vm", "check_disk", "revert",
+    "generate_guest_setup", "mark_stealth_done",
+    "create_cluster", "delete_cluster", "list_clusters"
+  ]
+}

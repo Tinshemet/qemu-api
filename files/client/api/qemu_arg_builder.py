@@ -508,8 +508,13 @@ class QemuArgBuilder:
                 "-display", "spice-app",
             ]
         elif self.cfg.display == "vnc":
-            port = self.cfg.vnc_port or VNC_PORT_START
-            self.args += ["-vnc", f":{port - 5900}"]
+            port        = self.cfg.vnc_port or VNC_PORT_START
+            display_num = port - 5900
+            if self.cfg.vnc_bind_local:
+                # Remote mode: bind to localhost only + require password (set via QMP after boot).
+                self.args += ["-vnc", f"127.0.0.1:{display_num},password=on"]
+            else:
+                self.args += ["-vnc", f":{display_num}"]
 
         if gpu_device and not self.is_raspi:
             if gpu_device == "virtio-vga-gl":

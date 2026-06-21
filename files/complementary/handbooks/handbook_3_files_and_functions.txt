@@ -1,0 +1,840 @@
+================================================================================
+  QEMU-API  —  FILES AND FUNCTIONS REFERENCE  (handbook part 3)
+================================================================================
+
+Every source file is documented with its purpose, its public functions, what
+each function does, its inputs and outputs. Config keys are in handbook part 4.
+
+────────────────────────────────────────────────────────────────────────────────
+PROVIDER SIDE  (files/provider/)
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ollama_wrapper.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  The entry point script. Re-exports all symbols from provider/ and shared/
+  so they are importable from one place. Also calls cli_direct() or chat_loop()
+  from cli.py. This is the file the alias points at.
+
+HOW IT WORKS
+  It imports and re-exports:
+    from provider.ai.cli           import chat_loop, cli_direct
+    from provider.ai.display       import console, _print_banner
+    from provider.ai.fingerprint   import _tf_report
+    from provider.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL, _call_ollama, _build_system_prompt
+    from shared.sanitizer.sanitizer import _sanitise_args, _resolve_iso, _resolve_vm_name
+    from provider.ai.session       import load_session, save_session, clear_session
+    from provider.executor_client  import execute_tool, API_URL
+    from client.executioner.tool_executor import manager
+    from provider.ai.tools         import TOOLS
+    from shared.preflight.validator import ...
+  Then calls cli_direct(sys.argv[1:]) or chat_loop() depending on args.
+
+────────────────────────────────────────────────────────────────────────────────
+provider/executor_client.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  THE SEAM. The single point where the provider decides: direct call or HTTP.
+  Everything above it is provider code. Everything below it is client code.
+  The AI layer imports execute_tool only from here — never from tool_executor
+  directly.
+
+MODULE-LEVEL STATE (initialised at import time)
+  _CFG      — loaded from client/executioner/config.json
+  _EX       — _CFG["executor"] sub-dict
+  API_URL   — os.environ.get("API_URL", _EX["url"])  → "local" or URL
+  _TOKEN    — os.environ.get("API_TOKEN", _EX.get("token",""))
+  _TIMEOUT  — os.environ.get("API_TIMEOUT", _EX.get("timeout", 120))
+  _CA_CERT  — os.environ.get("API_CA_CERT", None)
+  _VERIFY   — False if API_VERIFY_SSL=="0" else (_CA_CERT or True)
+
+FUNCTION: execute_tool(tool_name, args, verbose=False)
+  IN:  tool_name str, args dict, verbose bool
+  OUT: result dict
+  If API_URL == "local":
+    imports and calls client.executioner.tool_executor.execute_tool() directly
+  Else:
+    POST {API_URL}/execute with JSON body and Authorization header
+    On ConnectionError: prints user-friendly error, sys.exit(1)
+    On 401: prints token mismatch error, sys.exit(1)
+    On non-OK HTTP: returns {"success":False, "error":"API server error N: ..."}
+    On VNC result: injects ssh_tunnel_cmd, vnc_connect_cmd, vnc_note fields
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/cli.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Main entry point and chat loop. Handles both interactive AI chat mode and
+  the direct non-AI subcommand CLI. Also manages the HTTP file server for
+  guest setup scripts and the liveness monitor thread.
+
+MODULE-LEVEL STATE
+  _CFG          — config from provider/ai/config.json
+  _EXIT_CMDS    — set of strings that exit the chat loop
+  _SHORTCUTS    — dict of instant-response commands (list, profiles, etc.)
+  _LOOP_MAX     — max consecutive AI tool call iterations per prompt
+  _ACTION_WORDS — set of words that indicate an action (create, launch, etc.)
+  _OS_KEYWORDS  — set of OS-type keywords used by the context gate
+
+FUNCTION: chat_loop(custom_mode=False)
+  IN:  custom_mode bool (True when -cu flag was passed)
+  OUT: does not return (runs until user exits)
+  Main interactive loop:
+  1. Loads session from disk
+  2. Detects and handles drift
+  3. If API_URL != "local": starts liveness monitor thread
+  4. Prints banner
+  5. Reads stdin line by line
+  6. For each line:
+     a. Check for shortcuts (list, profiles, system, exit, serve, fetch)
+     b. Append to session, save
+     c. Call _call_ollama() in a loop (up to _LOOP_MAX iterations)
+     d. For each tool call: sanitise → gate check → preflight → dispatch
+     e. On ask_user preflight: show question, get answer, retry
+     f. On text response: print and break loop
+     g. Auto-break if loop exceeds _LOOP_MAX
+
+FUNCTION: cli_direct(argv)
+  IN:  argv list of strings (sys.argv[1:])
+  OUT: does not return
+  Handles non-interactive subcommands:
+    list / status / monitor / launch / stop / clone / config / resize /
+    delete / logs / show-cmd / snapshot / network / limit / profiles /
+    check-profile / system / isos / cmd / clear-session / serve / fetch / -tf
+  Each subcommand calls the appropriate manager method or execute_tool() directly.
+
+FUNCTION: _start_liveness_monitor(api_url, token, verify, interval=30)
+  IN:  api_url str, token str, verify bool/str, interval int
+  OUT: threading.Thread (daemon=True, already started)
+  Background thread. Pings GET {api_url}/health every {interval} seconds.
+  On failure (network error or non-200): prints warning to console.
+
+FUNCTION: _serve_guest_setup(vm_dir, port=8080)
+  IN:  vm_dir str (path to VM directory)
+  OUT: threading.Thread (daemon=True, already started)
+  Starts a Python http.server serving files from vm_dir on :8080.
+  Used so the guest can download guest_setup.sh or guest_setup.ps1.
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/ollama_client.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  HTTP client for the Ollama API. Builds the system prompt and sends
+  conversation history + TOOLS list to the model.
+
+MODULE-LEVEL STATE
+  OLLAMA_URL   — from env or config (default "http://localhost:11434")
+  OLLAMA_MODEL — from env or config (default "qwen2.5:7b")
+
+FUNCTION: _call_ollama(messages, tools, model=None)
+  IN:  messages list[dict], tools list[dict], model str
+  OUT: dict with "tool_calls" list or "content" string
+  POST {OLLAMA_URL}/api/chat
+  Body: {model, messages, tools, stream:false}
+  Returns parsed response:
+    If response has tool_calls → {"tool_calls": [{function:{name,arguments}},...]}
+    If response is text → {"content": "..."}
+    On error → {"content": "Error: ..."}
+
+FUNCTION: _build_system_prompt(vm_list, custom_mode=False)
+  IN:  vm_list list[dict] (from manager.list_vms()), custom_mode bool
+  OUT: str (the full system prompt)
+  Builds a prompt that includes:
+  - Current date/time
+  - Whether custom mode is active
+  - List of current VMs with status
+  - Instructions on tool use, stealth, SMBIOS, profiles
+  - Guidance on when to ask vs assume
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/display.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  All Rich console rendering. Each _render_*() function takes a result dict
+  and prints a formatted table/panel to the terminal. Called by tool_executor
+  (not verbose) or cli.py.
+
+KEY FUNCTIONS
+
+  _print_banner()
+    Prints the startup ASCII art banner with version and mode info.
+
+  _render_vm_list(vms)
+    Rich table: name, status, OS, memory, CPU, disk size.
+
+  _render_status(result)
+    Rich panel: VM name, running/stopped, PID, uptime, disk paths.
+
+  _render_monitor(result)
+    Rich panel: CPU usage %, memory usage %, disk IO, network stats.
+
+  _render_system(caps)
+    Rich table: host CPU count, RAM, KVM availability, QEMU version,
+    OVMF paths, available machine types.
+
+  _render_profiles(profiles)
+    Rich table: profile name, description, key specs.
+
+  _render_compat(result)
+    Rich table: compatibility issues for a profile (pass/warn/fail per field).
+
+  _render_snapshots(result)
+    Rich table: snapshot name, creation date, disk size.
+
+  _render_vm_failure(result)
+    Rich panel: last lines of launch.log for failure diagnosis.
+
+  _render_vm_specs(cfg)
+    Rich panel: full MachineConfig details for a VM.
+
+  _render_vnc_panel(result)
+    Rich panel: VNC connection instructions (ssh tunnel, vncviewer, password).
+    Only shown in remote mode when display=="vnc".
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/fingerprint.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Simulates what inxi would report from inside the guest OS by reading the
+  VM's config.json. Rates each field as clean/detectable/VM tell.
+
+FUNCTION: _tf_report(vm_name, summary=False)
+  IN:  vm_name str, summary bool
+  OUT: dict with sections, scores, recommendations
+  Reads ~/.qemu_vms/<vm_name>/config.json and simulates:
+    inxi -M  → manufacturer, product, BIOS vendor/version, serial, chassis
+    inxi -N  → MAC OUI prefix, NIC model (VM tell if virtio-net or 52:54:00)
+    inxi -C  → CPU model, hypervisor flag (if kvm=True → detectable)
+    inxi -D  → disk bus (virtio=detectable), disk model (QEMU HARDDISK=VM tell)
+    inxi -A  → audio device ID
+    inxi -G  → GPU device (virtio-gpu=VM tell, vmware-svga=detectable)
+  Rates each field and computes a score (% clean fields).
+  Returns structured dict; also prints Rich table if summary=False.
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/session.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Manages the AI conversation history (session). Loads and saves to
+  ~/.qemu_vms/.session.json. Limits history to last 40 messages.
+
+FUNCTION: load_session()
+  IN:  nothing
+  OUT: list[dict] (messages: [{role, content}, ...])
+  Loads from ~/.qemu_vms/.session.json. Returns [] if file missing or corrupt.
+
+FUNCTION: save_session(messages)
+  IN:  messages list[dict]
+  OUT: nothing
+  Writes to ~/.qemu_vms/.session.json (last 40 messages only).
+
+FUNCTION: clear_session()
+  IN:  nothing
+  OUT: nothing
+  Deletes ~/.qemu_vms/.session.json.
+
+FUNCTION: detect_drift(messages, vm_list)
+  IN:  messages list[dict], vm_list list[dict]
+  OUT: bool (True if drift detected)
+  Compares VM names the AI remembers from session history against the actual
+  vm_list. If significant mismatch: returns True.
+
+FUNCTION: set_auto_clear(val)  /  get_auto_clear()
+FUNCTION: set_loop_max(val)    /  get_loop_max()
+  Get/set the auto_clear and tool_loop_max settings from config.
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/tools.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Defines the TOOLS list — the complete set of tool definitions passed to
+  Ollama on every API call. Each entry is a dict with:
+    name: str
+    description: str (what the tool does)
+    parameters: dict (JSON Schema — required and optional fields with types)
+
+KEY TOOLS DEFINED
+  create_vm        Create a new virtual machine
+  launch_vm        Start a VM
+  stop_vm          Stop a running VM (graceful or force)
+  list_vms         List all VMs with status
+  vm_status        Detailed status for one VM
+  monitor_vm       Resource usage stats
+  show_config      Show a VM's config.json
+  update_config    Change specific config fields
+  delete_vm        Delete a VM and its disk
+  clone_vm         Clone a VM (copy disk + config)
+  get_vm_logs      Read launch.log for failure diagnosis
+  print_command    Print the full QEMU command that would be used
+  send_monitor_cmd Send a raw QEMU monitor command
+  resize_disk      Resize a VM's primary disk
+  scan_isos        Find ISO files on the host
+  snapshot_create  Take a disk snapshot
+  snapshot_list    List snapshots for a VM
+  snapshot_restore Restore a snapshot
+  snapshot_delete  Delete a snapshot
+  create_profile   Save a custom hardware profile
+  delete_profile   Delete a custom profile
+  list_profiles    List all available profiles
+  check_profile_compatibility  Check if a profile works on this host
+  create_network   Create an isolated virtual network
+  delete_network   Delete an isolated network
+  list_networks    List all networks
+  add_vm_to_network Attach a VM to a network
+  set_resource_limits  CPU and memory limits via cgroups
+  open_display     Open the VM's graphical display
+  open_shell       Open a shell connection to the VM
+  check_system     Report host capabilities
+  fingerprint_vm   Run -tf fingerprint analysis
+  clarify          Ask the user a question (the AI uses this to gather info)
+  revert           Undo the last reversible action
+
+────────────────────────────────────────────────────────────────────────────────
+provider/ai/context_assistant.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Checks whether the AI's planned tool call is semantically consistent with
+  what the user said and the current context. Separate from preflight —
+  focuses on user intent rather than system state.
+
+FUNCTION: check_context(tool_name, args, messages)
+  IN:  tool_name str, args dict, messages list[dict] (session history)
+  OUT: None or a correction dict
+  Reviews the last few messages to verify the tool call makes sense.
+  Returns None if ok, or a dict with suggestions/corrections if not.
+
+FUNCTION: extract_slots(messages)
+  IN:  messages list[dict]
+  OUT: dict of extracted values
+  Parses the conversation to extract mentioned VM names, OS types, sizes, etc.
+
+────────────────────────────────────────────────────────────────────────────────
+CLIENT SIDE  (files/client/)
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+client/server/api_server.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  The FastAPI HTTP server that runs on the client machine. Exposes
+  execute_tool over HTTP with authentication.
+
+MODULE-LEVEL STATE
+  _CFG_PATH         — path to client/executioner/config.json
+  _CFG              — loaded config
+  _EX               — _CFG["executor"] sub-dict
+  _ALLOWED_TOOLS    — set from _EX["allowed_remote_tools"]
+  _TOKEN_FILE       — ~/.qemu-api.token
+  _TOKEN            — loaded from env or token file; server exits if empty
+  app               — FastAPI() instance
+  _auth             — HTTPBearer() security dependency
+
+DEPENDENCY: _require_token(creds)
+  FastAPI dependency. Extracts Bearer token from Authorization header.
+  Raises HTTPException(401) if token doesn't match _TOKEN.
+  Used with dependencies=[Depends(_require_token)] on protected routes.
+
+ENDPOINT: GET /health
+  No auth required. Returns {"status":"ok"}. Used by liveness monitor.
+
+ENDPOINT: POST /rotate-token (auth required)
+  Body: {"new_token": "..."}
+  Validates length ≥ 16.
+  Sets _TOKEN globally, sets os.environ["API_TOKEN"], writes ~/.qemu-api.token.
+  Returns {"ok":True, "message":"..."}
+
+ENDPOINT: POST /execute (auth required)
+  Body: ExecuteRequest {tool_name, args, verbose}
+  1. Checks tool_name in _ALLOWED_TOOLS → 403 if not
+  2. Overrides launch_vm display to VNC if SDL/GTK
+  3. Runs _preflight_check() (stateless_only=False)
+  4. Handles preflight abort → returns structured error
+  5. Handles preflight ask_user → returns clarify response
+  6. Handles preflight auto_fix → applies fixed_args
+  7. Calls execute_tool() from tool_executor
+  8. Returns {"ok":True, "result":{...}}
+  9. On exception: HTTP 500
+
+ENDPOINT: GET /images/{vm_name}/sha256 (auth required)
+  Finds primary qcow2 disk of the VM (first .qcow2 in vm_dir).
+  Computes SHA-256 in 4 MB chunks.
+  Returns {"vm_name", "disk", "sha256", "size_bytes"}
+
+ENDPOINT: GET /images/{vm_name} (auth required)
+  Streams the primary qcow2 disk.
+  Supports HTTP Range header for partial/resumable downloads.
+  Response headers: Content-Length, Content-Range, Accept-Ranges,
+                    X-SHA256, X-Disk-Size, X-VM-Name, Content-Disposition
+  Status 206 for range requests, 200 for full download.
+  Streams in 4 MB chunks via _stream() generator.
+
+HELPER: _disk_path(vm_name)
+  IN:  vm_name str
+  OUT: pathlib.Path to first .qcow2 in vm_dir
+  Raises HTTPException(404) if VM dir or qcow2 not found.
+
+────────────────────────────────────────────────────────────────────────────────
+client/executioner/tool_executor.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  The main tool dispatch layer. Owns the QemuManager singleton. Handles all
+  tool names, manages revert state, calls Rich display functions.
+
+MODULE-LEVEL STATE
+  _CFG                 — loaded from client/executioner/config.json
+  _VM_DEFS             — _CFG["create_vm_defaults"]
+  _TOOL_DEFS           — _CFG["tool_defaults"]
+  _VALID_MACHINE_TYPES — set from _CFG["valid_machine_types"]
+  _ARM_CPU_PREFIXES    — tuple from _CFG["arm_cpu_prefixes"]
+  manager              — QemuManager() singleton (shared across all callers)
+  _last_revert_action  — dict: {"tool","args","description"} of last reversible op
+  _REVERT_AWARE_TOOLS  — set of tools that manage revert state themselves
+
+FUNCTION: execute_tool(tool_name, args, verbose=False, skip_gate=False)
+  IN:  tool_name str, args dict, verbose bool, skip_gate bool
+  OUT: Any (result from manager or config layer)
+  Main dispatch. Steps:
+  1. _sanitise_args(tool_name, args)
+  2. gate_check(tool_name, args) unless skip_gate=True
+  3. Resolve VM name via _resolve_vm_name() for tools that take existing VMs
+  4. Clear _last_revert_action if tool not in _REVERT_AWARE_TOOLS
+  5. Dispatch to the appropriate handler (long if/elif chain)
+  6. Call Rich display functions on results (unless verbose=True)
+
+FUNCTION: _set_revert(tool, args, description)
+  Sets _last_revert_action. Called by reversible tools on success.
+
+FUNCTION: _clear_revert()
+  Clears _last_revert_action. Called by irreversible tools and unrelated calls.
+
+TOOL HANDLERS (all inside execute_tool() dispatch)
+  "revert"
+    If _last_revert_action empty: returns error.
+    Shows description, asks "Proceed? (y/n):"
+    If y: calls execute_tool(rev["tool"], rev["args"]) recursively.
+    _clear_revert() before re-dispatch.
+
+  "clarify"
+    Returns {"clarify":True, "question":..., "options":...}
+    The AI uses this tool to ask the user for information.
+
+  "check_system"
+    Calls check_system_capabilities() + OVMF dict.
+    Calls _render_system() unless verbose.
+
+  "scan_isos"
+    Calls manager.scan_isos().
+
+  "list_vms"
+    Calls manager.list_vms().
+    Calls _render_vm_list() unless verbose.
+
+  "create_vm"
+    Complex handler — see handbook_2_workflow.txt section 3 for full trace.
+    Builds MachineConfig from args, applies profile, sets defaults,
+    handles ARM auto-detection, validates machine_type, calls manager.create_vm().
+    Sets revert = delete_vm on success.
+
+  "launch_vm"
+    Calls manager.launch_vm(name, display, dry_run).
+    Sets revert = stop_vm on success.
+
+  "stop_vm"
+    If name=="all": calls manager.stop_all(). Clears revert.
+    Else: calls manager.stop_vm(name, force).
+    Sets revert = launch_vm on success.
+
+  "snapshot_create"
+    Calls manager.snapshot_create(name, snap_name).
+    Sets revert = snapshot_delete on success.
+
+  "update_config"
+    Captures old values first, then calls manager.update_config().
+    Sets revert = update_config with old values on success.
+
+  "resize_disk", "snapshot_restore", "snapshot_delete"
+    All call _clear_revert() (irreversible — no safe undo).
+
+────────────────────────────────────────────────────────────────────────────────
+client/api/qemu_manager.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  The actual VM engine. All QEMU/KVM operations happen here. Owns
+  ~/.qemu_vms/ directory. Manages process lifecycle (start, stop, monitor).
+
+KEY METHODS (all on QemuManager instance)
+
+  list_vms()
+    Scans ~/.qemu_vms/ for directories with config.json.
+    For each: reads config, checks PID liveness, reads disk size.
+    Returns list[dict] with name, status, os_type, memory_mb, cpu_cores,
+    disk_size_gb, vm_dir.
+
+  create_vm(cfg: MachineConfig)
+    Creates vm_dir, runs qemu-img create, copies OVMF_VARS.fd, writes config.json.
+    If stealth: calls generate_guest_setup(), _write_smbios_chassis_bin().
+    Returns {"success":True/False, "name":..., "vm_dir":...}
+
+  launch_vm(name, display=None, dry_run=False)
+    Loads config, builds QEMU args via qemu_arg_builder.
+    If tpm: starts swtpm.
+    If stealth and first launch: starts HTTP server thread.
+    Popen() the QEMU command, writes PID.
+    Connects to QMP socket.
+    If VNC: sets and expires password via QMP.
+    Returns {"success":True/False, "pid":..., "display":..., "vnc_port":..., "vnc_password":...}
+
+  stop_vm(name, force=False)
+    Reads PID from .state.json. Sends SIGTERM (graceful) or SIGKILL (force).
+    Removes vm.pid, updates .state.json.
+    Returns {"success":True/False}
+
+  stop_all()
+    Calls stop_vm() for every running VM.
+
+  vm_status(name)
+    Reads config and PID, checks process liveness.
+    Returns dict with running state, uptime, resource usage.
+
+  monitor_vm(name)
+    Reads /proc/<pid>/ for CPU%, memory RSS, and IO stats.
+    Returns dict suitable for _render_monitor().
+
+  monitor_all()
+    Calls monitor_vm() for every VM, returns dict keyed by name.
+
+  show_config(name)
+    Reads and returns ~/.qemu_vms/<name>/config.json as dict.
+
+  update_config(name, updates: dict)
+    Reads config.json, merges updates, writes back.
+    Returns {"success":True, "config":...}
+
+  print_command(name)
+    Builds QEMU arg list via qemu_arg_builder and returns it as a string.
+
+  resize_disk(name, disk_index, new_size_gb)
+    Checks VM is stopped. Runs qemu-img resize disk0.qcow2 <size>G.
+    Returns {"success":True/False}
+
+  scan_isos()
+    Scans common locations (~/, ~/Desktop, ~/Downloads, /media, /mnt)
+    for *.iso files. Returns sorted list of paths.
+
+  clone_vm(source_name, new_name)
+    Copies vm_dir to new name. Runs qemu-img convert to create independent disk.
+    Updates name in config.json.
+
+  delete_vm(name, delete_disks=True)
+    Stops VM if running. Removes vm_dir (and disk if delete_disks=True).
+    Updates .state.json.
+
+  snapshot_create(name, snap_name)
+    Runs qemu-img snapshot -c {snap_name} disk0.qcow2 (VM must be stopped).
+
+  snapshot_list(name)
+    Runs qemu-img snapshot -l disk0.qcow2. Parses output.
+
+  snapshot_restore(name, snap_name)
+    Runs qemu-img snapshot -a {snap_name} disk0.qcow2 (VM must be stopped).
+
+  snapshot_delete(name, snap_name)
+    Runs qemu-img snapshot -d {snap_name} disk0.qcow2.
+
+  get_vm_logs(name, lines=50)
+    Reads last N lines of launch.log.
+
+  open_display(name)
+    Launches virt-viewer or vncviewer pointing at the VM.
+
+  open_shell(name)
+    Opens socat connection to serial.sock for serial console access.
+
+  set_resource_limits(name, cpu_percent, memory_mb)
+    Uses systemd-run or cgset to apply cgroup limits to the QEMU process.
+
+  create_network(net_name)
+    Creates an isolated bridge network using ip and iptables commands.
+    Saves to ~/.qemu_vms/_networks/networks.json.
+
+  delete_network(net_name)
+    Tears down the bridge and removes from networks.json.
+
+  list_networks()
+    Returns all networks from networks.json.
+
+  add_vm_to_network(net_name, vm_name)
+    Attaches the VM's TAP interface to the network bridge.
+
+  send_monitor_cmd(name, cmd)
+    Connects to monitor.sock and sends a raw QEMU human monitor command.
+    Returns the response text.
+
+  generate_guest_setup(name)
+    Reads config.json, generates guest_setup.sh (Linux) or guest_setup.ps1
+    (Windows) with appropriate content for the OS. Writes to vm_dir.
+
+  _write_smbios_chassis_bin(name, chassis_type_byte)
+    Writes a raw binary SMBIOS type-3 structure with the chassis_type_byte set.
+    Saves to vm_dir/smbios_chassis.bin.
+
+  _start_tpm(name)
+    Starts swtpm socket daemon. Creates tpm/ dir. Waits for tpm.sock to appear.
+
+────────────────────────────────────────────────────────────────────────────────
+client/api/qemu_arg_builder.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Builds the complete QEMU command-line argument list from a MachineConfig.
+  Pure function (no side effects, no file I/O).
+
+FUNCTION: build_args(cfg: MachineConfig, vnc_bind_local=False)
+  IN:  cfg MachineConfig, vnc_bind_local bool
+  OUT: list[str] — the full QEMU command starting with the binary path
+
+  Calls sub-functions in order:
+  _build_base(cfg)          -name, -machine, -cpu, -smp, -m, -rtc
+  _build_firmware(cfg)      -drive if=pflash for OVMF, or -bios for seabios
+  _build_disks(cfg)         -drive for each DiskConfig
+  _build_iso(cfg)           -drive if=cdrom for iso_path
+  _build_network(cfg)       -netdev user/tap, -device for NIC
+  _build_display(cfg, vnc_bind_local)  -display, -vga or -device for GPU
+  _build_audio(cfg)         -audiodev, -device for sound
+  _build_sockets(cfg)       -monitor, -serial, -qmp sockets
+  _build_smbios(cfg)        -smbios type=0,1,2 and -smbios file= for chassis
+  _build_tpm(cfg)           -chardev, -tpmdev, -device for TPM
+  _apply_stealth(cfg)       USB controller, display device override
+  _harden(cfg)              CPU flags: kvm=off,-vmx,-hypervisor
+  _build_battery(cfg)       -device acpi-battery if battery=True
+  _build_hugepages(cfg)     -mem-path /dev/hugepages if hugepages=True
+  + cfg.extra_args appended at the end
+
+KEY SUB-FUNCTIONS
+
+  _build_base(cfg)
+    -name <cfg.name>
+    -machine type=<cfg.machine_type>[,smm=on if q35+ovmf]
+    -cpu <cfg.cpu_model>[,kvm=off,-vmx if hardened]
+    -smp <cfg.cpu_cores>,threads=<cfg.cpu_threads>
+    -m <cfg.memory_mb>
+    -rtc base=utc,driftfix=slew
+
+  _build_smbios(cfg)
+    If bios_vendor or bios_version:
+      -smbios type=0,vendor=...,version=...
+    If manufacturer or product_name or serial_number:
+      -smbios type=1,manufacturer=...,product=...,serial=...
+    If board_product:
+      -smbios type=2,product=...
+    If smbios_chassis.bin exists:
+      -smbios file=<path/smbios_chassis.bin>
+
+  _apply_stealth(cfg)
+    If stealth and os_type == "linux":
+      replaces GPU device with vmware-svga
+    If stealth:
+      -device nec-usb-xhci,id=usb0
+    ACPI OEM ID via -smbios type=0,oemid=<first 6 chars of manufacturer>
+
+  _harden(cfg)
+    Adds kvm=off,-vmx,-hypervisor to -cpu argument
+
+  _build_display(cfg, vnc_bind_local)
+    If display=="vnc":
+      -vnc 127.0.0.1:{port},password=on   (if vnc_bind_local)
+      -vnc :{port},password=on            (otherwise)
+    If display=="sdl": -display sdl
+    If display=="gtk": -display gtk
+    If display=="none": -nographic
+
+────────────────────────────────────────────────────────────────────────────────
+client/api/qemu_config.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Configuration dataclasses (MachineConfig, DiskConfig, NetworkConfig).
+  Hardware profile definitions and management. OVMF firmware detection.
+
+KEY DATACLASSES
+
+  MachineConfig
+    All VM settings. Key fields:
+    name, os_type, os_name, description
+    cpu_cores (default 2), cpu_threads (default 1), cpu_model (default "host")
+    memory_mb (default 4096)
+    machine_type (default "q35"), machine_arch (default "x86_64")
+    qemu_binary (default "qemu-system-x86_64")
+    display (default "sdl"), gpu, audio (default "hda")
+    bios (default "seabios"), uefi (default False)
+    kvm (default True), tpm (default False)
+    stealth (default False), hardened (default False)
+    battery (default False), hugepages (default False), balloon (default True)
+    manufacturer, product_name, serial_number, board_product
+    bios_vendor, bios_version, smbios_type, machine_class
+    networks: list[NetworkConfig]
+    disks: list[DiskConfig]
+    iso_path, extra_args
+    rtc_clock (default "utc"), rtc_driftfix (default "slew")
+
+  DiskConfig
+    path: str (full path to qcow2 file)
+    size_gb: int (default 40)
+    format: str (default "qcow2")
+    bus: str (default "virtio")
+    disk_model: str (default "")
+
+  NetworkConfig
+    mode: str ("nat" or "bridge")
+    bridge: str (bridge interface name)
+    mac: str (MAC address, auto-generated if empty)
+    model: str (NIC model, default "e1000e" for stealth)
+    manufacturer_hint: str (used to pick manufacturer-appropriate MAC OUI)
+
+KEY FUNCTIONS
+
+  detect_ovmf()
+    Searches known install paths across distros for OVMF firmware files.
+    Returns dict: {"ovmf": path_or_None, "ovmf_ms": path_or_None,
+                   "ovmf_vars": path_or_None}
+    Searches _4M variants first (modern Mint/Ubuntu only have _4M).
+
+  check_system_capabilities()
+    Runs qemu-system-x86_64 --version, checks /dev/kvm, queries machine types
+    and CPU models. Returns dict for _render_system().
+
+  get_all_profiles()
+    Returns merged dict of built-in profiles + custom profiles from
+    ~/.qemu_vms/_profiles/.
+
+  list_profiles()
+    Returns list of profile names with descriptions.
+
+  apply_profile(cfg: MachineConfig, profile_name: str)
+    Applies a profile's settings onto a MachineConfig. Returns new MachineConfig.
+    Raises ValueError if profile not found.
+
+  check_profile_compatibility(profile_name)
+    Checks each field of the profile against host capabilities.
+    Returns dict with pass/warn/fail for each field.
+
+  save_custom_profile(name, fields: dict)
+    Saves a custom profile to ~/.qemu_vms/_profiles/<name>.json.
+
+  delete_custom_profile(name)
+    Deletes a custom profile file.
+
+────────────────────────────────────────────────────────────────────────────────
+client/api/qmp_client.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Client for the QEMU Machine Protocol (QMP). Connects to qmp.sock and sends
+  JSON-encoded commands to control a running QEMU process.
+
+KEY FUNCTIONS
+
+  connect(sock_path, timeout=7.5)
+    Connects to the Unix socket with retries (15 × 0.5s).
+    Reads the QMP greeting message.
+    Sends qmp_capabilities to activate the command channel.
+
+  execute(cmd, **args)
+    Sends {"execute": cmd, "arguments": args} to the socket.
+    Returns the parsed response.
+
+  set_password(protocol, password, connected)
+    QMP command: change-vnc-password. Sets VNC password.
+
+  expire_password(protocol, time)
+    QMP command: expire-password. Expires the VNC password at an absolute time.
+    time is an ISO 8601 timestamp (current time + 600 seconds).
+
+  close()
+    Closes the socket connection.
+
+────────────────────────────────────────────────────────────────────────────────
+SHARED SIDE  (files/shared/)
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+shared/sanitizer/sanitizer.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Transforms raw AI-generated args into clean, safe args. Never blocks,
+  never raises. Always returns a dict.
+
+MODULE-LEVEL STATE
+  PLACEHOLDER_VM_NAMES  — set of all known placeholder names (loaded from config)
+  OS_TYPE_ALIASES       — dict of os_type normalisation rules
+  _ENUM_MAPS            — normalisation maps for display, audio, network_mode, etc.
+  _BRIDGE_NIC_NAMES     — set of physical NIC names to normalise to virbr0
+
+FUNCTION: _sanitise_args(tool_name, args)
+  IN:  tool_name str, args dict
+  OUT: dict (cleaned args)
+  See handbook_2_workflow.txt section 7 for the full step-by-step description.
+
+FUNCTION: _resolve_vm_name(vms, name)
+  IN:  vms list[dict], name str
+  OUT: str (resolved VM name) or None
+  Tries: exact match → index match ("vm 1" → first VM) → prefix match
+
+FUNCTION: _resolve_iso(distro_hint)
+  IN:  distro_hint str (e.g. "mint", "ubuntu")
+  OUT: str (path to matching ISO) or None
+  Scans scan_isos() results for filenames containing the distro hint.
+
+────────────────────────────────────────────────────────────────────────────────
+shared/sanitizer/context_gate.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Checks whether required context arguments are present before tool execution.
+  If a required arg is missing, returns a clarification request.
+
+MODULE-LEVEL STATE
+  _REQUIRED  — dict from context_gate_config.json: {tool_name: [required_fields]}
+
+FUNCTION: gate_check(tool_name, args)
+  IN:  tool_name str, args dict
+  OUT: None if all required args present, else clarify dict
+  For each required field in _REQUIRED[tool_name]:
+    If field is absent or empty → return {"clarify":True, "question":..., "options":[...]}
+  Returns None if all present.
+
+────────────────────────────────────────────────────────────────────────────────
+shared/preflight/validator.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Reality-checks sanitised args against actual system state (or shape only in
+  stateless mode). Returns a structured action dict.
+
+MODULE-LEVEL STATE
+  _CUSTOM_MODE  — bool, set True when -cu flag is active
+  _TIMEOUT      — preflight timeout from config
+
+FUNCTION: _preflight_check(tool_name, args, manager, verbose, stateless_only=False)
+  IN:  tool_name str, args dict, manager QemuManager, verbose bool, stateless_only bool
+  OUT: {"action": "ok"|"auto_fix"|"ask_user"|"abort", ...}
+  Dispatches to per-tool check functions. Returns action dict.
+
+FUNCTION: _validate_with_internet(tool_name, args, stateless_only)
+  IN:  tool_name str, args dict, stateless_only bool
+  OUT: list of issue dicts
+  Runs with 4s timeout. Skipped if offline or -cu active.
+  Checks:
+  - qemu-system-x86_64 -machine help (local, instant)
+  - qemu-system-x86_64 -cpu help (local, instant)
+  - CPU arch consistency (local knowledge)
+  - Product name via DuckDuckGo API (remote, ~1-2s, skipped if -cu)
+
+FUNCTION: _validate_profile_for_host(profile_name, manager)
+  IN:  profile_name str, manager QemuManager
+  OUT: dict with compatibility issues
+  Calls check_profile_compatibility() and checks for blocking issues.
+
+FUNCTION: set_custom_mode(val)
+  Sets _CUSTOM_MODE. Called at startup when -cu flag is detected.
+
+FUNCTION: _show_preflight_warning(preflight_result, console)
+  Prints a yellow warning panel with the question and options.
+
+================================================================================

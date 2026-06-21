@@ -18,7 +18,7 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-from api.qemu_config  import _MC, OVMF, check_profile_compatibility, check_system_capabilities, get_all_profiles, list_profiles
+from client.api.qemu_config import _MC, OVMF, check_profile_compatibility, check_system_capabilities, get_all_profiles, list_profiles
 from .session      import AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session, save_session, set_auto_clear, set_loop_max, get_loop_max
 from .display      import (
     console,
@@ -28,10 +28,11 @@ from .display      import (
 from .fingerprint        import _tf_report
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots
-from sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
-from sanitizer.sanitizer    import OS_TYPE_ALIASES
-from executioner.tool_executor import execute_tool, manager, _VM_DEFS
-from preflight.validator    import set_custom_mode, _preflight_check, _show_preflight_warning
+from shared.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
+from shared.sanitizer.sanitizer import OS_TYPE_ALIASES
+from provider.executor_client import execute_tool, API_URL, _VERIFY, _TOKEN, _TIMEOUT
+from client.executioner.tool_executor  import manager, _VM_DEFS
+from shared.preflight.validator import set_custom_mode, _preflight_check, _show_preflight_warning
 
 _CFG            = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _EXIT_CMDS      = set(_CFG["exit_commands"])
@@ -230,6 +231,7 @@ def chat_loop(verbose: bool = False):
         ollama_model=OLLAMA_MODEL,
         ovmf_available=OVMF["available"],
         ovmf_code=OVMF.get("code", ""),
+        api_url=API_URL,
     )
     if AUTO_CLEAR_SESSION:
         clear_session()
@@ -250,6 +252,22 @@ def chat_loop(verbose: bool = False):
 
     _runtime_drift_count  = 0    # consecutive action turns with no tool execution
     _synthetic_continue   = False # True when re-entering loop after cap-hit continuation
+
+    # Background liveness monitor — pings /health every 30 s when remote.
+    if API_URL != "local":
+        import threading, requests as _req
+        _liveness_stop = threading.Event()
+        def _liveness_loop():
+            import time as _t
+            while not _liveness_stop.wait(30):
+                try:
+                    r = _req.get(f"{API_URL}/health", timeout=5, verify=_VERIFY)
+                    if not r.ok:
+                        console.print(f"\n[bold yellow]⚠ Client machine health check failed ({r.status_code}) — it may have restarted.[/bold yellow]")
+                except Exception:
+                    console.print(f"\n[bold red]✖ Client machine at {API_URL} is not responding. Check that 'qemu-api serve' is still running.[/bold red]")
+        _liveness_thread = threading.Thread(target=_liveness_loop, daemon=True)
+        _liveness_thread.start()
 
     while True:
         _is_synthetic = _synthetic_continue
@@ -494,7 +512,18 @@ def chat_loop(verbose: bool = False):
                 # ──────────────────────────────────────────────────────────
 
                 # ── Pre-flight check ───────────────────────────────────────
-                _pf        = _preflight_check(tool_name, raw_args, manager, verbose)
+                # Both modes run preflight — but with different scope:
+                # Local:  full check (real manager, real fs, real binaries).
+                # Remote: stateless-only (shape/logic/arg checks — no fs or manager
+                #         calls). The client machine runs the full stateful check
+                #         and returns structured preflight responses as tool results,
+                #         which the clarify/error handlers below already handle.
+                _pf = _preflight_check(
+                    tool_name, raw_args,
+                    manager if API_URL == "local" else None,
+                    verbose,
+                    stateless_only=(API_URL != "local"),
+                )
                 _pf_action = _pf.get("action", "ok")
 
                 if _pf_action == "abort":
@@ -764,9 +793,25 @@ def chat_loop(verbose: bool = False):
                     result = execute_tool(tool_name, raw_args, verbose)
                     _tool_executed_this_turn = True
 
+                # Remote VNC launch — render connection panel and strip from tool result.
+                if (
+                    not verbose
+                    and isinstance(result, dict)
+                    and result.get("success")
+                    and result.get("vnc_connect_cmd")
+                ):
+                    from provider.ai.display import _render_vnc_connect
+                    _render_vnc_connect(console, result)
+                    result = {
+                        "success": True, "name": result.get("name"), "display": "vnc",
+                        "rendered": True,
+                        "note": "VM launched via VNC. Connection panel shown to user. Do not repeat the commands.",
+                    }
+                    tool_content = json.dumps(result, default=str)
+
                 # Tools that self-render formatted output: strip data so the AI
                 # doesn't repeat the table/panel in its text response.
-                if tool_name in _RENDERS_OUTPUT and not verbose and not _pre_gate_result:
+                elif tool_name in _RENDERS_OUTPUT and not verbose and not _pre_gate_result:
                     tool_content = json.dumps(
                         {"success": True, "rendered": True,
                          "note": "Output already displayed to user. Do not repeat it."},
@@ -1157,6 +1202,118 @@ def cli_direct(args: List[str], verbose: bool = False):
             srv.shutdown()
             console.print("[dim]Server stopped.[/dim]")
 
+    elif cmd == "serve":
+        import uvicorn
+        from provider.executor_client import _EX
+        # Parse: serve [host] [port] [--cert cert.pem --key key.pem]
+        positional = [a for a in rest if not a.startswith("--")]
+        flags      = rest  # full list for --flag parsing
+        host = positional[0] if positional else "0.0.0.0"
+        port = int(positional[1]) if len(positional) > 1 else _EX.get("port", 8080)
+        cert = flags[flags.index("--cert") + 1] if "--cert" in flags else None
+        key  = flags[flags.index("--key")  + 1] if "--key"  in flags else None
+        tls_line = (
+            f"[green]TLS ON[/green] — cert: {cert}"
+            if cert else
+            "[yellow]TLS OFF[/yellow] — use --cert / --key for HTTPS (required over untrusted networks)"
+        )
+        console.print(Panel(
+            f"[bold cyan]qemu-api executor service[/bold cyan]\n"
+            f"Listening on [bold]{host}:{port}[/bold]\n"
+            f"{tls_line}\n"
+            f"[dim]Set API_TOKEN on this machine and on the AI provider before connecting.[/dim]",
+            border_style="cyan", title="Client Machine",
+        ))
+        uvicorn_kwargs: dict = {"host": host, "port": port, "log_level": "warning"}
+        if cert and key:
+            uvicorn_kwargs["ssl_certfile"] = cert
+            uvicorn_kwargs["ssl_keyfile"]  = key
+        elif cert or key:
+            console.print("[bold red]--cert and --key must both be provided for TLS.[/bold red]")
+            sys.exit(1)
+        uvicorn.run("client.server.api_server:app", **uvicorn_kwargs)
+
+    elif cmd == "fetch":
+        # fetch <vm_name> [--out /dest/dir] — download VM disk from client machine
+        if not rest:
+            console.print("[bold red]Usage: fetch <vm_name> [--out /dest/dir][/bold red]")
+            sys.exit(1)
+        if API_URL == "local":
+            console.print("[bold red]fetch requires remote mode (API_URL must be set)[/bold red]")
+            sys.exit(1)
+        import requests as _req, hashlib as _hl, pathlib as _pl
+        vm_name = rest[0]
+        out_dir = rest[rest.index("--out") + 1] if "--out" in rest else os.getcwd()
+        out_dir = _pl.Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        headers = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}
+
+        # Fetch checksum first so we can verify after download
+        console.print(f"[dim]Fetching SHA256 for [bold]{vm_name}[/bold]...[/dim]")
+        try:
+            cs_resp = _req.get(f"{API_URL}/images/{vm_name}/sha256",
+                               headers=headers, timeout=30, verify=_VERIFY)
+        except Exception as e:
+            console.print(f"[bold red]Cannot reach client machine: {e}[/bold red]")
+            sys.exit(1)
+        if not cs_resp.ok:
+            console.print(f"[bold red]{cs_resp.status_code}: {cs_resp.text}[/bold red]")
+            sys.exit(1)
+        cs_data      = cs_resp.json()
+        expected_sha = cs_data["sha256"]
+        disk_name    = cs_data["disk"]
+        total_bytes  = cs_data["size_bytes"]
+        out_path     = out_dir / disk_name
+
+        # Resume if partial file exists
+        resume_from = out_path.stat().st_size if out_path.exists() else 0
+        if resume_from >= total_bytes:
+            console.print(f"[green]Already complete:[/green] {out_path}")
+        else:
+            dl_headers = dict(headers)
+            if resume_from:
+                dl_headers["Range"] = f"bytes={resume_from}-"
+                console.print(f"[dim]Resuming from {resume_from // 1024 // 1024} MB...[/dim]")
+
+            with _req.get(f"{API_URL}/images/{vm_name}", headers=dl_headers,
+                          stream=True, timeout=_TIMEOUT, verify=_VERIFY) as r:
+                if not r.ok:
+                    console.print(f"[bold red]Download failed {r.status_code}: {r.text}[/bold red]")
+                    sys.exit(1)
+                mode = "ab" if resume_from else "wb"
+                downloaded = resume_from
+                with open(out_path, mode) as f:
+                    for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            pct = downloaded * 100 // total_bytes
+                            console.print(
+                                f"  [dim]{pct}%  {downloaded // 1024 // 1024} / "
+                                f"{total_bytes // 1024 // 1024} MB[/dim]",
+                                end="\r",
+                            )
+            console.print()
+
+        # Verify checksum
+        console.print("[dim]Verifying checksum...[/dim]")
+        h = _hl.sha256()
+        with open(out_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
+                h.update(chunk)
+        actual_sha = h.hexdigest()
+        if actual_sha != expected_sha:
+            console.print(f"[bold red]Checksum MISMATCH — file may be corrupt![/bold red]\n"
+                          f"  expected: {expected_sha}\n  actual:   {actual_sha}")
+            sys.exit(1)
+        console.print(Panel(
+            f"[bold green]{vm_name}[/bold green] downloaded and verified.\n"
+            f"Disk: [bold]{out_path}[/bold]\n"
+            f"SHA256: [dim]{actual_sha}[/dim]",
+            border_style="green", title="fetch_vm complete",
+        ))
+
     elif cmd == "clear-session":
         clear_session()
 
@@ -1185,7 +1342,8 @@ def cli_direct(args: List[str], verbose: bool = False):
             "  qemu-api isos\n"
             "  qemu-api show-cmd <name>\n"
             "  qemu-api clear-session\n"
-            "  qemu-api -tf <name>\n\n"
+            "  qemu-api -tf <name>\n"
+            "  qemu-api serve [host] [port]    ← run as API computer\n\n"
             "Add [bold]-v[/bold] anywhere for verbose/raw output.\n"
             "Add [bold]-cu[/bold] to AI chat to skip product verification for custom machines.\n"
             "Add [bold]-cs[/bold] to AI chat to clear the session before starting.",

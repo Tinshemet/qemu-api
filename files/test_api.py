@@ -67,6 +67,9 @@ from tests.layer10_pipeline_full import (
     FULL_TESTS, run_full_test, cleanup_full_artifacts,
     generate_random_full_tests,
 )
+from tests.layer11_remote_split import (
+    REMOTE_SPLIT_TESTS, run_remote_split_test,
+)
 from tests.renderer         import (
     LAYER_NAMES, render_layer_results,
     render_pipeline_table, render_gated_table, render_full_pipeline_table,
@@ -148,7 +151,7 @@ def main():
         return
 
     # ── Layer filter ──────────────────────────────────────────────────────────
-    run_layers = {1, 2, 5, 6, 7, 8, 9, 10} if quick else {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+    run_layers = {1, 2, 5, 6, 7, 8, 9, 10, 11} if quick else {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 
     if "-l" in argv:
         idx = argv.index("-l")
@@ -246,7 +249,8 @@ def main():
         f"L7={len(CA_TESTS)}+{len(rand_ca_tests)}r "
         f"L8={len(PIPELINE_TESTS)}+{len(rand_pipeline_tests)}r "
         f"L9={len(GATED_TESTS)}+{len(rand_gated_tests)}r "
-        f"L10={len(FULL_TESTS)}+{len(rand_full_tests)}r\n"
+        f"L10={len(FULL_TESTS)}+{len(rand_full_tests)}r "
+        f"L11={len(REMOTE_SPLIT_TESTS)}\n"
         f"Seed: {seed}  |  Mode: {mode_str}"
         + (f"\nTag: [bold]{tag_filter}[/bold]" if tag_filter else ""),
         border_style="cyan", title="[bold]qemu-api[/bold]",
@@ -373,6 +377,15 @@ def main():
             console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
                            f"{tc.id}{dbl} [{r.duration_s*1000:.0f}ms]")
         cleanup_full_artifacts()
+
+    rs_tests = [t for t in REMOTE_SPLIT_TESTS if tag_ok(t.tags)] if 11 in run_layers else []
+    if rs_tests:
+        console.print(f"\n[bold bright_blue]Layer 11 — Remote Split ({len(rs_tests)})[/bold bright_blue]")
+        for tc in track(rs_tests, description="  Running..."):
+            r = run_remote_split_test(tc)
+            all_results.append(r)
+            console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
+                           f"{tc.id} [{r.duration_s*1000:.0f}ms]")
 
     console.print()
     for layer in sorted(run_layers):

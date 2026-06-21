@@ -386,6 +386,7 @@ class MachineConfig:
     gpu:             str           = _MC["gpu"]
     display:         str           = _MC["display"]
     vnc_port:        Optional[int] = None
+    vnc_bind_local:  bool          = False   # True → bind to 127.0.0.1 + require password (remote mode)
     spice_port:      Optional[int] = None
     opengl:          bool          = _MC["opengl"]
     resolution:      str           = _MC["resolution"]

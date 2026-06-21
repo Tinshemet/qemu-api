@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from .shared import ContextAssistantTest, TestResult, check_context
 
-_CFG_PATH = pathlib.Path(__file__).parents[1] / "ai" / "context_assistant_config.json"
+_CFG_PATH = pathlib.Path(__file__).parents[1] / "provider" / "ai" / "context_assistant_config.json"
 with _CFG_PATH.open() as _f:
     _CA_CFG = json.load(_f)
 

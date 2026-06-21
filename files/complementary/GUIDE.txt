@@ -1,49 +1,73 @@
 ================================================================================
-  QEMU/KVM + OLLAMA VM MANAGER  —  COMPLETE GUIDE  (v5)
+  QEMU/KVM + OLLAMA VM MANAGER  —  COMPLETE GUIDE  (v7)
 ================================================================================
 
 FILES IN THIS PROJECT
 ─────────────────────
-  ai/
-    cli.py            Chat loop + direct sub-command CLI (main entry point)
-    display.py        Rich console rendering (banners, tables, panels)
-    fingerprint.py    -tf fingerprint report (inxi simulation)
-    ollama_client.py  Ollama HTTP client + system prompt builder
-    session.py        Conversation history (load/save/clear)
-    tools.py          TOOLS list — the 31 AI tool definitions
+  provider/                    AI provider machine code
+    ai/
+      cli.py                   Chat loop + direct sub-command CLI (main entry point)
+      display.py               Rich console rendering (banners, tables, panels, VNC panel)
+      fingerprint.py           -tf fingerprint report (inxi simulation)
+      ollama_client.py         Ollama HTTP client + system prompt builder
+      session.py               Conversation history (load/save/clear)
+      tools.py                 TOOLS list — the AI tool definitions
+      context_assistant.py     Context gate for AI-aware preflight decisions
+      config.json              AI-layer config (Ollama URL, model, loop limits)
+      context_assistant_config.json  Context assistant message templates
+      tools.json               Tool metadata and descriptions
+    executor_client.py         THE SEAM — local direct call or remote HTTP POST
+    ollama_wrapper.py          Single re-export surface for all provider + shared symbols
 
-  api/
-    qemu_config.py    Configuration dataclasses, hardware profiles, OVMF detection
-    qemu_manager.py   VM lifecycle engine: create, launch, monitor, QMP, networking
-    qemu_arg_builder.py  Builds the QEMU command-line argument list
-    qmp_client.py     QMP (QEMU Machine Protocol) socket client
-    network_manager.py   Isolated network (bridge) management
-    vm_state.py       State persistence (PID tracking, .state.json)
+  client/                      Client machine code (runs QEMU/libvirt)
+    api/
+      qemu_config.py           Configuration dataclasses, hardware profiles, OVMF detection
+      qemu_manager.py          VM lifecycle engine: create, launch, monitor, QMP, networking
+      qemu_arg_builder.py      Builds the QEMU command-line argument list
+      qmp_client.py            QMP (QEMU Machine Protocol) socket client
+      network_manager.py       Isolated network (bridge) management
+      vm_state.py              State persistence (PID tracking, .state.json)
+      config.json              Client-side QEMU config (VM base dir, timeouts, buffers)
+    executioner/
+      tool_executor.py         execute_tool() — hard guards, dispatch to QemuManager
+      config.json              Executor config (API URL, token, port, allowed tools)
+    server/
+      api_server.py            FastAPI server — /execute, /health, /images, /rotate-token
 
-  executioner/
-    tool_executor.py  execute_tool() — hard guards, dispatch to QemuManager
-
-  preflight/
-    validator.py      _preflight_check(), internet validator, profile host-check
-
-  sanitizer/
-    sanitizer.py      _sanitise_args() — all coercion, normalisation, cap logic
+  shared/                      Code used by both provider and client
+    preflight/
+      validator.py             _preflight_check(), internet validator, profile host-check
+      config.json              Preflight config (timeout, caps)
+    sanitizer/
+      sanitizer.py             _sanitise_args() — all coercion, normalisation, cap logic
+      context_gate.py          Gate check for context-aware tool calls
+      config.json              Sanitizer config (placeholder names, enum maps)
+      context_gate_config.json Context gate rules per tool
 
   tests/
-    shared.py         Common imports and TestResult dataclass for all layers
-    layer1_sanitizer.py  Layer 1 unit tests (sanitiser)
-    layer2_executor.py   Layer 2 unit tests (executor + preflight)
-    layer3_ai.py         Layer 3 AI integration tests (needs Ollama)
-    layer4_profiles.py   Layer 4 random profile + HTTP tests
-    layer5_property.py   Layer 5 property-based invariant tests
-    renderer.py          Test result rendering (tables, benchmark output)
+    shared.py                  Common imports and TestResult dataclass for all layers
+    layer1_sanitizer.py        Layer 1 unit tests (sanitiser)
+    layer2_executor.py         Layer 2 unit tests (executor + preflight)
+    layer3_ai.py               Layer 3 AI integration tests (needs Ollama)
+    layer4_profiles.py         Layer 4 random profile + HTTP tests
+    layer5_property.py         Layer 5 property-based invariant tests
+    layer6_context_gate.py     Layer 6 context gate tests
+    layer7_context_assistant.py  Layer 7 context assistant tests
+    layer8_pipeline.py         Layer 8 full pipeline tests
+    layer9_pipeline_gated.py   Layer 9 gated pipeline tests
+    layer10_pipeline_full.py   Layer 10 full pipeline integration tests
+    layer11_remote_split.py    Layer 11 provider/client HTTP boundary tests
+    renderer.py                Test result rendering (tables, benchmark output)
+    probe_tools.py             Tool probe utilities
 
-  ollama_wrapper.py   Backward-compatibility shim — re-exports from layer modules
-  test_api.py         5-layer test suite entry point (v5)
+  test_api.py                  11-layer test suite entry point
   complementary/
-    install.sh          One-command installer / uninstaller
-    requirements.txt    Python dependencies (requests, psutil, rich)
-    GUIDE.txt           This file
+    install.sh                 Full local setup (Ollama + QEMU + venv + alias)
+    setup_provider.sh          Provider-only setup (your laptop — Ollama + chat loop)
+    setup_client.sh            Client-only setup (QEMU server, no Ollama) — Linux or WSL2
+    setup_wsl2.ps1             Windows-side WSL2 port forwarding setup (run as Admin)
+    requirements.txt           Python dependencies (requests, psutil, rich, fastapi, httpx)
+    GUIDE.txt                  This file
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 1 — QUICK START
@@ -57,7 +81,7 @@ SECTION 1 — QUICK START
   Handles automatically:
   - apt packages    qemu-kvm, qemu-utils, ovmf, virt-viewer, socat, cpu-checker
   - KVM group membership
-  - Python venv     ~/qemu-env  with requests, psutil, rich
+  - Python venv     ~/qemu-env  with requests, psutil, rich, fastapi, uvicorn, httpx
   - Ollama install + qwen2.5:7b model pull
   - systemd user service  (Ollama auto-starts on login)
   - Bridge networking config   /etc/qemu/bridge.conf
@@ -71,20 +95,20 @@ SECTION 1 — QUICK START
   sudo apt install qemu-kvm qemu-utils ovmf virt-viewer socat python3-venv
   python3 -m venv ~/qemu-env
   source ~/qemu-env/bin/activate
-  pip install requests psutil rich
+  pip install requests psutil rich fastapi uvicorn httpx
 
   Add to ~/.zshrc:
     source ~/qemu-env/bin/activate
     export OLLAMA_MODEL=qwen2.5:7b
-    alias qemu-api='python3 ~/path/to/files/ollama_wrapper.py'
+    alias qemu-api='python3 ~/path/to/files/provider/ollama_wrapper.py'
 
   Start Ollama:
     curl -fsSL https://ollama.com/install.sh | sh
     ollama serve &
     ollama pull qwen2.5:7b
 
-1.3  RUN
-─────────
+1.3  RUN (LOCAL MODE)
+──────────────────────
   qemu-api               AI chat mode
   qemu-api -v            Verbose (shows raw tool calls and sanitised args)
   qemu-api -cu           Custom machine mode (skip product verification)
@@ -101,45 +125,348 @@ Every request passes through five protection layers before QEMU sees it:
   User Input
       │
       ▼
-  qwen2.5:7b (Ollama)           ai/ollama_client.py
+  qwen2.5:7b (Ollama)           provider/ai/ollama_client.py
   Selects tool, builds args
       │
       ▼
-  _sanitise_args()              sanitizer/sanitizer.py
+  _sanitise_args()              shared/sanitizer/sanitizer.py
   Type coercion, enum normalisation, path fixing,
   placeholder removal, resource caps, arch checks
       │
       ▼
-  _preflight_check()            preflight/validator.py
+  _preflight_check()            shared/preflight/validator.py
   + _validate_with_internet     Reality check: ok / auto_fix / ask_user / abort
   + _validate_profile_for_host  QEMU binary check, CPU arch check, product lookup,
                                 profile vs host capability check
       │
       ▼
-  execute_tool()                executioner/tool_executor.py
+  execute_tool()                client/executioner/tool_executor.py
   Hard guards: arch mismatch, name validation,
   Windows UEFI enforcement, clarify responses
       │
       ▼
-  QemuManager                   api/qemu_manager.py
+  QemuManager                   client/api/qemu_manager.py
   Actual QEMU/KVM operations
 
 Even if the AI hallucinates bad args, they are caught and either silently
 corrected or the user is asked before anything dangerous happens.
 
-Current test results (213 tests, seed=42):
-  Layer 1 — Sanitiser:       55/55  (100%)
-  Layer 2 — Executor:        23/23  (100%)
-  Layer 3 — AI Integration:  17/19  ( 89%) — 2 known test expectation issues
-  Layer 4 — Profile + HTTP:  98/100 ( 98%) — 2 edge cases in broken profiles
-  Layer 5 — Property-Based:   5/5   (100%)
-  Overall:                  207/213 ( 97.2%)
+The codebase is split into three canonical directories:
+  provider/   runs on the AI machine (where the user is)
+  client/     runs on the QEMU machine (where VMs live)
+  shared/     used by both (sanitizer, preflight)
+
+In local mode all three run on the same machine. In remote mode provider/
+runs on one machine and client/ runs on another, communicating over HTTPS.
+
+Current test results (134 tests):
+  Layer 1  — Sanitiser:         passed all
+  Layer 2  — Executor:          passed all
+  Layer 11 — Remote Split:      passed all (19 HTTP boundary tests)
+  Overall:                      134/134  (100%)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 3 — NEW FLAGS  (-cu  and  -tf)
+SECTION 3 — LOCAL MODE vs REMOTE MODE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-3.1  -cu  CUSTOM MACHINE MODE
+3.1  THE SEAM — provider/executor_client.py
+─────────────────────────────────────────────
+  This is the single file that decides how a tool call is dispatched.
+  Everything above it is provider code. Everything below it is client code.
+
+  if API_URL == "local":
+      from client.executioner.tool_executor import execute_tool as _local
+      return _local(tool_name, args, verbose)       ← direct in-process call
+
+  else:
+      requests.post(f"{API_URL}/execute", ...)      ← HTTP POST to client machine
+
+  Switching from local to remote is one environment variable. The rest of the
+  code — chat loop, AI, sanitiser, display — is identical in both modes.
+
+3.2  LOCAL MODE
+────────────────
+  ┌─────────────────────────────────────────────────────────────┐
+  │                      One machine                            │
+  │                                                             │
+  │  provider/ai/cli.py  (chat_loop)                           │
+  │    ↓ user types a prompt                                    │
+  │  provider/ai/ollama_client.py                              │
+  │    ↓ Ollama returns a tool call                             │
+  │  shared/sanitizer/sanitizer.py  (_sanitise_args)           │
+  │    ↓ args cleaned and normalised                            │
+  │  shared/preflight/validator.py  (_preflight_check)         │
+  │    ↓ full state check (real VM existence, real disk)        │
+  │  provider/executor_client.py  (API_URL == "local")         │
+  │    ↓ direct function call — no HTTP                         │
+  │  client/executioner/tool_executor.py  (execute_tool)       │
+  │    ↓ hard guards, then dispatch                             │
+  │  client/api/qemu_manager.py  (QemuManager)                 │
+  │    → runs QEMU/KVM directly                                 │
+  └─────────────────────────────────────────────────────────────┘
+
+  Config trigger:  url = "local"  in  client/executioner/config.json  (default)
+  No server process needed. Everything runs in a single Python process.
+
+  Preflight in local mode:
+    stateless_only = False
+    The validator can query real VM state, check real disk files, and call
+    the QEMU binary to verify machine types and CPU models.
+
+3.3  REMOTE MODE
+─────────────────
+  ┌──────────────────────────┐            ┌────────────────────────────────────────┐
+  │   AI provider machine    │            │          Client machine                │
+  │  (laptop / dev box)      │            │       (the box running QEMU)           │
+  │                          │            │                                        │
+  │  provider/ai/cli.py      │            │  client/server/api_server.py           │
+  │  chat_loop               │            │  (FastAPI, started with: serve)        │
+  │    ↓ user prompt         │            │                                        │
+  │  ollama_client.py        │            │  POST /execute ──────────────────────► │
+  │    ↓ Ollama returns call │   HTTPS    │   ├─ token check (API_TOKEN header)    │
+  │  sanitizer.py            │ ─────────► │   ├─ tool allowlist check              │
+  │    ↓ args cleaned        │            │   ├─ shared/preflight (full check)     │
+  │  executor_client.py      │            │   ├─ auto-fix (sanitizer re-run)       │
+  │    API_URL = http://..   │            │   └─ client/executioner/tool_executor  │
+  │    _TOKEN  = secret      │            │         → runs QEMU/libvirt            │
+  │    _VERIFY = CA cert     │            │                                        │
+  │                          │            │  GET /health                           │
+  │  Background thread:      │ ◄───────── │   returns {"status":"ok"}             │
+  │  pings /health every 30s │            │                                        │
+  │  (alerts if client dies) │            │  GET /images/{vm}/sha256               │
+  │                          │            │  GET /images/{vm}  (streaming)         │
+  │  fetch command ──────────┼───────────►│   Range-resume + X-SHA256 header      │
+  │  (downloads VM disk,     │            │                                        │
+  │   verifies SHA256)       │            │  POST /rotate-token                    │
+  │                          │            │   persists to ~/.qemu-api.token        │
+  └──────────────────────────┘            └────────────────────────────────────────┘
+
+  Preflight split in remote mode:
+    AI provider side:  stateless_only=True   — shape/logic checks only (no real state)
+    Client machine:    stateless_only=False  — full check with real VM state and disk
+
+  This matters because the provider doesn't have access to ~/.qemu_vms/ or the
+  QEMU binary. The client does both checks — provider checks are a fast first pass
+  to reject obviously invalid calls before they cross the network.
+
+3.4  SETUP SCRIPTS — WHICH ONE TO RUN
+──────────────────────────────────────
+  install.sh          Full local setup. Run this if QEMU and the AI chat
+                      are both on the same machine. Does everything.
+
+  setup_provider.sh   Provider-only setup. Run this on YOUR machine (the one
+                      you type into). Prompts for local vs remote mode, API_URL,
+                      API_TOKEN, and optionally a CA cert for HTTPS. Installs
+                      Ollama + qwen2.5:7b, creates Python venv, sets up Ollama
+                      as a systemd service, and writes the qemu-api alias plus
+                      all env vars into your shell rc as a labelled block so
+                      you can edit or switch modes later by changing one line.
+                      All prompts can be skipped by pre-setting env vars:
+                        API_URL=local bash setup_provider.sh
+                        API_URL=http://localhost:8080 API_TOKEN=x bash setup_provider.sh
+
+  setup_client.sh     Client-only setup. Run this on the QEMU machine (the
+                      friend's machine or the remote server). Installs QEMU,
+                      KVM check, Python venv, API token, systemd service.
+                      Works on native Linux and WSL2.
+
+  setup_wsl2.ps1      Windows-only. Run as Admin after setup_client.sh when
+                      the client machine is WSL2 on Windows. Handles port
+                      forwarding and the reboot auto-refresh scheduled task.
+
+  Typical remote scenario:
+    Friend's machine (Linux/WSL2):  bash setup_client.sh
+    Friend's machine (WSL2+Win):    .\setup_wsl2.ps1    (as Admin)
+    Your laptop:                    bash setup_provider.sh
+
+3.5  STARTING REMOTE MODE
+──────────────────────────
+  On the client machine:
+
+    # Start the API server (HTTP, no TLS)
+    API_TOKEN=mysecrettoken python3 provider/ollama_wrapper.py serve
+
+    # Start with TLS (recommended for remote access)
+    API_TOKEN=mysecrettoken python3 provider/ollama_wrapper.py serve \
+        0.0.0.0 8443 --cert /path/to/cert.pem --key /path/to/key.pem
+
+    # Custom host and port
+    API_TOKEN=mysecrettoken python3 provider/ollama_wrapper.py serve 0.0.0.0 9000
+
+  On the AI provider machine:
+
+    export API_URL=http://192.168.1.10:8080
+    export API_TOKEN=mysecrettoken
+    qemu-api                              # chat loop now talks to remote client
+
+  With TLS on the provider machine:
+
+    export API_URL=https://192.168.1.10:8443
+    export API_TOKEN=mysecrettoken
+    export API_CA_CERT=/path/to/ca.pem    # custom CA cert (optional)
+    # export API_VERIFY_SSL=0             # disable cert verification (dev only)
+    qemu-api
+
+3.6  CONFIGURATION REFERENCE
+──────────────────────────────
+  All settings in client/executioner/config.json:
+
+    {
+      "executor": {
+        "url":     "local",         ← "local" or "http://host:port"
+        "token":   "",              ← API token (prefer env var API_TOKEN)
+        "port":    8080,            ← port the serve command listens on
+        "timeout": 120,             ← HTTP request timeout in seconds
+        "allowed_remote_tools": [   ← tools that can be called via the API
+          "create_vm", "launch_vm", "stop_vm", ...
+        ]
+      }
+    }
+
+  Environment variables override config.json:
+
+    API_URL         Remote client URL, or "local"
+    API_TOKEN       Shared secret for API authentication
+    API_TIMEOUT     HTTP timeout in seconds (default: 120)
+    API_CA_CERT     Path to custom CA certificate for TLS verification
+    API_VERIFY_SSL  Set to "0" to skip TLS certificate verification (dev only)
+
+  Token persistence:
+    The client server also reads the token from ~/.qemu-api.token (chmod 0600).
+    API_TOKEN env var takes precedence. The token file is a fallback that
+    survives server restarts without re-setting the env var.
+
+    Rotate the token while the server is running:
+      curl -X POST http://client:8080/rotate-token \
+           -H "X-API-Token: currenttoken" \
+           -H "Content-Type: application/json" \
+           -d '{"new_token": "newlongsecrettoken"}'
+    The new token is written atomically to ~/.qemu-api.token and takes effect
+    immediately without a server restart.
+
+3.7  API ENDPOINTS (client/server/api_server.py)
+──────────────────────────────────────────────────
+  All endpoints except /health require the X-API-Token header.
+
+  GET  /health
+    Returns {"status":"ok"} — no auth required.
+    Used by the liveness monitor on the provider side.
+
+  POST /execute
+    Body: {"tool_name": str, "args": dict, "verbose": bool}
+    1. Verifies X-API-Token header against _TOKEN.
+    2. Checks tool_name is in allowed_remote_tools.
+    3. Overrides display: sdl/gtk → vnc + vnc_bind_local=True (remote mode).
+    4. Runs shared/preflight/validator.py (full, stateless_only=False).
+    5. If preflight returns auto_fix, applies the correction.
+    6. Calls client/executioner/tool_executor.execute_tool().
+    7. Returns {"result": ..., "preflight": bool, ...}
+
+  GET  /images/{vm_name}
+    Streams the VM's primary disk image (disk0.qcow2).
+    Supports HTTP Range header for resume on interrupted downloads.
+    Returns X-SHA256 header with the precomputed checksum.
+    Auth required.
+
+  GET  /images/{vm_name}/sha256
+    Returns {"sha256": "abcdef..."} for the VM's primary disk.
+    Faster than downloading the full image — use to check if local copy
+    is already up to date before downloading.
+    Auth required.
+
+  POST /rotate-token
+    Body: {"new_token": str}   (must be ≥ 16 characters)
+    Replaces the in-memory token and persists to ~/.qemu-api.token.
+    Auth required.
+
+3.8  TOOL ALLOWLIST
+─────────────────────
+  The allowed_remote_tools list in config.json controls which tools can be
+  called via the HTTP API. If a tool is not in the list, the server returns
+  403 Forbidden before running preflight.
+
+  Default allowed tools:
+    create_vm, launch_vm, stop_vm, list_vms, vm_status,
+    delete_vm, clone_vm, resize_disk, snapshot, restore_snapshot,
+    check_system, list_profiles, check_profile_compatibility,
+    fingerprint_vm, check_disk, revert,
+    generate_guest_setup, mark_stealth_done,
+    create_cluster, delete_cluster, list_clusters
+
+  Tools not in the list (e.g. send_monitor_cmd for raw QEMU monitor access)
+  are blocked at the API boundary. Adjust the list to fit your threat model.
+
+3.9  VNC IN REMOTE MODE
+─────────────────────────
+  When a VM is created or launched via the remote API, the server
+  automatically overrides SDL/GTK display to VNC with local binding:
+
+    display = vnc
+    vnc_bind_local = True    ← binds to 127.0.0.1, not 0.0.0.0
+
+  After QEMU starts, the server:
+  1. Retries the QMP socket connection (15 attempts × 0.5s = 7.5s max).
+  2. Calls QMP set_password with a random one-time password (8 chars).
+  3. Calls QMP expire_password with a 10-minute absolute timestamp.
+  4. Returns vnc_port and vnc_password in the result.
+
+  The provider machine displays a connection panel:
+    ┌─────────────────────────────────────────────────────┐
+    │  VNC — Tunnel first, then connect                   │
+    │  ssh -L 5901:localhost:5901 user@192.168.1.10       │
+    │  vncviewer localhost:5901                           │
+    │  password: aB3xR9qZ   (expires in 10 minutes)      │
+    └─────────────────────────────────────────────────────┘
+
+  The VNC port is never exposed directly to the network. An SSH tunnel is
+  the required connection method. The one-time password adds a second layer
+  in case the tunnel endpoint is shared.
+
+  If expire_password is not supported by the installed QEMU version,
+  the password stays valid until the VM is stopped (graceful degradation).
+
+3.10  LIVENESS MONITOR
+──────────────────────
+  When API_URL != "local", the chat loop starts a background daemon thread
+  that pings GET /health every 30 seconds.
+
+  If the client machine stops responding:
+    Yellow warning: "Client machine health check failed (500)"
+    Red alert:      "Client machine at http://... is not responding.
+                     Check that 'qemu-api serve' is still running."
+
+  The warning appears inline in the chat session without interrupting it.
+  The monitor thread is a daemon — it exits automatically when the provider
+  process exits.
+
+3.11  FETCH — DOWNLOAD VM DISK
+────────────────────────────────
+  fetch <vm_name> [--out /destination/dir]
+
+  Downloads the primary disk image of a VM from the client machine to the
+  provider machine. Requires remote mode (API_URL must be set).
+
+  Process:
+  1. Checks GET /images/{vm_name}/sha256 — if the local file already exists
+     and the checksum matches, the download is skipped.
+  2. If the local file exists but checksum differs, resumes with HTTP Range
+     from the byte offset where the local file ends.
+  3. Downloads the stream with a progress indicator.
+  4. Verifies the final SHA256 after download completes.
+
+  Example:
+    qemu-api fetch win-test
+    qemu-api fetch win-test --out /external/backups/
+
+  The disk is saved as <vm_name>.qcow2 in the output directory.
+  If the VM is running, the image reflects in-flight state — stop the VM
+  first for a consistent disk image.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — FLAGS  (-cu  and  -tf)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4.1  -cu  CUSTOM MACHINE MODE
 ───────────────────────────────
   Usage:  qemu-api -cu
 
@@ -170,7 +497,7 @@ SECTION 3 — NEW FLAGS  (-cu  and  -tf)
   The AI's system prompt also notes custom mode is active so it won't
   warn you about unverifiable hardware names.
 
-3.2  -tf  FINGERPRINT REPORT
+4.2  -tf  FINGERPRINT REPORT
 ───────────────────────────────
   Usage:  qemu-api -tf <vmname>
 
@@ -227,10 +554,10 @@ SECTION 3 — NEW FLAGS  (-cu  and  -tf)
   - KVM flags          → set kvm=False (loses performance)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 4 — api/qemu_config.py
+SECTION 5 — client/api/qemu_config.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-4.1  OVMF AUTO-DETECTION
+5.1  OVMF AUTO-DETECTION
 ─────────────────────────
   Searches all known install paths across distros.
   On modern Mint/Ubuntu the only VARS file is OVMF_VARS_4M.fd.
@@ -242,7 +569,7 @@ SECTION 4 — api/qemu_config.py
 
   If OVMF is not found, SeaBIOS fallback is applied automatically.
 
-4.2  HARDWARE PROFILES
+5.2  HARDWARE PROFILES
 ────────────────────────
   Built-in:
     dell_g15_5520    Dell G15 Gaming Laptop (16GB, battery, hda audio)
@@ -258,17 +585,17 @@ SECTION 4 — api/qemu_config.py
   Every custom profile is validated against your host on first use.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 5 — api/qemu_manager.py
+SECTION 6 — client/api/qemu_manager.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-5.1  KEY FIXES IN THIS VERSION
-─────────────────────────────────
+6.1  KEY BEHAVIOURS
+─────────────────────
   RTC clock: 'utc' with driftfix=slew — fixes "invalid datetime format" crash
   OVMF VARS: 4M variant searched first, copied to VM dir on create
   State persistence: PIDs saved to .state.json, survive terminal restart
   ARM/raspi: skip KVM, display, SMBIOS, hugepages automatically
 
-5.2  ALL PUBLIC METHODS
+6.2  ALL PUBLIC METHODS
 ─────────────────────────
   VM lifecycle:
     list_vms / create_vm / clone_vm / launch_vm / stop_vm / stop_all / delete_vm
@@ -296,11 +623,11 @@ SECTION 5 — api/qemu_manager.py
     send_monitor_cmd
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
+SECTION 7 — AI LAYER  (provider/ai/, shared/sanitizer/, shared/preflight/)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-6.1  THE 31 AI TOOLS
-──────────────────────
+7.1  THE AI TOOLS
+──────────────────
   VM:         list_vms, create_vm, launch_vm, stop_vm, vm_status, monitor_vm,
               show_config, update_config, delete_vm, clone_vm, get_vm_logs,
               print_command, send_monitor_cmd
@@ -314,7 +641,7 @@ SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
   System:     check_system
   Meta:       clarify
 
-6.2  THE SANITISER  (_sanitise_args)
+7.2  THE SANITISER  (_sanitise_args)
 ──────────────────────────────────────
   Runs on every tool call. Silently fixes:
 
@@ -363,13 +690,22 @@ SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
   ARM/raspi enforcement:
     machine_type=raspi* or machine_arch=aarch64/arm → kvm=False, hugepages=False
 
-6.3  THE PRE-FLIGHT VALIDATOR  (_preflight_check)
+7.3  THE PRE-FLIGHT VALIDATOR  (_preflight_check)
 ───────────────────────────────────────────────────
   Four possible actions:
     ok        proceed
     auto_fix  silently correct and proceed
     ask_user  show yellow warning panel, wait for user response
     abort     block tool, feed error message back to AI
+
+  In local mode:
+    stateless_only=False — validator has access to real VM state, disk files,
+    and the QEMU binary. All checks run.
+
+  In remote mode (provider side):
+    stateless_only=True — validator skips checks that require real state
+    (VM existence, disk size, QEMU binary). Only shape and logic checks run.
+    The client machine re-runs the full check before execution.
 
   create_vm triggers:
     ask_user  — placeholder VM name
@@ -388,7 +724,7 @@ SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
   monitor_cmd: ask_user for dangerous commands
   snapshot restore/delete: ask_user always
 
-6.4  THE INTERNET VALIDATOR  (_validate_with_internet)
+7.4  THE INTERNET VALIDATOR  (_validate_with_internet)
 ────────────────────────────────────────────────────────
   Non-blocking, 4s timeout, graceful offline skip.
   Skipped entirely when -cu flag is active.
@@ -409,7 +745,7 @@ SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
   ISO architecture (filename check, instant):
     arm64/Arm64/aarch64 in ISO name + x86_64 VM → blocked
 
-6.5  MODEL RECOMMENDATIONS
+7.5  MODEL RECOMMENDATIONS
 ────────────────────────────
   Benchmark results (19 Layer 3 tests):
 
@@ -426,22 +762,29 @@ SECTION 6 — AI LAYER  (ai/, sanitizer/, preflight/, executioner/)
     export OLLAMA_MODEL=llama3.1            permanent in ~/.zshrc
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 7 — test_api.py + tests/  (v5)
+SECTION 8 — test_api.py + tests/  (v6)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-7.1  FIVE LAYERS
-─────────────────
-  Layer 1  Sanitiser         tests/layer1_sanitizer.py    No AI, no Ollama, ~1ms each
-  Layer 2  Executor          tests/layer2_executor.py     No AI, no Ollama, ~10ms each
-  Layer 3  AI Integration    tests/layer3_ai.py           Needs Ollama, ~4-11s each (qwen)
-  Layer 4  Profile + HTTP    tests/layer4_profiles.py     8 fixed + N random, ~0.5s each
-  Layer 5  Property-Based    tests/layer5_property.py     5 invariant checks, 50 iterations each
+8.1  ELEVEN LAYERS
+───────────────────
+  Layer 1   Sanitiser            tests/layer1_sanitizer.py      No AI, no Ollama, ~1ms each
+  Layer 2   Executor             tests/layer2_executor.py       No AI, no Ollama, ~10ms each
+  Layer 3   AI Integration       tests/layer3_ai.py             Needs Ollama, ~4-11s each (qwen)
+  Layer 4   Profile + HTTP       tests/layer4_profiles.py       8 fixed + N random, ~0.5s each
+  Layer 5   Property-Based       tests/layer5_property.py       5 invariant checks, 50 iterations each
+  Layer 6   Context Gate         tests/layer6_context_gate.py   Pure gate_check() unit tests
+  Layer 7   Context Assistant    tests/layer7_context_assistant.py  Assistant message templates
+  Layer 8   Pipeline             tests/layer8_pipeline.py       Full sanitize→preflight pipeline
+  Layer 9   Gated Pipeline       tests/layer9_pipeline_gated.py Pipeline with context gate enabled
+  Layer 10  Pipeline Full        tests/layer10_pipeline_full.py Pipeline + AI + context assistant
+  Layer 11  Remote Split         tests/layer11_remote_split.py  HTTP boundary (FastAPI TestClient)
 
-7.2  USAGE
+8.2  USAGE
 ────────────
   python3 test_api.py                        All layers (5 random profiles)
   python3 test_api.py -l 1                   Sanitiser only (no Ollama, fast)
   python3 test_api.py -l 1,2                 No Ollama needed, ~2s total
+  python3 test_api.py -l 1,2,11             No Ollama, includes HTTP boundary tests
   python3 test_api.py -l 3                   AI tests only
   python3 test_api.py -l 4 -n 100           100 random profiles
   python3 test_api.py -l 5                   Property tests only
@@ -453,7 +796,46 @@ SECTION 7 — test_api.py + tests/  (v5)
   python3 test_api.py --benchmark llama3.1 qwen2.5:7b
                                              Side-by-side model comparison
 
-7.3  LAYER 3 — RANDOMISED PROMPTS
+  Environment variables needed:
+    API_TOKEN=<any value>   required even for local tests (Layer 11 spins up
+                            a FastAPI TestClient that enforces auth)
+
+8.3  LAYER 11 — REMOTE SPLIT TESTS
+─────────────────────────────────────
+  19 tests covering the provider/client HTTP boundary. No Ollama needed.
+  Uses FastAPI TestClient (in-process HTTP, no real network).
+
+  Test categories:
+    Stateless preflight (provider side):
+      Valid create_vm → ok
+      Missing required arg → abort
+      Non-existent VM (stateless_only=True) → ok (state not checked provider-side)
+      Non-existent VM (stateless_only=False) → abort (state checked client-side)
+
+    VNC arg binding:
+      vnc_bind_local=True  → -vnc 127.0.0.1:1,password=on
+      vnc_bind_local=False → -vnc :1
+
+    HTTP authentication:
+      Valid token → 200
+      Missing token → 401
+      Wrong token → 401
+
+    Server-side display override:
+      sdl display → overridden to vnc + vnc_bind_local=True
+      gtk display → overridden to vnc + vnc_bind_local=True
+      vnc display → vnc_bind_local=True injected
+
+    Preflight routing:
+      Preflight auto_fix → correction applied before execute_tool call
+      Abort result → returned as structured error (HTTP 200, error in body)
+      ask_user result → returned as clarify response (HTTP 200)
+
+    Executor client connection strings:
+      Remote mode → result includes ssh_tunnel_cmd, vnc_connect_cmd, vnc_note
+      Non-VNC remote → no connection string fields
+
+8.4  LAYER 3 — RANDOMISED PROMPTS
 ────────────────────────────────────
   Every AI test has a prompt_pool — a list of phrasings that say the same
   thing differently. Each run picks one randomly based on the seed.
@@ -468,7 +850,7 @@ SECTION 7 — test_api.py + tests/  (v5)
   Change seed with -s to get different prompt variations:
     python3 test_api.py -l 3 -s 999
 
-7.4  LAYER 5 — PROPERTY INVARIANTS
+8.5  LAYER 5 — PROPERTY INVARIANTS
 ─────────────────────────────────────
   Five invariants checked across 50 random inputs each (500 with --fuzz):
 
@@ -487,7 +869,7 @@ SECTION 7 — test_api.py + tests/  (v5)
     prop_profile_always_auto_set
       All known profile names used as machine_type must always set profile field.
 
-7.5  BENCHMARK MODE
+8.6  BENCHMARK MODE
 ─────────────────────
   python3 test_api.py --benchmark llama3.1 qwen2.5:7b mistral-nemo
 
@@ -503,7 +885,7 @@ SECTION 7 — test_api.py + tests/  (v5)
   must appear BEFORE --benchmark in the command line:
     python3 test_api.py -s 123 --benchmark llama3.1 qwen2.5:7b
 
-7.6  READING RESULTS
+8.7  READING RESULTS
 ──────────────────────
   ✓ (7f) [8.1s]  passed, sanitiser applied 7 fixes, took 8.1 seconds
   ✗ (2f) [3.1s]  failed, 2 fixes applied but assertion still failed
@@ -514,7 +896,7 @@ SECTION 7 — test_api.py + tests/  (v5)
   Results saved to test_report.json after every run.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 8 — DIRECT CLI REFERENCE
+SECTION 9 — DIRECT CLI REFERENCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Add -v to any command for verbose/raw JSON output.
@@ -560,8 +942,14 @@ SECTION 8 — DIRECT CLI REFERENCE
   Session:
     qemu-api clear-session
 
+  Remote mode only:
+    qemu-api serve [host] [port] [--cert cert.pem --key key.pem]
+                               Start the API server on the client machine
+    qemu-api fetch <vm> [--out /dir]
+                               Download VM disk from the client machine
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 9 — AI CHAT REFERENCE
+SECTION 10 — AI CHAT REFERENCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Built-in shortcuts (no AI, instant):
@@ -607,8 +995,12 @@ SECTION 9 — AI CHAT REFERENCE
   Teardown:
     "stop all VMs, delete dev-box and win-test with disk files"
 
+  Remote operations (when API_URL is set):
+    "create a VM on the remote machine and show me how to connect via VNC"
+    "download the win-test disk image to my local machine"
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 10 — DIRECTORY STRUCTURE
+SECTION 11 — DIRECTORY STRUCTURE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ~/.qemu_vms/
@@ -636,7 +1028,7 @@ SECTION 10 — DIRECTORY STRUCTURE
       └── .stealth_done    Sentinel — suppresses HTTP server on subsequent launches
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 11 — KNOWN ISSUES
+SECTION 12 — KNOWN ISSUES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   VM crashes with no log (OVMF_VARS.fd missing):
@@ -671,29 +1063,12 @@ SECTION 11 — KNOWN ISSUES
     Flags like -s and -n must come BEFORE --benchmark:
       python3 test_api.py -s 123 -n 10 --benchmark llama3.1 qwen2.5:7b
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 12 — WHAT COMES NEXT (PART 2)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Layer 11 tests require API_TOKEN:
+    export API_TOKEN=test
+    python3 test_api.py -l 1,2,11
 
-  vm_shell.py — direct shell access to VMs from host terminal.
-
-  SSH (Linux guests):
-    vm_shell.py ssh dev-box              interactive
-    vm_shell.py ssh dev-box "uptime"     single command
-    vm_shell.py ssh all "df -h"          run on all VMs
-
-  Serial console:
-    vm_shell.py serial dev-box
-
-  QEMU Guest Agent:
-    vm_shell.py agent dev-box "cat /etc/os-release"
-
-  WinRM (Windows guests):
-    vm_shell.py winrm win-test "Get-Process"
-
-  File transfer:
-    vm_shell.py copy dev-box ~/file.txt /tmp/
-    vm_shell.py copy dev-box /tmp/output.log .
+  Never add smm=off to extra_args when using OVMF. OVMF requires SMM enabled
+  or the Linux boot KVM-crashes at approximately 15 seconds into boot.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 13 — STEALTH MODE & HARDWARE SPOOFING
@@ -890,5 +1265,475 @@ SECTION 13 — STEALTH MODE & HARDWARE SPOOFING
     ACPI OEM strings           FAIL      Still BOCHS/BXPC (future project)
     /sys PCI vendor IDs        FAIL      lspci wrapper doesn't cover /sys paths
     dmesg QEMU strings         FAIL      Still visible (future project)
+
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Scenario:
+    - Your friend has a powerful desktop at their house running Linux.
+      This will be the QEMU machine — it runs the VMs.
+    - You are on your laptop anywhere (home, coffee shop, etc.) with Ollama.
+      This is the AI provider — it runs the chat loop and talks to the server.
+
+  Two connection approaches are covered below:
+    A. SSH tunnel (recommended — no open ports, no certs needed)
+    B. TLS direct (requires port forwarding on friend's router)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CROSS-PLATFORM SUPPORT
+  ──────────────────────────────────────────────────────────────────────────────
+
+  The two sides of the split have different OS requirements:
+
+    Provider side (your laptop — runs Ollama and the chat loop):
+      Linux    FULL support
+      macOS    FULL support  (Python and Ollama both run natively on macOS)
+      Windows  FULL support  (Python and Ollama both run on Windows;
+                              run from Command Prompt or PowerShell)
+
+    Client side (friend's machine — runs QEMU and the VMs):
+      Linux    FULL support  (KVM acceleration, all networking features)
+      macOS    PARTIAL       (QEMU runs via Homebrew with HVF acceleration
+                              instead of KVM; networking and some SMBIOS
+                              features may differ; not tested)
+      Windows  NOT SUPPORTED (KVM is a Linux kernel module — it does not
+                              exist on Windows; QEMU without KVM runs in pure
+                              software emulation which is 10-50x slower and
+                              impractical for OS-level VMs)
+
+  The most common cross-platform scenario is:
+    You on Linux/macOS/Windows (provider)  →  friend on Linux (client)
+  This works in all three provider-OS combinations.
+
+  If your friend's machine is Windows:
+    Option 1 — WSL2 (easiest to try):
+      WSL2 includes a real Linux kernel. On some hardware and Windows
+      builds, KVM passthrough is available inside WSL2.
+      Inside WSL2 on the friend's machine:
+        check:  ls /dev/kvm    <- exists = KVM available in WSL2
+        install and run the server exactly as in the Linux instructions
+      Caveat: WSL2 networking is NAT'd by Windows. SSH into WSL2 requires
+      extra port forwarding from Windows to the WSL2 IP. Use:
+        netsh interface portproxy add v4tov4 \
+            listenport=22 listenaddress=0.0.0.0 \
+            connectport=22 connectaddress=<WSL2 IP>
+      Get the WSL2 IP inside WSL2: hostname -I
+
+    Option 2 — Dual boot (most reliable):
+      Install Ubuntu or Linux Mint alongside Windows on the friend's machine.
+      Boot into Linux when they want to run the QEMU server.
+      All features work fully.
+
+    Option 3 — Linux VM under Hyper-V (nested virtualisation):
+      Enable Hyper-V on Windows, create a Linux VM, enable nested
+      virtualisation for that VM:
+        Set-VMProcessor -VMName "LinuxServer" -ExposeVirtualizationExtensions $true
+      Run the QEMU API server inside the Linux VM.
+      Nested virtualisation adds a performance penalty but VMs will still
+      run significantly faster than pure QEMU software emulation.
+
+  Bottom line:
+    If you are on Linux Mint and your friend's machine is Windows,
+    the cleanest path is WSL2 (if their hardware supports KVM passthrough)
+    or dual-booting Linux on their machine. The server code itself is
+    Linux-only — it is not a software limitation that can be patched around,
+    it is a hardware virtualisation layer that only exists in the Linux kernel.
+
+  ── WSL2 SETUP (friend on Windows, you on Linux/Mac/Windows) ────────────────
+
+  Both scripts handle this end-to-end. The manual steps are here for
+  reference if something needs to be fixed or customised.
+
+  Step 1 — Inside WSL2 (friend runs this):
+    Check KVM is available:
+      ls /dev/kvm           <- must exist
+    If missing: wsl --update in PowerShell as Admin, then restart WSL2.
+
+    Clone/copy the project, then:
+      bash complementary/setup_client.sh
+    The script installs everything, sets up SSH, saves the token, and
+    starts the server. It prints the exact commands to paste on your laptop.
+
+  Step 2 — In PowerShell as Admin on Windows (friend runs this):
+    .\complementary\setup_wsl2.ps1
+    This configures the port forward (Windows 2222 -> WSL2 22), firewall
+    rule, and a scheduled task to refresh it on every reboot automatically.
+    At the end it prints the ready-to-paste ssh command for your laptop.
+
+  Step 3 — On your laptop:
+    Copy the ssh and export commands printed by setup_wsl2.ps1 and run them.
+    Example (your friend's output will have their real IP and token):
+      ssh -N \
+          -L 8080:127.0.0.1:8080 \
+          -L 5901:127.0.0.1:5901 \
+          -L 5902:127.0.0.1:5902 \
+          -p 2222 \
+          friendwsluser@203.0.113.42
+      export API_URL=http://localhost:8080
+      export API_TOKEN=<token from setup_client.sh output>
+      python3 provider/ollama_wrapper.py
+
+    friendwsluser is the Linux username inside WSL2 — may differ from
+    the Windows username. setup_wsl2.ps1 prints it automatically.
+
+  WSL2 caveats:
+    - WSL2 closes if no processes are running inside it. The API server
+      keeps it alive. setup_client.sh auto-starts it from ~/.bashrc.
+    - The QEMU API server binds to 127.0.0.1:8080 inside WSL2.
+      Windows cannot reach it directly — only via the SSH tunnel.
+    - WSL2 VMs use NAT networking (10.0.2.x inside guests).
+      Bridge networking requires additional WSL2 network config.
+    - The WSL2 IP changes every Windows reboot. setup_wsl2.ps1 creates
+      a SYSTEM-level scheduled task that fixes the port proxy automatically.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+14.1  APPROACH A — SSH TUNNEL  (recommended)
+──────────────────────────────────────────────
+
+  How it works:
+    The API server listens on localhost only (no open internet port).
+    You create an SSH tunnel from your laptop to your friend's machine.
+    The tunnel makes the remote port appear as a local port on your laptop.
+    All traffic — API calls and VNC — travels inside the encrypted SSH connection.
+
+  Network diagram:
+
+    Your laptop                       Friend's machine
+    ───────────                       ────────────────
+    qemu-api chat     ─ SSH tunnel ─► API server :8080 (127.0.0.1 only)
+    localhost:8080                    tool_executor → QEMU
+    localhost:5901    ─ SSH tunnel ─► VNC :5901 (127.0.0.1 only)
+    vncviewer                         (bound by vnc_bind_local=True)
+
+  ── Step 1: Friend's machine setup ──────────────────────────────────────────
+
+  Clone or copy the project files to the friend's machine, then run:
+    bash complementary/setup_client.sh
+
+  This single script handles everything automatically:
+    - Detects native Linux vs WSL2
+    - Checks /dev/kvm (exits early if KVM unavailable in WSL2)
+    - Installs all apt packages (qemu-kvm, ovmf, python3-venv, openssh-server, etc.)
+    - Adds user to kvm group
+    - Creates the Python venv and installs pip packages
+    - Prompts for an API token (or generates one securely)
+    - Saves the token to ~/.qemu-api.token (chmod 600)
+    - Creates ~/start-qemu-api.sh
+    - On native Linux: creates and enables a systemd user service with
+      loginctl linger (server auto-starts even without login)
+    - On WSL2: adds server auto-start to ~/.bashrc
+    - Starts the server and health-checks it
+    - Prints the exact ssh and export commands to paste on your laptop
+
+  If the friend's machine is Windows / WSL2, they also run (in PowerShell as Admin):
+    .\complementary\setup_wsl2.ps1
+
+  This handles the Windows side:
+    - Gets the current WSL2 IP automatically
+    - Adds port proxy: Windows 2222 -> WSL2 22
+    - Adds Windows Firewall rule for port 2222
+    - Creates a scheduled task (runs as SYSTEM at startup) that refreshes
+      the port proxy after every reboot when the WSL2 IP changes
+    - Prints the ready-to-paste ssh + export commands for your laptop
+
+  To uninstall the Windows-side setup:
+    .\complementary\setup_wsl2.ps1 -Uninstall
+
+  ── Step 2: Your laptop setup ───────────────────────────────────────────────
+
+  Clone or copy the project files to your laptop, then run:
+    bash complementary/setup_provider.sh
+
+  The script asks four questions:
+    1. Local or remote mode?   → choose remote (2)
+    2. API_URL?                → http://localhost:8080
+                                  (the SSH tunnel makes the remote machine
+                                   appear as localhost on your laptop)
+    3. API_TOKEN?              → paste the token printed by setup_client.sh
+    4. CA cert path?           → only asked when API_URL starts with https://
+                                  press Enter to skip if using Let's Encrypt
+                                  or the SSH tunnel (HTTP is fine over a tunnel)
+
+  To skip the prompts entirely, pre-set the values as env vars:
+    API_URL=http://localhost:8080 API_TOKEN=mytoken bash setup_provider.sh
+
+  It then:
+    - Installs only the minimal apt packages (no QEMU, no KVM, no bridge tools)
+    - Creates ~/qemu-env and installs Python packages
+    - Installs Ollama and pulls qwen2.5:7b (or $OLLAMA_MODEL if set)
+    - Sets up Ollama as a systemd user service (auto-starts on login)
+    - Writes a block to your shell rc with the alias and all env vars:
+        export API_URL="http://localhost:8080"
+        export API_TOKEN="..."
+        export OLLAMA_MODEL="qwen2.5:7b"
+        alias qemu-api='python3 .../provider/ollama_wrapper.py'
+    - Pings the client machine's /health endpoint to verify connectivity
+      (warns if the SSH tunnel is not open yet — that is fine at this step)
+
+  After it finishes:
+    source ~/.zshrc   (or ~/.bashrc)
+
+  To switch between local and remote later without re-running the script:
+    Edit the API_URL line in ~/.zshrc (or ~/.bashrc) between the
+    # qemu-api provider start / end comments, then: source ~/.zshrc
+      API_URL="local"                    <- back to local mode
+      API_URL="http://localhost:8080"    <- back to remote via SSH tunnel
+
+  ── Step 3: Open the SSH tunnel ─────────────────────────────────────────────
+
+  Run this on your laptop (replace values with real ones):
+    ssh -N \
+        -L 8080:127.0.0.1:8080 \
+        -L 5901:127.0.0.1:5901 \
+        -L 5902:127.0.0.1:5902 \
+        friendusername@203.0.113.42
+
+    Flags explained:
+      -N                          don't open a shell, just forward ports
+      -L 8080:127.0.0.1:8080     your laptop:8080 -> friend's machine:8080
+      -L 5901:127.0.0.1:5901     your laptop:5901 -> friend's VNC port 5901
+      -L 5902:127.0.0.1:5902     extra VNC port if running a second VM
+      friendusername              their Linux username on that machine
+      203.0.113.42                their public IP (from Step 1)
+
+  This command blocks while the tunnel is open. Leave it running in a
+  separate terminal tab.
+
+  To run the tunnel in the background instead:
+    ssh -fN \
+        -L 8080:127.0.0.1:8080 \
+        -L 5901:127.0.0.1:5901 \
+        -L 5902:127.0.0.1:5902 \
+        friendusername@203.0.113.42
+
+    Kill it later with:  pkill -f "ssh -fN.*203.0.113.42"
+
+  ── Step 4: Your laptop — start the chat ────────────────────────────────────
+
+  In a new terminal tab:
+    source ~/qemu-env/bin/activate
+    export API_URL=http://localhost:8080    <- tunnel makes remote look local
+    export API_TOKEN=choose-a-long-secret-here
+    cd ~/qemu-api/files
+    python3 provider/ollama_wrapper.py
+
+  You are now in the AI chat loop. Everything you type is processed locally
+  by Ollama, and tool calls are forwarded through the tunnel to the friend's
+  QEMU machine.
+
+  ── Step 5: Create and connect to a VM ──────────────────────────────────────
+
+  In the chat:
+    You: create a Linux VM called myvm with 4GB RAM and launch it
+
+  The server creates and starts the VM, then returns:
+
+    +---------------------------------------------------------+
+    |  VNC — Tunnel first, then connect                       |
+    |  ssh -L 5901:localhost:5901 friendusername@203...       |
+    |  vncviewer localhost:5901                               |
+    |  password: aB3xR9qZ   (expires in 10 minutes)          |
+    +---------------------------------------------------------+
+
+  Because you already added -L 5901:127.0.0.1:5901 to your SSH tunnel in
+  Step 3, the VNC tunnel is already open. Just run:
+    vncviewer localhost:5901
+
+  Enter the password shown in the panel. You are now viewing the VM's
+  display running on your friend's machine from your laptop.
+
+  The VNC password expires in 10 minutes. If you need a new one, stop and
+  relaunch the VM — a fresh password is generated each time.
+
+  ── Keeping the server running across reboots ────────────────────────────────
+
+  setup_client.sh handles this automatically (systemd service + linger on
+  native Linux, ~/.bashrc auto-start on WSL2). If you need to manage it
+  manually after the fact:
+
+  Native Linux:
+    systemctl --user status qemu-api         <- check status
+    systemctl --user restart qemu-api        <- restart
+    journalctl --user -u qemu-api -f         <- live logs
+
+  WSL2:
+    cat /tmp/qemu-api.log                    <- server logs
+    pkill -f "ollama_wrapper.py serve"       <- stop
+    nohup ~/start-qemu-api.sh > /tmp/qemu-api.log 2>&1 &   <- start
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+14.2  APPROACH B — TLS DIRECT  (no SSH required, needs port forwarding)
+─────────────────────────────────────────────────────────────────────────
+
+  How it works:
+    The API server listens on all interfaces with TLS.
+    The friend's router forwards a port to their machine.
+    Your laptop connects directly — no SSH involved.
+
+  Network diagram:
+
+    Your laptop                  Friend's router           Friend's machine
+    ───────────                  ───────────────           ────────────────
+    qemu-api chat  -- HTTPS --> port 8443 forward ------> API server :8443
+    (API_URL=https://...)        (one-time config)         (0.0.0.0:8443, TLS)
+
+  Note on VNC: VNC is still bound to 127.0.0.1 on the friend's machine.
+  In this approach you CANNOT connect to VNC directly — you must open a
+  separate SSH tunnel just for the VNC port when you need display access.
+  This is why Approach A is recommended: the SSH tunnel handles everything.
+
+  ── Step 1: Generate a TLS certificate on the friend's machine ───────────────
+
+  Option 1 — self-signed (fast, requires copying the cert to your laptop):
+    openssl req -x509 -newkey rsa:4096 -nodes \
+        -keyout server.key -out server.crt -days 365 \
+        -subj "/CN=qemu-api"
+
+  Option 2 — Let's Encrypt (requires a domain name pointing at the public IP):
+    sudo apt install certbot
+    sudo certbot certonly --standalone -d yourdomain.example.com
+    # certs land at /etc/letsencrypt/live/yourdomain.example.com/
+
+  ── Step 2: Port forwarding on the friend's router ───────────────────────────
+
+  Log into the router admin panel (usually 192.168.1.1 or 192.168.0.1):
+    Protocol:       TCP
+    External port:  8443
+    Internal IP:    192.168.1.100   <- friend's machine local IP
+    Internal port:  8443
+
+  Give the friend's machine a static local IP so the port forward doesn't
+  break after a DHCP lease renewal:
+    In router: find the machine's MAC address and assign a static DHCP lease.
+    Or on the machine: configure a static IP in network settings.
+
+  ── Step 3: Start the server with TLS ───────────────────────────────────────
+
+  On the friend's machine:
+    cd ~/qemu-api/files
+    export API_TOKEN=choose-a-long-secret-here
+    python3 provider/ollama_wrapper.py serve \
+        0.0.0.0 8443 \
+        --cert server.crt \
+        --key  server.key
+
+  ── Step 4: Your laptop — copy the cert (self-signed only) ──────────────────
+
+  If you used a self-signed cert, copy server.crt to your laptop:
+    scp friendusername@203.0.113.42:~/qemu-api/files/server.crt ~/qemu-api-ca.crt
+
+  If you used Let's Encrypt, no cert copy is needed — it is publicly trusted.
+
+  ── Step 5: Your laptop — start the chat ────────────────────────────────────
+
+  Self-signed cert:
+    export API_URL=https://203.0.113.42:8443
+    export API_TOKEN=choose-a-long-secret-here
+    export API_CA_CERT=~/qemu-api-ca.crt
+    python3 provider/ollama_wrapper.py
+
+  Let's Encrypt cert:
+    export API_URL=https://yourdomain.example.com:8443
+    export API_TOKEN=choose-a-long-secret-here
+    python3 provider/ollama_wrapper.py
+
+  ── Step 6: VNC in Approach B ───────────────────────────────────────────────
+
+  VNC is bound to 127.0.0.1 on the friend's machine regardless of approach.
+  When a VM is launched the chat shows the connection panel — but unlike
+  Approach A you don't already have a VNC tunnel open.
+
+  Open one when you need it:
+    ssh -N -L 5901:127.0.0.1:5901 friendusername@203.0.113.42
+
+  Then connect:
+    vncviewer localhost:5901
+
+  This is the extra manual step that makes Approach A simpler for regular use.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+14.3  CHOOSING BETWEEN A AND B
+────────────────────────────────
+
+  Prefer Approach A (SSH tunnel) when:
+    - You don't want to configure port forwarding on the router
+    - The friend's public IP changes (dynamic DNS not set up)
+    - You want the simplest setup with no certificates to manage
+    - This is occasional or ad-hoc use
+    - Maximum security: zero attack surface, no port open on the internet
+
+  Prefer Approach B (TLS direct) when:
+    - The friend's machine runs the server full-time as a permanent setup
+    - Multiple people need access (different clients, rotate-token per session)
+    - You have a domain name and Let's Encrypt cert
+    - You want the API connection to survive even if SSH drops
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+14.4  TROUBLESHOOTING
+──────────────────────
+
+  "Connection refused" on API_URL:
+    SSH tunnel approach:
+      - Check the tunnel terminal is still open and has not timed out
+      - Re-run: ssh -N -L 8080:127.0.0.1:8080 friendusername@203.0.113.42
+      - Verify the server is running on the friend's machine:
+          systemctl --user status qemu-api
+    TLS approach:
+      - Check the server is running on the friend's machine
+      - Check port 8443 is forwarded on the router
+      - Check friend's firewall: sudo ufw status  (allow 8443 if blocked)
+
+  "Invalid API token":
+    - API_TOKEN on your laptop must match exactly what the server started with
+    - Check for extra spaces or quotes in the export command
+    - If using token file: cat ~/.qemu-api.token on friend's machine
+
+  "Client machine is not responding" (liveness alert in chat):
+    - The server process crashed or the SSH tunnel dropped
+    - SSH tunnel: re-run the ssh -N command in its terminal tab
+    - TLS: check systemctl --user status qemu-api on the friend's machine
+    - The chat loop stays alive — once the tunnel or server is back,
+      the next command will work normally
+
+  VNC password expired:
+    - The QMP-injected password is valid for 10 minutes from VM start
+    - Stop and relaunch the VM in the chat: "stop myvm" then "launch myvm"
+    - A fresh one-time password is generated each launch
+    - The SSH tunnel itself stays open — only the VNC password expires
+
+  Can't reach the friend's machine by public IP from inside their network:
+    - Most home routers don't support NAT loopback (hairpin NAT)
+    - Test port forwarding only from outside their network (use mobile data)
+    - Inside their network, use the local IP instead:
+        ssh -N -L 8080:127.0.0.1:8080 friendusername@192.168.1.100
+
+  SSH tunnel times out when idle:
+    Add keep-alive settings to ~/.ssh/config on your laptop:
+      Host 203.0.113.42
+          ServerAliveInterval 60
+          ServerAliveCountMax 5
+
+  SSH key authentication (avoid typing password every session):
+    On your laptop:
+      ssh-keygen -t ed25519
+      ssh-copy-id friendusername@203.0.113.42
+    After this, the tunnel opens without a password prompt.
+
+  Friend's public IP keeps changing (dynamic IP):
+    Ask them to install a free dynamic DNS client:
+      sudo apt install ddclient
+    Or sign up for a free hostname at no-ip.com or duckdns.org.
+    Then use the hostname instead of the raw IP:
+      ssh -N -L 8080:127.0.0.1:8080 friendusername@friend.duckdns.org
 
 ================================================================================

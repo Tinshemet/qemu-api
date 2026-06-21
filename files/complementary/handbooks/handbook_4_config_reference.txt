@@ -1,0 +1,433 @@
+================================================================================
+  QEMU-API  —  CONFIGURATION REFERENCE  (handbook part 4)
+================================================================================
+
+Every configuration file, every key, every environment variable, and every
+default value. Where env vars override config keys, that is documented too.
+
+────────────────────────────────────────────────────────────────────────────────
+1. ENVIRONMENT VARIABLES
+────────────────────────────────────────────────────────────────────────────────
+
+All env vars are read at import time (module level). They override the
+corresponding config.json values.
+
+API_URL
+  Default:  "local"  (from client/executioner/config.json → executor.url)
+  Values:   "local" | "http://host:port" | "https://host:port"
+  Effect:   "local" → direct in-process call to tool_executor
+            URL    → HTTP POST to client machine's API server
+  Read by:  provider/executor_client.py
+
+API_TOKEN
+  Default:  "" (from client/executioner/config.json → executor.token)
+  Values:   Any string (recommended: 32+ random chars)
+  Effect:   Shared secret for Bearer authentication between provider and client.
+            Provider: sent in Authorization header.
+            Client server: compared against incoming tokens.
+  Read by:  provider/executor_client.py, client/server/api_server.py
+  Also read from: ~/.qemu-api.token (file fallback, lower priority than env var)
+
+API_TIMEOUT
+  Default:  120 (from client/executioner/config.json → executor.timeout)
+  Values:   Integer (seconds)
+  Effect:   HTTP request timeout for execute_tool remote calls
+  Read by:  provider/executor_client.py
+
+API_CA_CERT
+  Default:  None
+  Values:   Absolute path to a PEM-format CA certificate file
+  Effect:   When set, the provider uses this CA to verify the server's TLS cert.
+            Used for self-signed certificates.
+            When unset, system CA bundle is used (correct for Let's Encrypt).
+  Read by:  provider/executor_client.py
+
+API_VERIFY_SSL
+  Default:  "1" (verify enabled)
+  Values:   "1" (verify) | "0" (skip verification)
+  Effect:   "0" disables TLS certificate verification entirely.
+            NEVER use in production — only for local development.
+  Read by:  provider/executor_client.py
+
+OLLAMA_MODEL
+  Default:  "qwen2.5:7b" (from provider/ai/config.json → ollama_model)
+  Values:   Any Ollama model name ("llama3.1:8b", "mistral", etc.)
+  Effect:   Which model is used for all AI calls.
+  Read by:  provider/ai/ollama_client.py
+
+OLLAMA_URL
+  Default:  "http://localhost:11434" (from provider/ai/config.json → ollama_url)
+  Values:   Any URL where Ollama is reachable
+  Effect:   Where the Ollama API server is at.
+            Only change if Ollama runs on a different machine.
+  Read by:  provider/ai/ollama_client.py
+
+────────────────────────────────────────────────────────────────────────────────
+2. client/executioner/config.json
+────────────────────────────────────────────────────────────────────────────────
+
+Owned by the client machine. Read by both executor_client.py (provider side,
+to get defaults) and tool_executor.py (client side, for execution config).
+
+{
+  "executor": {
+    "url": "local",
+      # Default API_URL. "local" means same-machine. Override with env var.
+      # Change to "http://192.168.1.10:8080" to default to remote mode.
+
+    "token": "",
+      # Default API_TOKEN. Leave empty and use env var or ~/.qemu-api.token.
+      # Storing a token in a config file is acceptable for local-only use,
+      # but the env var / token file is preferred.
+
+    "port": 8080,
+      # Port the 'serve' command listens on. Also used by setup scripts.
+
+    "timeout": 120,
+      # HTTP request timeout in seconds for remote mode calls.
+
+    "allowed_remote_tools": [
+      "create_vm", "launch_vm", "stop_vm", "list_vms", "vm_status",
+      "delete_vm", "clone_vm", "resize_disk",
+      "snapshot_create", "snapshot_list", "snapshot_restore", "snapshot_delete",
+      "check_system", "list_profiles", "check_profile_compatibility",
+      "fingerprint_vm", "check_disk", "revert",
+      "generate_guest_setup", "mark_stealth_done",
+      "create_cluster", "delete_cluster", "list_clusters"
+      # Tools NOT in this list are blocked at the HTTP layer (403 Forbidden).
+      # send_monitor_cmd is intentionally excluded — raw QEMU monitor access
+      # from an unauthenticated remote connection is a security risk.
+    ]
+  },
+
+  "create_vm_defaults": {
+    "disk_size_gb": 40,      # default disk size for new VMs
+    "disk_format": "qcow2",  # default disk format
+    "disk_bus": "virtio",    # default disk controller bus
+    "network_mode": "nat",   # default network mode
+    "bridge": "virbr0"       # default bridge interface
+  },
+
+  "tool_defaults": {
+    "snap_name": "snap1",    # default snapshot name when not specified
+    "log_lines": 50          # default number of log lines for get_vm_logs
+  },
+
+  "valid_machine_types": ["q35", "pc", "virt", "microvm", "raspi3b", "raspi4b"],
+    # Machine types that are accepted by the sanitizer and executor.
+    # Profile names are NOT in this list — they are stripped before reaching here.
+
+  "arm_cpu_prefixes": ["cortex-a", "cortex-r", "cortex-m", "neoverse", "a64fx"]
+    # CPU model name prefixes that indicate an ARM CPU. Used by the sanitizer
+    # to detect ARM CPUs being used on x86_64 VMs (and replace with "host").
+}
+
+────────────────────────────────────────────────────────────────────────────────
+3. provider/ai/config.json
+────────────────────────────────────────────────────────────────────────────────
+
+Owned by the provider machine (AI side). Read by cli.py and ollama_client.py.
+
+{
+  "ollama_url": "http://localhost:11434",
+    # Ollama server URL. Override with OLLAMA_URL env var.
+
+  "ollama_model": "qwen2.5:7b",
+    # Default model. Override with OLLAMA_MODEL env var.
+
+  "tool_loop_max": 6,
+    # Maximum number of tool calls the AI can chain in one user prompt.
+    # Prevents infinite loops. After this limit, the loop breaks.
+
+  "tool_loop_max_override": null,
+    # Override for tool_loop_max. If set (not null), this value is used instead.
+
+  "auto_clear_session": true,
+    # If true, the session history is auto-cleared when drift is detected
+    # (AI's remembered VMs don't match actual VM list).
+
+  "exit_commands": ["exit", "quit", "bye", "q", ":q", "done"],
+    # Any of these in the chat loop exits the program.
+
+  "shortcut_commands": {
+    "list": "list_vms",
+    "profiles": "list_profiles",
+    "system": "check_system",
+    "clear session": "clear_session",
+    "exit": "exit"
+    # Bypass Ollama entirely for these common commands.
+  },
+
+  "action_words": ["create", "make", "launch", "start", "run", "stop", ...],
+    # Words that suggest the user wants to perform an action.
+    # Used to decide whether to call Ollama or just describe.
+
+  "os_keywords_gate": ["linux", "windows", "ubuntu", "mint", "windows", ...],
+    # OS-related keywords used by the context gate.
+
+  "confirm_yn": { ... },
+    # Patterns for detecting yes/no answers from the user.
+
+  "confirm_name": { ... }
+    # Patterns for detecting VM name inputs from the user.
+}
+
+────────────────────────────────────────────────────────────────────────────────
+4. provider/ai/context_assistant_config.json
+────────────────────────────────────────────────────────────────────────────────
+
+Message templates and rules for the context assistant.
+
+{
+  "checks": [
+    {
+      "id": "...",
+      "description": "...",
+      "condition": "...",
+      "message": "..."
+    },
+    ...
+  ]
+  # Each check has a condition (evaluated against tool call and context)
+  # and a message to inject when the condition is met.
+}
+
+────────────────────────────────────────────────────────────────────────────────
+5. shared/sanitizer/config.json
+────────────────────────────────────────────────────────────────────────────────
+
+Configuration for the sanitizer layer.
+
+{
+  "placeholder_vm_names": [
+    "windows-vm", "linux-vm", "ubuntu-vm", "my-vm", "new-vm", "test-vm",
+    "vm", "myvm", "testvm", "unnamed", "virtual-machine", "vm-1", "vm-2",
+    "my_vm", "linux_vm", "test_vm", "windows_vm", "new_vm", "ubuntu_vm",
+    "vm_1", "vm_2", "virtual_machine"
+    # ALL hyphen AND underscore variants are included. The sanitizer clears
+    # any name in this list to "" to force the user to provide a real name.
+  ],
+
+  "os_type_aliases": {
+    "ubuntu": "linux", "debian": "linux", "fedora": "linux",
+    "mint": "linux", "kali": "linux", "arch": "linux",
+    "win10": "windows", "win11": "windows", "win64": "windows",
+    "windows11": "windows", "windows10": "windows",
+    "osx": "macos", "darwin": "macos", "mac": "macos"
+  },
+
+  "enum_maps": {
+    "display": {"x11": "sdl", "X11": "sdl", "xorg": "sdl", ...},
+    "network_mode": {"wifi": "nat", "wireless": "nat", "host": "nat", ...},
+    "audio": {"alsa": "hda", "pulse": "hda", "pulseaudio": "hda", ...}
+  },
+
+  "bridge_nic_names": [
+    "eth0", "ens33", "enp3s0", "wlan0", "wlp2s0", "eno1", "ens0", "enp0s3"
+    # Physical NIC names that should be normalised to virbr0.
+  ]
+}
+
+────────────────────────────────────────────────────────────────────────────────
+6. shared/sanitizer/context_gate_config.json
+────────────────────────────────────────────────────────────────────────────────
+
+Defines required fields per tool for the context gate.
+
+{
+  "create_vm": {
+    "required": ["name"],
+    "question": "What would you like to name this VM?",
+    "options": ["my-windows-vm", "dev-machine", "test-ubuntu"]
+  },
+  "launch_vm": {
+    "required": ["name"],
+    "question": "Which VM would you like to launch?",
+    "options": []    # filled dynamically from current VM list
+  },
+  ...
+}
+
+If a required field is missing or empty after sanitization, gate_check()
+returns the question and options as a clarify response.
+
+────────────────────────────────────────────────────────────────────────────────
+7. shared/preflight/config.json
+────────────────────────────────────────────────────────────────────────────────
+
+{
+  "timeout": 4,
+    # Timeout in seconds for the internet validator (DuckDuckGo product lookup).
+    # If the check takes longer, it is skipped gracefully.
+
+  "caps": {
+    "max_memory_pct": 0.95,
+      # Maximum fraction of host RAM that can be allocated to a VM.
+    "min_memory_mb": 512,
+      # Minimum allowed memory_mb value.
+    "min_disk_gb": 8
+      # Minimum allowed disk_size_gb value.
+  }
+}
+
+────────────────────────────────────────────────────────────────────────────────
+8. client/api/config.json
+────────────────────────────────────────────────────────────────────────────────
+
+{
+  "vm_base_dir": "~/.qemu_vms",
+    # Root directory for all VM data. Expand ~ at runtime.
+
+  "qemu_binary": "qemu-system-x86_64",
+    # Default QEMU binary. Overridden to qemu-system-aarch64 for ARM VMs.
+
+  "qemu_img_binary": "qemu-img",
+    # qemu-img binary for disk operations.
+
+  "qmp_timeout": 7.5,
+    # Seconds to wait for QMP socket to appear after QEMU starts.
+    # 15 retries × 0.5s = 7.5s max.
+
+  "qmp_retries": 15,
+    # Number of QMP connection attempts.
+
+  "qmp_retry_delay": 0.5,
+    # Delay between QMP retries in seconds.
+
+  "vnc_password_expire_seconds": 600,
+    # VNC one-time password validity in seconds (10 minutes).
+
+  "launch_log_lines": 100,
+    # Number of launch.log lines to keep (older lines are truncated).
+
+  "session_max_messages": 40
+    # Maximum messages to keep in .session.json.
+}
+
+────────────────────────────────────────────────────────────────────────────────
+9. MachineConfig FIELDS AND DEFAULTS
+────────────────────────────────────────────────────────────────────────────────
+
+This is every field in the MachineConfig dataclass, its type, default value,
+and what it controls in the QEMU command.
+
+  name             str   (required)       VM directory name, used everywhere
+  os_type          str   "linux"          Affects disk bus (sata for windows), UEFI auto
+  os_name          str   ""               Distro name for ISO auto-detection
+  description      str   ""               Human-readable note, not used in QEMU args
+  memory_mb        int   4096             -m {memory_mb}
+  cpu_cores        int   2                -smp {cpu_cores},threads={cpu_threads}
+  cpu_threads      int   1                -smp cores,threads=
+  cpu_model        str   "host"           -cpu {cpu_model}[,flags]
+  machine_type     str   "q35"            -machine type={machine_type}
+  machine_arch     str   "x86_64"         selects qemu binary
+  qemu_binary      str   "qemu-system-x86_64"  the QEMU executable
+  display          str   "sdl"            -display {display} or -vga
+  gpu              str   "virtio-vga"     -device {gpu}
+  audio            str   "hda"            -audiodev {audio} -device intel-hda
+  bios             str   "seabios"        "ovmf" or "ovmf_ms" → pflash drive
+  uefi             bool  False            enables OVMF firmware path
+  kvm              bool  True             -enable-kvm when True
+  tpm              bool  False            starts swtpm, adds -tpmdev/-device
+  stealth          bool  False            applies _apply_stealth(), implies hardened
+  hardened         bool  False            applies _harden() (hide KVM CPUID)
+  battery          bool  False            -device acpi-battery
+  hugepages        bool  False            -mem-path /dev/hugepages
+  balloon          bool  True             -device virtio-balloon when True
+  manufacturer     str   ""              -smbios type=1,manufacturer=
+  product_name     str   ""              -smbios type=1,product=
+  serial_number    str   ""              -smbios type=1,serial=
+  board_product    str   ""              -smbios type=2,product=
+  bios_vendor      str   ""              -smbios type=0,vendor=
+  bios_version     str   ""              -smbios type=0,version=
+  smbios_type      str   ""              human label → chassis_type_byte lookup
+  machine_class    str   ""              "laptop" → chassis_type_byte=9 etc.
+  networks         list  [NetworkConfig] one -netdev/-device pair per entry
+  disks            list  [DiskConfig]    one -drive per entry
+  iso_path         str   ""              -drive if=cdrom,file=
+  extra_args       list  []              appended verbatim to QEMU command
+  rtc_clock        str   "utc"           -rtc base={rtc_clock}
+  rtc_driftfix     str   "slew"          -rtc driftfix={rtc_driftfix}
+
+────────────────────────────────────────────────────────────────────────────────
+10. HARDWARE PROFILES (built-in defaults)
+────────────────────────────────────────────────────────────────────────────────
+
+Profiles are stored in client/api/qemu_config.py (built-in) and
+~/.qemu_vms/_profiles/*.json (custom).
+
+dell_g15_5520
+  manufacturer:   "Dell Inc."
+  product_name:   "G15 5520"
+  memory_mb:      16384
+  cpu_cores:      8
+  machine_class:  "laptop"
+  battery:        True
+  audio:          "hda"
+  bios_vendor:    "Dell Inc."
+  description:    "Dell G15 Gaming Laptop 5520"
+
+gaming_desktop
+  memory_mb:      32768
+  cpu_cores:      16
+  gpu:            "virtio-vga-gl"
+  machine_class:  "desktop"
+  description:    "High-performance gaming desktop"
+
+office_laptop
+  manufacturer:   "Lenovo"
+  product_name:   "ThinkPad T14"
+  memory_mb:      8192
+  cpu_cores:      4
+  display:        "qxl"
+  machine_class:  "laptop"
+  battery:        True
+  description:    "Office/business laptop"
+
+server
+  memory_mb:      65536
+  cpu_cores:      32
+  cpu_model:      "EPYC"
+  hugepages:      True
+  display:        "none"
+  machine_class:  "server"
+  description:    "Headless server (EPYC)"
+
+mac_mini
+  manufacturer:   "Apple Inc."
+  product_name:   "Mac mini"
+  memory_mb:      8192
+  gpu:            "vmware-svga"
+  machine_class:  "desktop"
+  description:    "macOS-style compact desktop"
+
+minimal
+  memory_mb:      2048
+  cpu_cores:      2
+  display:        "none"
+  description:    "Minimal headless VM (CI/testing)"
+
+raspberry_pi_4
+  machine_type:   "virt"
+  machine_arch:   "aarch64"
+  qemu_binary:    "qemu-system-aarch64"
+  cpu_model:      "cortex-a72"
+  memory_mb:      4096
+  cpu_cores:      4
+  kvm:            False
+  display:        "none"
+  bios:           "seabios"
+  description:    "ARM64 Raspberry Pi 4 emulation"
+
+raspberry_pi_3b
+  machine_type:   "raspi3b"
+  machine_arch:   "aarch64"
+  qemu_binary:    "qemu-system-aarch64"
+  cpu_model:      "cortex-a53"
+  memory_mb:      1024
+  cpu_cores:      4
+  kvm:            False
+  display:        "none"  (serial console only — raspi3b has no display output)
+  description:    "ARM64 Raspberry Pi 3B emulation (serial console only)"
+
+================================================================================

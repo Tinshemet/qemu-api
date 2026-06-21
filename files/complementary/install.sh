@@ -180,7 +180,7 @@ cat >> "$SHELL_RC" << SHELLEOF
 
 # qemu-api start
 source "$VENV_DIR/bin/activate"
-alias $ALIAS_NAME='python3 $SCRIPT_DIR/ollama_wrapper.py'
+alias $ALIAS_NAME='PYTHONPATH=$SCRIPT_DIR/.. python3 $SCRIPT_DIR/../provider/ollama_wrapper.py'
 # qemu-api end
 SHELLEOF
 ok "Added alias '$ALIAS_NAME' and venv to $SHELL_RC"

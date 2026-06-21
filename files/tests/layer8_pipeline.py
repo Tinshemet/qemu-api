@@ -1115,8 +1115,8 @@ _PROBE_NET_PREFIX     = "probe8"
 def cleanup_probe_artifacts():
     """Remove VMs, profiles, and networks created by this layer."""
     import shutil
-    from executioner.tool_executor import execute_tool as _et
-    from api.qemu_config import get_all_profiles, delete_custom_profile
+    from client.executioner.tool_executor import execute_tool as _et
+    from client.api.qemu_config import get_all_profiles, delete_custom_profile
 
     vm_dir = os.path.expanduser("~/.qemu_vms")
     if os.path.isdir(vm_dir):

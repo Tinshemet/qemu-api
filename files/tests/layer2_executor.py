@@ -5,7 +5,7 @@ tests/layer2_executor.py — Layer 2: Executor / preflight unit tests (no AI nee
 import io, os, contextlib, traceback, time, uuid, random
 from typing import List, Optional
 
-from executioner.tool_executor import _clear_revert
+from client.executioner.tool_executor import _clear_revert
 
 from .shared import (
     ExecutorTest, TestResult,
@@ -619,7 +619,7 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
         if tc.expect_cfg and isinstance(result, dict) and result.get("success"):
             _cfg_name = tc.input_args.get("name", "")
             try:
-                from api.qemu_config import MachineConfig as _MC2
+                from client.api.qemu_config import MachineConfig as _MC2
                 _cfg_loaded = _MC2.load(_cfg_name)
                 for cfg_k, cfg_v in tc.expect_cfg.items():
                     if cfg_v is None:

@@ -12,7 +12,7 @@ from .shared import (
     _sanitise_args, _build_system_prompt,
     OLLAMA_URL, OLLAMA_MODEL, TOOLS,
 )
-from sanitizer.context_gate import gate_check
+from shared.sanitizer.context_gate import gate_check
 
 
 # ─────────────────────────────────────────────

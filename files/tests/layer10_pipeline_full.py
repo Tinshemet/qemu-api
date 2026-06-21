@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .shared import TestResult, execute_tool
-from ai.context_assistant import check_context
+from provider.ai.context_assistant import check_context
 
 
 # ── Full-pipeline test dataclass ──────────────────────────────────────────────
@@ -472,8 +472,8 @@ def generate_random_full_tests(n: int = 20, seed: Optional[int] = None) -> List[
 
 def cleanup_full_artifacts():
     import shutil, os
-    from executioner.tool_executor import execute_tool as _et
-    from api.qemu_config import get_all_profiles, delete_custom_profile
+    from client.executioner.tool_executor import execute_tool as _et
+    from client.api.qemu_config import get_all_profiles, delete_custom_profile
 
     vm_dir = os.path.expanduser("~/.qemu_vms")
     if os.path.isdir(vm_dir):

@@ -13,10 +13,10 @@ from typing import Dict, List
 
 import requests
 
-from api.qemu_config  import OVMF, list_profiles
+from client.api.qemu_config import OVMF, list_profiles
 from .tools        import TOOLS
 from .display      import console
-import preflight.validator as _validator
+import shared.preflight.validator as _validator
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _OLLAMA = _CFG["ollama"]

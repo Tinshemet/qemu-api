@@ -15,9 +15,10 @@ from .shared import (
 LAYER_NAMES   = {1:"Sanitiser", 2:"Executor", 3:"AI Integration",
                  4:"Profile + HTTP", 5:"Property-Based", 6:"Input Pipeline",
                  7:"Context Assistant", 8:"Pipeline Probe",
-                 9:"Gated Pipeline", 10:"Full Pipeline"}
+                 9:"Gated Pipeline", 10:"Full Pipeline", 11:"Remote Split"}
 LAYER_COLOURS = {1:"green", 2:"cyan", 3:"magenta", 4:"yellow", 5:"blue", 6:"white",
-                 7:"bright_magenta", 8:"bright_cyan", 9:"bright_yellow", 10:"bright_green"}
+                 7:"bright_magenta", 8:"bright_cyan", 9:"bright_yellow", 10:"bright_green",
+                 11:"bright_blue"}
 
 
 def render_layer_results(results: List[TestResult], layer: int, verbose: bool = False):

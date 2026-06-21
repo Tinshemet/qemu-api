@@ -1,0 +1,644 @@
+================================================================================
+  QEMU-API  —  GENERAL WORKFLOW  (handbook part 2)
+================================================================================
+
+This document traces every workflow in the project from the user's perspective
+all the way down to the system call. Understand this document and you understand
+how every piece connects.
+
+────────────────────────────────────────────────────────────────────────────────
+1. STARTUP SEQUENCE
+────────────────────────────────────────────────────────────────────────────────
+
+When you run "qemu-api" the following happens in order:
+
+  1. Shell expands the alias:
+       OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=~/Desktop/qemu-api/files
+       python3 ~/Desktop/qemu-api/files/provider/ollama_wrapper.py
+
+  2. Python executes provider/ollama_wrapper.py.
+     This file re-exports symbols from provider/ and shared/ so they are
+     importable by any top-level script. Then it calls cli_direct() or
+     chat_loop() from provider/ai/cli.py depending on command-line arguments.
+
+  3. cli.py initialises:
+     - Loads config from provider/ai/config.json
+       (Ollama URL, loop limits, exit commands, shortcuts)
+     - Reads API_URL from provider/executor_client.py
+       (which reads from client/executioner/config.json, overridden by env var)
+     - Loads the AI session from ~/.qemu_vms/.session.json (if it exists)
+     - Detects drift between session history and real VM list
+       (if drift detected and auto_clear=True: session is cleared)
+     - Checks if Ollama is reachable (GET http://localhost:11434)
+     - If API_URL != "local": starts the liveness monitor background thread
+     - Prints the banner to the terminal (via provider/ai/display.py)
+     - Enters the chat loop
+
+  4. In remote mode, the liveness monitor thread starts:
+     - Daemon thread (exits when the main process exits)
+     - Every 30 seconds: GET {API_URL}/health
+     - On failure: prints yellow warning in the chat session
+
+────────────────────────────────────────────────────────────────────────────────
+2. THE FULL REQUEST LIFECYCLE (one user prompt, step by step)
+────────────────────────────────────────────────────────────────────────────────
+
+This traces a single user prompt all the way through to the QEMU command.
+Example: User types "create a linux vm called dev-box with 4gb ram"
+
+STEP 1 — INPUT CAPTURE  [provider/ai/cli.py]
+  - chat_loop() reads input from stdin
+  - Checks if the input is a built-in shortcut (list, profiles, system, exit)
+    → if yes: executes locally, no AI involved
+  - Appends the user message to the session history
+  - Saves the session to disk
+
+STEP 2 — OLLAMA CALL  [provider/ai/ollama_client.py → _call_ollama()]
+  - Builds the system prompt:
+      - Current VM list (from manager.list_vms())
+      - Whether -cu mode is active
+      - The TOOLS JSON schema (all tool definitions)
+      - Model: qwen2.5:7b (or OLLAMA_MODEL)
+  - Sends POST http://localhost:11434/api/chat with:
+      - model: "qwen2.5:7b"
+      - messages: [system_prompt, ...session_history...]
+      - tools: [...TOOLS list...]
+      - stream: false
+  - Receives response from Ollama
+  - Parses the response:
+      - If tool_calls present: extracts tool_name and args
+      - If no tool_calls: it is a plain text response (shown to user, no execution)
+
+STEP 3 — CONTEXT ASSISTANT CHECK  [provider/ai/context_assistant.py]
+  - check_context(tool_name, args, session_messages) is called
+  - Checks for semantic inconsistencies:
+      - Does the AI's plan match what the user said?
+      - Is the named VM one the user mentioned?
+  - If a problem is found: may inject a clarification or adjustment
+
+STEP 4 — SANITIZATION  [shared/sanitizer/sanitizer.py → _sanitise_args()]
+  Called with tool_name and args from the AI.
+  Silently corrects, in this order:
+
+  a) VM name cleaning:
+     - Strip leading/trailing spaces
+     - Replace spaces with underscores
+     - Clear placeholder names (my-vm, linux-vm, test-vm, vm, unnamed, ...)
+       → if cleared: name becomes "" (will trigger gate_check clarification)
+
+  b) OS type normalisation:
+     - "ubuntu", "mint", "kali", "debian" → "linux"
+     - "win10", "win11", "windows11", "win64" → "windows"
+     - "osx", "darwin", "mac" → "macos"
+
+  c) Enum normalisation:
+     - display: "x11" → "sdl", "X11" → "sdl"
+     - network_mode: "wifi" → "nat", "BRIDGE" → "bridge"
+     - audio: "alsa" → "hda", "ac97" → "hda"
+     - machine_type: profile names → profile field auto-set, machine_type cleared
+
+  d) Resource caps:
+     - memory_mb: min 512, max floor(host_ram * 0.95)
+     - cpu_cores: max = host logical CPU count
+     - disk_size_gb: min 8
+
+  e) ISO path cleaning:
+     - Remove placeholders: "<iso>", "<path>", "/path/to/..."
+     - Expand /home/user/ → real home directory
+
+  f) ARM/x86 consistency:
+     - ARM CPU model on x86_64 VM → cpu_model = "host"
+     - raspi machine_type → kvm=False, hugepages=False
+
+  g) Bridge interface cleaning:
+     - Physical NIC names (enp3s0, eth0, wlan0) → "virbr0"
+
+  h) MAC address cleaning:
+     - 7-octet MACs → removed
+
+  Result: a clean args dict with all obvious problems fixed.
+
+STEP 5 — CONTEXT GATE CHECK  [shared/sanitizer/context_gate.py → gate_check()]
+  Checks that required context arguments are present for the tool.
+  Example: create_vm requires "name" — if name is still "" after sanitization,
+  gate_check returns:
+    {"clarify": True, "question": "What would you like to name this VM?",
+     "options": ["my-windows-vm", "dev-box", "test-ubuntu"]}
+  This is returned to the AI as a clarification request. The AI asks the user,
+  gets the name, and retries the tool call.
+
+STEP 6 — VM NAME RESOLUTION  [client/executioner/tool_executor.py]
+  For tools that take an existing VM name (launch_vm, stop_vm, etc.):
+  - manager.list_vms() is called to get the current VM list
+  - _resolve_vm_name(vms, name) fuzzy-matches the input:
+    - Exact match: use it
+    - Index: if user says "vm 1", use the first VM
+    - Prefix match: "dev" → "dev-box"
+  - The resolved name replaces the raw arg
+
+STEP 7 — PREFLIGHT CHECK  [shared/preflight/validator.py → _preflight_check()]
+  Validates the sanitised args against real state (local mode) or shape only
+  (provider side in remote mode).
+
+  For create_vm, the validator checks:
+  - Is the VM name a placeholder? → ask_user
+  - Does this VM already exist? → ask_user (overwrite or rename?)
+  - Is the ISO file found on disk? → ask_user (or auto-find)
+  - Does the profile have blocking compatibility issues? → ask_user
+  - Is the machine type valid? (qemu-system-x86_64 -machine help) → auto_fix
+  - Is the CPU model valid? (qemu-system-x86_64 -cpu help) → auto_fix
+  - Is the product name a real product? (DuckDuckGo, unless -cu) → warn
+  - Is there a cross-arch ISO/VM mismatch? → abort
+
+  For launch_vm: does the VM exist? → abort if not
+  For delete_vm: always ask_user (confirmation)
+  For resize_disk: is it a shrink? → abort; does VM exist? → abort
+
+  The validator returns one of:
+    {"action": "ok"}
+    {"action": "auto_fix", "fixed_args": {...}, "correction": "..."}
+    {"action": "ask_user", "question": "...", "options": [...]}
+    {"action": "abort", "reason": "..."}
+
+STEP 8 — PREFLIGHT RESPONSE HANDLING  [provider/ai/cli.py / client/server/api_server.py]
+  Depending on the action:
+    ok       → proceed immediately to execution (step 9)
+    auto_fix → replace args with fixed_args, proceed (shows yellow note)
+    ask_user → display question and options to user in Rich panel,
+               wait for answer, re-call the tool with updated args
+    abort    → show error panel, feed error back to AI (AI may rephrase)
+
+STEP 9 — DISPATCH: LOCAL OR REMOTE?  [provider/executor_client.py → execute_tool()]
+  if API_URL == "local":
+    → call client/executioner/tool_executor.execute_tool() directly
+    → same Python process, no network
+  else:
+    → POST {API_URL}/execute  with JSON body:
+        {"tool_name": "create_vm", "args": {...}, "verbose": false}
+      headers:
+        Authorization: Bearer {API_TOKEN}
+    → on ConnectionError: print error, sys.exit(1)
+    → on 401: print token mismatch error, sys.exit(1)
+    → on non-OK: return {"success": False, "error": "..."}
+
+STEP 10 — SERVER-SIDE (remote mode only)  [client/server/api_server.py → /execute]
+  The FastAPI server receives the request and:
+  1. Extracts Bearer token from Authorization header
+  2. Compares with _TOKEN (loaded from env or ~/.qemu-api.token)
+     → 401 if mismatch
+  3. Checks tool_name in allowed_remote_tools
+     → 403 if not in list
+  4. If tool_name == "launch_vm": overrides display sdl/gtk → vnc,
+     sets vnc_bind_local=True
+  5. Runs _preflight_check() with stateless_only=False (full check with real state)
+     → if abort: returns HTTP 200 with {"success":False, "preflight":True, "error":"..."}
+     → if ask_user: returns HTTP 200 with {"clarify":True, "question":"...", "options":[...]}
+     → if auto_fix: applies fixed_args
+  6. Calls execute_tool(tool_name, args, verbose) from tool_executor.py
+
+STEP 11 — TOOL DISPATCH  [client/executioner/tool_executor.py → execute_tool()]
+  The main dispatch switch handles all tool names:
+  - For create_vm: builds MachineConfig, validates, calls manager.create_vm()
+  - For launch_vm: calls manager.launch_vm()
+  - For list_vms: calls manager.list_vms()
+  - For all others: dispatches to the appropriate manager method
+  Also:
+  - Manages _last_revert_action (set on success of reversible operations)
+  - Calls Rich display functions (unless verbose=True)
+
+STEP 12 — QEMU MANAGER  [client/api/qemu_manager.py → QemuManager]
+  The actual VM operations happen here. For launch_vm:
+  1. Load config.json from vm_dir
+  2. Build QEMU command via qemu_arg_builder.py
+  3. If tpm=True: start swtpm daemon, wait for socket
+  4. If stealth+first launch: start HTTP server thread (serves guest_setup scripts)
+  5. Start QEMU process (subprocess.Popen)
+  6. Write PID to vm.pid and .state.json
+  7. Connect to QMP socket (15 retries × 0.5s)
+  8. If display == "vnc":
+     - Call QMP set_password with random password
+     - Call QMP expire_password with 10-minute timestamp
+  9. Return result dict with vnc_port, vnc_password if VNC
+
+STEP 13 — ARG BUILDER  [client/api/qemu_arg_builder.py]
+  Builds the full QEMU command-line argument list from MachineConfig:
+  - -name, -machine, -cpu, -smp, -m (memory)
+  - -drive (disk)
+  - -netdev, -device (network)
+  - -display (sdl/gtk/vnc/none)
+  - -vga or -device (GPU)
+  - -audiodev, -device (audio)
+  - -bios or -drive (firmware)
+  - -rtc (RTC clock)
+  - -monitor, -serial, -qmp (sockets)
+  - If stealth: -machine acpi_table=, USB controller, CPUID flags
+  - If hardened: -cpu with kvm=off,-vmx
+  - If tpm: -chardev, -tpmdev, -device
+  - If battery: -device (ACPI battery)
+  - extra_args appended last
+
+STEP 14 — RESULT RETURN AND DISPLAY
+  The result dict bubbles back up:
+  - tool_executor → executor_client → chat_loop (local)
+  - tool_executor → api_server → executor_client → chat_loop (remote)
+  chat_loop calls the appropriate Rich display function:
+  - _render_vm_list() for list results
+  - _render_status() for VM status
+  - _render_monitor() for monitoring
+  - Inline VNC panel for launch results in remote mode
+  Result is appended to session history as an assistant message.
+  Session is saved to disk.
+
+────────────────────────────────────────────────────────────────────────────────
+3. WORKFLOW: CREATING A VM
+────────────────────────────────────────────────────────────────────────────────
+
+User says: "create a Dell G15 laptop VM called gaming-rig with 16GB RAM, stealth"
+
+1. Ollama maps this to:
+   tool="create_vm", args={"name":"gaming-rig","memory_mb":16384,
+     "manufacturer":"Dell Inc.","product_name":"G15 5520","stealth":True}
+
+2. Sanitizer: memory_mb cap check (16384 ≤ 95% of host RAM → ok),
+   name check (no placeholder), OS type defaulted to "linux"
+
+3. Profile auto-detection in tool_executor: "Dell" + "G15 5520" matches
+   profile "dell_g15_5520" → apply_profile() adds CPU, display, audio defaults
+
+4. Preflight: product lookup ("Dell G15 5520" → real product, ok)
+
+5. MachineConfig is built with all fields from args + profile defaults
+
+6. stealth=True → hardened=True auto-set, machine_type="q35"
+
+7. manager.create_vm(cfg):
+   - Creates ~/.qemu_vms/gaming-rig/
+   - Runs: qemu-img create -f qcow2 disk0.qcow2 40G
+   - Copies OVMF_VARS_4M.fd → OVMF_VARS.fd
+   - Writes config.json
+   - Because stealth=True: calls generate_guest_setup("gaming-rig")
+     → writes guest_setup.sh in the VM directory
+
+8. Result: {"success":True, "name":"gaming-rig", "vm_dir":"~/.qemu_vms/gaming-rig"}
+
+9. Display: green "✓ VM 'gaming-rig' created at ~/.qemu_vms/gaming-rig"
+   + dim note: "Stealth guest setup script ready — will prompt automatically on first launch"
+
+────────────────────────────────────────────────────────────────────────────────
+4. WORKFLOW: LAUNCHING A VM (LOCAL MODE)
+────────────────────────────────────────────────────────────────────────────────
+
+User says: "launch gaming-rig"
+
+1. Ollama: tool="launch_vm", args={"name":"gaming-rig"}
+
+2. Sanitizer: name ok (no placeholder)
+
+3. Name resolution: "gaming-rig" matches exact VM name in list
+
+4. Preflight: VM exists → ok
+
+5. tool_executor dispatches to manager.launch_vm("gaming-rig")
+
+6. manager.launch_vm():
+   a. Loads ~/.qemu_vms/gaming-rig/config.json
+   b. Checks if VM is already running (reads .state.json PID, checks /proc/<pid>)
+   c. Calls qemu_arg_builder.build_args(cfg) → full QEMU command list
+   d. If first launch and stealth: starts HTTP server thread on :8080
+      → serves guest_setup.sh on GET /guest_setup.sh
+   e. If tpm=True: subprocess.Popen(["swtpm", "socket", ...])
+      waits for tpm.sock to appear
+   f. subprocess.Popen(["qemu-system-x86_64", ...all args...],
+      stdout=launch.log, stderr=launch.log)
+   g. Writes PID to vm.pid and .state.json
+   h. Connects to qmp.sock (15 retries × 0.5s)
+   i. If display == "sdl" or "gtk" (local): QEMU already opened window → done
+   j. Returns {"success":True, "pid":12345, "display":"sdl"}
+
+7. Display: "✓ VM 'gaming-rig' launched (PID 12345)"
+   Note: "Run guest setup: curl http://10.0.2.2:8080/guest_setup.sh | bash"
+   (printed on first stealth launch)
+
+────────────────────────────────────────────────────────────────────────────────
+5. WORKFLOW: LAUNCHING A VM (REMOTE MODE)
+────────────────────────────────────────────────────────────────────────────────
+
+User is on laptop, server is friend's machine. SSH tunnel is open.
+API_URL=http://localhost:8080 (tunnel makes remote appear as local:8080)
+
+1. Same steps 1–4 as local mode (sanitizer, name resolution, provider-side preflight)
+
+2. executor_client.py: API_URL != "local" → POST http://localhost:8080/execute
+   Body: {"tool_name":"launch_vm","args":{"name":"gaming-rig"},"verbose":false}
+   Headers: {"Authorization":"Bearer <token>"}
+
+3. SSH tunnel carries the POST to the friend's machine :8080
+
+4. api_server.py receives the request:
+   a. Verifies Bearer token
+   b. tool_name "launch_vm" is in allowed_remote_tools → ok
+   c. Overrides args: display → "vnc", vnc_bind_local → True
+      (SDL/GTK cannot be used remotely)
+   d. Runs _preflight_check() with real state on client machine
+   e. Calls tool_executor.execute_tool("launch_vm", args)
+
+5. manager.launch_vm() runs on the friend's machine:
+   a. Builds QEMU args with -vnc 127.0.0.1:1,password=on
+   b. Starts QEMU, writes PID
+   c. Connects to QMP socket (15 × 0.5s retries)
+   d. QMP: set_password("vnc", "aB3xR9qZ", "")
+   e. QMP: expire_password("vnc", "<timestamp+600s>")
+   f. Returns {"success":True, "display":"vnc", "vnc_port":5901,
+               "vnc_password":"aB3xR9qZ"}
+
+6. api_server.py returns {"ok":True, "result":{...}}
+
+7. executor_client.py receives the result. Detects display=="vnc" and vnc_port:
+   - Extracts host from API_URL: "localhost"
+   - Adds to result:
+       ssh_tunnel_cmd:  "ssh -L 5901:localhost:5901 <your-username>@localhost"
+       vnc_connect_cmd: "vncviewer localhost:5901"
+       vnc_note:        "password: aB3xR9qZ"
+
+8. Display: Rich VNC panel shown to user
+   "VNC — Tunnel first, then connect"
+   "ssh -L 5901:localhost:5901 <user>@<host>"
+   "vncviewer localhost:5901"
+   "password: aB3xR9qZ  (expires in 10 minutes)"
+
+9. User already opened -L 5901:... in the SSH tunnel → just run:
+   vncviewer localhost:5901
+
+────────────────────────────────────────────────────────────────────────────────
+6. WORKFLOW: REVERTING AN ACTION
+────────────────────────────────────────────────────────────────────────────────
+
+After any reversible operation (create_vm, launch_vm, stop_vm, snapshot_create,
+etc.), execute_tool stores the inverse action in _last_revert_action:
+  {"tool": "delete_vm", "args": {"name":"gaming-rig"}, "description":"undo create_vm 'gaming-rig'"}
+
+User says: "undo that" or "revert"
+
+1. Ollama: tool="revert", args={}
+
+2. tool_executor handles "revert":
+   a. Checks _last_revert_action is not empty
+   b. Shows: "↩ Revert: undo create_vm 'gaming-rig'"
+   c. Asks: "Proceed? (y/n):"
+   d. If user types "y": calls execute_tool("delete_vm", {"name":"gaming-rig"})
+   e. _clear_revert() is called so "undo" can't be undone again
+
+Key limitation: only one level of undo. If you do A then B, "undo" undoes B.
+Any unrelated tool call between A and B clears A's revert action.
+
+Irreversible tools (resize_disk shrink, snapshot restore, snapshot delete)
+explicitly call _clear_revert() so the previous revert action is forgotten —
+these cannot safely define an inverse.
+
+────────────────────────────────────────────────────────────────────────────────
+7. WORKFLOW: THE SANITIZER IN DETAIL
+────────────────────────────────────────────────────────────────────────────────
+
+The sanitizer is the safety net that catches bad AI output before it reaches
+preflight or execution. It never blocks — it always returns something.
+
+Input: tool_name="create_vm", args from Ollama (may be malformed)
+Output: cleaned args dict
+
+The sanitizer makes these decisions, in order:
+
+  1. Placeholder name check
+     PLACEHOLDER_VM_NAMES is a set of all known "template" names the AI uses
+     when it doesn't have a real name: {"windows-vm", "linux-vm", "my-vm",
+     "test-vm", "vm", "unnamed", "virtual-machine", "vm-1", ...}
+     ALL hyphen AND underscore variants are included.
+     If the name matches any of these → cleared to ""
+     Note: the set is stored in shared/sanitizer/config.json, not hardcoded.
+
+  2. OS type normalisation
+     Using OS_TYPE_ALIASES dict. Case-insensitive.
+     "Ubuntu" → "linux", "Windows11" → "windows", "macOS" → "macos"
+
+  3. Machine type cleaning
+     If machine_type matches a profile name (e.g. "dell_g15_5520"):
+     → profile = "dell_g15_5520", machine_type = None (removed)
+     This lets the AI specify a profile name where machine_type is expected,
+     which is a common mistake.
+
+  4. CPU model cleaning
+     ARM CPU names on x86_64 VMs → replaced with "host"
+     ARM_CPU_PREFIXES loaded from client/executioner/config.json
+
+  5. Enum normalisation
+     All string enum fields are lowercased and aliased:
+     - display: "X11" → "sdl", "X Window" → "sdl"
+     - network_mode: "WiFi" → "nat", "HOST" → "nat"
+     - audio: "ALSA" → "hda", "PulseAudio" → "hda"
+
+  6. Resource caps
+     memory_mb: clamp to [512, floor(host_ram_mb * 0.95)]
+     cpu_cores: clamp to [1, host_logical_cpus]
+     disk_size_gb: max(8, disk_size_gb)
+
+  7. ISO path cleaning
+     Remove template strings: "<path>", "<iso>", "/path/to/...", "$HOME/..."
+     Expand /home/username → actual home directory
+
+  8. Bridge interface normalisation
+     Physical NIC names → "virbr0" (safe default)
+     List: {"eth0","ens33","enp3s0","wlan0","wlp2s0","eno1","ens0","enp0s3"}
+
+  9. MAC address cleaning
+     7-octet MACs (malformed) → removed entirely
+
+────────────────────────────────────────────────────────────────────────────────
+8. WORKFLOW: STEALTH VM SETUP (END-TO-END)
+────────────────────────────────────────────────────────────────────────────────
+
+This is the full end-to-end process for creating a VM that passes
+hardware fingerprinting checks.
+
+PHASE 1 — CREATE (one command)
+  User: "create a Dell Latitude 5530 VM called work-laptop, stealth, hardened,
+         8GB RAM, serial number 3K8LP52"
+
+  Result:
+  - ~/.qemu_vms/work-laptop/ created
+  - config.json has: stealth=True, hardened=True, manufacturer="Dell Inc.",
+    product_name="Latitude 5530", serial_number="3K8LP52", machine_class="laptop"
+  - guest_setup.sh written to vm dir
+  - smbios_chassis.bin written to vm dir (chassis type byte = 9)
+
+PHASE 2 — INSTALL OS
+  User: "launch work-laptop with the ISO"
+  → QEMU starts with the ISO attached
+  → User installs the OS (e.g. Linux Mint) normally inside the VM
+
+PHASE 3 — RUN GUEST SETUP (inside the VM, once)
+  User (inside VM):
+    curl http://10.0.2.2:8080/guest_setup.sh | bash
+
+  The script:
+  1. Writes /etc/modprobe.d/blacklist-qemu.conf
+     → blacklists: qemu_fw_cfg, cirrus_qemu
+  2. Rebuilds initramfs (detects: update-initramfs / mkinitcpio / dracut)
+     → after reboot, these modules will not load
+  3. Creates ~/.mozilla/firefox/stealth/user.js
+     → WebGL renderer: "Intel(R) Iris(R) Xe Graphics"
+     → WebGL vendor: "Intel"
+  4. Creates ~/Desktop/stealth-browser.sh
+     → launches Firefox with the stealth profile
+  5. Writes /usr/local/bin/lspci (wrapper script)
+     → calls /usr/local/bin/lspci.real and replaces VMware SVGA output
+  6. Writes /usr/local/bin/lsmod (wrapper script)
+     → calls /usr/local/bin/lsmod.real and filters qemu* modules
+
+PHASE 4 — REBOOT (inside VM)
+
+PHASE 5 — VERIFY (inside VM)
+  lsmod | grep qemu                       → empty
+  lspci | grep VGA                        → Intel Corporation ... Iris Xe
+  cat /sys/class/dmi/id/chassis_type      → 9
+  cat /sys/class/dmi/id/sys_vendor        → Dell Inc.
+  inxi -F                                 → Type: Laptop  System: Dell Inc.
+
+PHASE 6 — MARK DONE (on the host)
+  touch ~/.qemu_vms/work-laptop/.stealth_done
+  → HTTP server will not start on subsequent launches
+  → VM is ready for normal use
+
+QEMU LAUNCH FLAGS (what stealth adds to the QEMU command)
+  From _apply_stealth() in qemu_arg_builder.py:
+    -machine type=q35,acpi_table=<smbios_chassis.bin path>
+    -device nec-usb-xhci,id=usb0         (real NEC USB controller)
+    -device vmware-svga                   (Linux) or -vga std (Windows)
+  From _harden() in qemu_arg_builder.py:
+    -cpu <model>,kvm=off,-vmx,-hypervisor (hide KVM from guest)
+  From _build_smbios() in qemu_arg_builder.py:
+    -smbios type=0,vendor=Dell Inc.,version=1.15.0
+    -smbios type=1,manufacturer=Dell Inc.,product=Latitude 5530,serial=3K8LP52
+    -smbios type=2,product=0H34YX
+    -smbios file=<smbios_chassis.bin>     (chassis type = 9)
+  From _build_acpi() in qemu_arg_builder.py:
+    -smbios type=0,oemid=Dell I           (ACPI OEM ID)
+
+────────────────────────────────────────────────────────────────────────────────
+9. WORKFLOW: REMOTE MODE SETUP (NEW MACHINE)
+────────────────────────────────────────────────────────────────────────────────
+
+Scenario: you want to use your friend's machine to run VMs.
+
+ON FRIEND'S MACHINE (once):
+
+  A. If Linux:
+       bash files/complementary/setup_client.sh
+     Installs: qemu-kvm, qemu-utils, ovmf, python3-venv, openssh-server, socat
+     Creates: Python venv at ~/qemu-env
+     Generates: API token (random 32 chars via secrets.token_urlsafe(32))
+     Saves:    token to ~/.qemu-api.token (chmod 600)
+     Creates:  ~/start-qemu-api.sh (reads token from file at runtime)
+     Enables:  systemd user service for the API server
+     Starts:   API server
+     Prints:   SSH tunnel command + export commands for your laptop
+
+  B. If WSL2 on Windows, additionally run in PowerShell as Admin:
+       .\files\complementary\setup_wsl2.ps1
+     Gets:    WSL2 IP from "wsl hostname -I"
+     Adds:    netsh portproxy 2222 → WSL2:22
+     Adds:    Windows Firewall rule for 2222
+     Creates: helper script at C:\Windows\System32\qemu-api-wsl2-forward.ps1
+     Creates: Scheduled Task (SYSTEM, AtStartup) that refreshes portproxy
+     Reads:   token from WSL2 with "wsl cat ~/.qemu-api.token"
+     Prints:  ready-to-paste ssh command
+
+ON YOUR LAPTOP (once):
+
+  bash files/complementary/setup_provider.sh
+  → Choose "2" for remote mode
+  → Enter http://localhost:8080 as API_URL (SSH tunnel makes it local)
+  → Paste the token from setup_client.sh output
+  Installs: Python venv (no QEMU), Ollama, qwen2.5:7b
+  Writes to ~/.zshrc:
+    export API_URL="http://localhost:8080"
+    export API_TOKEN="<token>"
+    export OLLAMA_MODEL="qwen2.5:7b"
+    alias qemu-api='PYTHONPATH=... python3 .../provider/ollama_wrapper.py'
+
+EVERY SESSION:
+
+  1. Open SSH tunnel (leave running):
+       ssh -N \
+           -L 8080:127.0.0.1:8080 \
+           -L 5901:127.0.0.1:5901 \
+           -L 5902:127.0.0.1:5902 \
+           friendusername@<public-ip>     # add -p 2222 for WSL2
+
+  2. Start chat:
+       qemu-api
+
+  3. (If VNC needed): vncviewer localhost:5901
+     (tunnel already forwarding VNC from step 1)
+
+────────────────────────────────────────────────────────────────────────────────
+10. WORKFLOW: SWITCHING BETWEEN LOCAL AND REMOTE MODE
+────────────────────────────────────────────────────────────────────────────────
+
+The entire switch is one environment variable: API_URL.
+
+To switch to remote mode for one session:
+  export API_URL=http://localhost:8080
+  export API_TOKEN=mysecrettoken
+  qemu-api
+
+To switch back to local mode for one session:
+  export API_URL=local
+  qemu-api
+
+To change permanently in ~/.zshrc / ~/.bashrc:
+  Find the "# qemu-api provider start" block (written by setup_provider.sh)
+  Change the API_URL line:
+    export API_URL="local"                 ← local mode
+    export API_URL="http://localhost:8080" ← remote via SSH tunnel
+    export API_URL="https://host:8443"     ← remote via TLS direct
+  Then: source ~/.zshrc
+
+No other changes needed — the code path through executor_client.py handles
+the dispatch automatically. The AI, sanitizer, display, and preflight layers
+are identical in both modes.
+
+────────────────────────────────────────────────────────────────────────────────
+11. WORKFLOW: TOKEN MANAGEMENT
+────────────────────────────────────────────────────────────────────────────────
+
+INITIAL SETUP
+  Token is generated on the client machine:
+    python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+  Saved to ~/.qemu-api.token (chmod 600 — only owner can read)
+  Must be set identically on the provider machine (via API_TOKEN env var)
+
+SERVER STARTUP TOKEN PRECEDENCE
+  1. API_TOKEN environment variable (checked first)
+  2. ~/.qemu-api.token file (fallback)
+  3. If neither: server refuses to start with a clear error message
+
+HOW THE TOKEN IS CHECKED
+  Every API request except GET /health must include:
+    Authorization: Bearer <token>
+  FastAPI extracts this with HTTPBearer() dependency.
+  The server compares creds.credentials against _TOKEN.
+  401 if mismatch.
+
+TOKEN ROTATION (while server is running)
+  POST /rotate-token with the current token in Authorization:
+    curl -X POST http://client:8080/rotate-token \
+         -H "Authorization: Bearer currenttoken" \
+         -d '{"new_token": "newlongsecrettoken"}'
+  Server:
+  - Validates new_token length ≥ 16
+  - Sets _TOKEN = new_token in memory
+  - Sets os.environ["API_TOKEN"] = new_token
+  - Writes new_token to ~/.qemu-api.token
+  - Effect is immediate — no restart needed
+  Provider machine must then also update API_TOKEN.
+
+================================================================================

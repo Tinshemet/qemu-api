@@ -1,0 +1,600 @@
+================================================================================
+  QEMU-API  —  TEST SUITE AND SECURITY REFERENCE  (handbook part 5)
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PART A: THE 11-LAYER TEST SUITE
+────────────────────────────────────────────────────────────────────────────────
+
+The test suite is structured as eleven independent layers. Each layer tests
+a different level of the stack. They are designed to be run independently
+or together.
+
+────────────────────────────────────────────────────────────────────────────────
+RUNNING THE TESTS
+────────────────────────────────────────────────────────────────────────────────
+
+Entry point: test_api.py (in project root, i.e. the files/ parent directory)
+
+All tests:
+  python3 test_api.py
+
+Fast (no Ollama):
+  python3 test_api.py -l 1,2,5,6,7,8,9,11
+
+Sanitizer only (< 1s):
+  python3 test_api.py -l 1
+
+HTTP boundary tests (Layer 11 requires API_TOKEN):
+  export API_TOKEN=test
+  python3 test_api.py -l 1,2,11
+
+AI tests only (requires Ollama running):
+  python3 test_api.py -l 3
+
+Random profile tests with custom count and seed:
+  python3 test_api.py -l 4 -n 100 -s 42
+
+Property fuzz test (500 iterations):
+  python3 test_api.py --fuzz
+
+Model benchmark:
+  python3 test_api.py --benchmark llama3.1 qwen2.5:7b
+
+  NOTE: Flags like -s and -n must come BEFORE --benchmark:
+    python3 test_api.py -s 123 -n 10 --benchmark llama3.1 qwen2.5:7b
+
+CI quick mode:
+  python3 test_api.py --quick   (L1+L2+L5 only, skips L3)
+
+Filter by tag:
+  python3 test_api.py -t hallucination
+
+────────────────────────────────────────────────────────────────────────────────
+READING TEST OUTPUT
+────────────────────────────────────────────────────────────────────────────────
+
+  ✓ (7f) [8.1s]   — passed, sanitizer made 7 fixes, took 8.1 seconds
+  ✗ (2f) [3.1s]   — failed, 2 fixes applied but assertion still failed
+  ✓ [1.5s]        — passed, AI sent correct args (no fixes needed)
+
+High fix count (e.g. 34f for llama3.1) = normal. The sanitizer is doing its
+job correcting bad args. Low fix count (2f for qwen2.5:7b) = the AI is
+sending correct args natively and the sanitizer has less to do.
+
+Results are saved to test_report.json after every run.
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 1 — SANITIZER UNIT TESTS  (tests/layer1_sanitizer.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. No QEMU. Pure function tests on _sanitise_args().
+Speed: ~1ms per test.
+
+Test categories:
+  Placeholder names (6 tests)
+    Each known placeholder VM name is checked.
+    After sanitization, args["name"] must be "" or "".
+    Tests both hyphen variants (windows-vm) and underscore variants (windows_vm).
+
+  OS type aliases (8 tests)
+    Each alias ("ubuntu", "mint", "win10", "osx", etc.) must map to the
+    correct canonical type ("linux", "linux", "windows", "macos").
+
+  Resource caps (6 tests)
+    memory_mb < 512 → clamped to 512
+    memory_mb > 95% host RAM → clamped
+    cpu_cores > host count → clamped
+    disk_size_gb < 8 → raised to 8
+
+  Enum normalisation (8 tests)
+    "x11" → "sdl", "BRIDGE" → "bridge", "ALSA" → "hda", etc.
+
+  Machine type / profile detection (4 tests)
+    "dell_g15_5520" as machine_type → profile="dell_g15_5520", machine_type cleared
+    "office_laptop" as machine_type → same pattern
+
+  ARM CPU on x86 (4 tests)
+    cpu_model="cortex-a53" on x86_64 VM → cpu_model="host"
+
+  ISO path cleaning (4 tests)
+    "<iso>" → removed
+    "/path/to/file.iso" → removed (template path)
+    "/home/user/" prefix → expanded to real home
+
+  Bridge interface normalisation (4 tests)
+    "enp3s0" → "virbr0"
+    "eth0" → "virbr0"
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 2 — EXECUTOR + PREFLIGHT TESTS  (tests/layer2_executor.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Uses execute_tool() directly with mocked QemuManager.
+Speed: ~10ms per test.
+
+Test categories:
+  Basic dispatch (4 tests)
+    list_vms, check_system, scan_isos, list_profiles all return expected types.
+
+  Preflight actions (6 tests)
+    create_vm with placeholder name → ask_user (clarify response)
+    launch_vm with non-existent VM → abort (error response)
+    delete_vm → ask_user (confirmation required)
+    resize_disk shrink → abort
+    snapshot_restore → ask_user
+
+  Auto-fix (4 tests)
+    Windows VM without UEFI → auto_fix (uefi=True applied)
+    Windows VM disk < 40GB → auto_fix (disk_size_gb=64 applied)
+
+  Revert tracking (4 tests)
+    create_vm success → _last_revert_action has delete_vm
+    Any unrelated tool → _last_revert_action cleared
+    revert with nothing set → error response
+    revert with action set → shows confirmation prompt
+
+  Clarify tool (2 tests)
+    clarify tool returns {"clarify":True, "question":..., "options":[...]}
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 3 — AI INTEGRATION TESTS  (tests/layer3_ai.py)
+────────────────────────────────────────────────────────────────────────────────
+REQUIRES Ollama running. Uses the real Ollama model.
+Speed: ~4-11s per test (qwen2.5:7b).
+
+Each test:
+  1. Picks a prompt from prompt_pool randomly (based on seed)
+  2. Sends to Ollama via _call_ollama()
+  3. Extracts tool call from response
+  4. Runs _sanitise_args() on the args
+  5. Asserts tool_name and key arg values match expectations
+
+Vagueness levels (5 prompts per test):
+  1: precise   — exact values ("exactly 4096MB", "called dev-box")
+  2: normal    — standard phrasing ("4GB RAM", "called dev-box")
+  3: casual    — colloquial ("4 gigs", "dev box")
+  4: vague     — implicit ("not much RAM", no explicit name)
+  5: minimal   — just keywords ("linux vm, dev-box")
+
+The 19 test scenarios include:
+  - Create Linux VM with specific name and memory
+  - Create Windows VM (stealth) with SMBIOS fields
+  - Create ARM64 VM (Raspberry Pi)
+  - Launch an existing VM
+  - Stop a VM
+  - Create a snapshot
+  - Clone a VM
+  - List VMs
+  - Check system capabilities
+  - Resize a disk
+  - Delete a VM
+  - Create a hardware profile
+  - Check profile compatibility
+  - Create an isolated network
+  - Set resource limits
+  - Get VM logs
+  - Update VM config
+  - Run fingerprint report
+  - Use clarify tool when info is missing
+
+Why 19? Because that covers all tool categories (create, lifecycle, storage,
+profiles, networking, system, meta) with at least one test each, and fits
+within a reasonable CI time budget.
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 4 — PROFILE + HTTP TESTS  (tests/layer4_profiles.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Tests profile loading, application, and compatibility checking.
+Also includes basic HTTP mock tests.
+Speed: ~0.5s per test.
+
+Test categories:
+  Fixed profile tests (8 tests)
+    Each built-in profile is loaded and apply_profile() is called.
+    Asserts key fields are set correctly (memory, CPU, display, machine_class).
+
+  Profile compatibility tests (4 tests)
+    check_profile_compatibility() is called for each profile.
+    Asserts it returns a dict with pass/warn/fail entries.
+
+  Random profile tests (N tests, default 5, -n to change)
+    A random valid MachineConfig is generated.
+    Saved as a custom profile and loaded back.
+    Asserts round-trip fidelity.
+
+  HTTP mock tests (4 tests)
+    Mocks the Ollama endpoint and verifies _call_ollama() handles:
+    - Valid tool call response
+    - Text-only response (no tool call)
+    - Empty response
+    - Network error
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 5 — PROPERTY-BASED INVARIANT TESTS  (tests/layer5_property.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Generates random inputs and checks invariants.
+Default: 50 iterations per invariant (500 with --fuzz).
+
+The 5 invariants:
+
+  prop_sanitiser_never_crashes
+    For 50 random (tool_name, args) combinations, _sanitise_args() must
+    never raise any exception. It must always return a dict.
+    Why: the sanitizer is the first safety layer. If it crashes, nothing
+    is protected. This property ensures it handles any possible AI output.
+
+  prop_preflight_never_crashes
+    For 50 random (tool_name, args) combinations, _preflight_check() must
+    never raise. It must always return a dict with an "action" key.
+    Why: same reasoning. Preflight must always return a structured response,
+    even for completely nonsensical inputs.
+
+  prop_sanitiser_idempotent
+    sanitise(sanitise(args)) == sanitise(args) for all inputs.
+    Running the sanitizer twice gives the same result as once.
+    Why: if the sanitizer is not idempotent, it means the first run produces
+    output that the second run would further modify — which means the
+    sanitizer's output is not stable/consistent.
+
+  prop_placeholders_always_cleared
+    For all known placeholder names, _sanitise_args("create_vm", {"name":placeholder})
+    always produces args where name is "" or missing.
+    Why: placeholder names must ALWAYS be cleared, no exceptions.
+
+  prop_profile_always_auto_set
+    For all known profile names used as machine_type,
+    _sanitise_args("create_vm", {"machine_type": profile_name})
+    always sets args["profile"] = profile_name and removes machine_type.
+    Why: the sanitizer's profile-name-to-profile-field conversion must be
+    reliable. If it fails silently, the wrong machine_type goes to QEMU.
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 6 — CONTEXT GATE TESTS  (tests/layer6_context_gate.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Pure unit tests on gate_check().
+
+Tests each tool that has required fields:
+  - gate_check("create_vm", {}) → clarify (name missing)
+  - gate_check("create_vm", {"name":"dev-box"}) → None (ok)
+  - gate_check("launch_vm", {}) → clarify (name missing)
+  - gate_check("launch_vm", {"name":"dev-box"}) → None
+  - etc.
+
+Also tests placeholder name detection:
+  gate_check("create_vm", {"name":"my-vm"}) → clarify (placeholder)
+  gate_check("create_vm", {"name":"vm"}) → clarify (placeholder)
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 7 — CONTEXT ASSISTANT TESTS  (tests/layer7_context_assistant.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Tests context_assistant.py's check_context() and extract_slots().
+
+Tests:
+  - Given a conversation where user said "linux vm called dev-box",
+    check_context("launch_vm", {"name":"win-box"}, messages) should flag
+    the inconsistency (user said dev-box, AI is launching win-box).
+  - extract_slots() correctly pulls VM names, OS types, sizes from messages.
+  - Templates in context_assistant_config.json render correctly.
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 8 — PIPELINE TESTS  (tests/layer8_pipeline.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Tests the full sanitize→preflight pipeline together.
+
+Covers the 6 test categories from the Pipeline Test Design Statement:
+  valid    — valid args pass through unchanged or minimally corrected
+  missing  — missing required args trigger ask_user or abort
+  broken   — malformed args (wrong types, out of range) are corrected
+  conflict — conflicting args (ARM CPU + x86 VM) are caught
+  foreign  — completely unrecognised args are handled gracefully
+  junk     — random garbage args don't cause exceptions
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 9 — GATED PIPELINE TESTS  (tests/layer9_pipeline_gated.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Same as Layer 8 but with the context gate enabled.
+
+Tests that gate_check() correctly intercepts missing args BEFORE the pipeline
+runs, and that the pipeline still handles all 6 categories correctly when gate
+does not intercept.
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 10 — FULL PIPELINE INTEGRATION  (tests/layer10_pipeline_full.py)
+────────────────────────────────────────────────────────────────────────────────
+REQUIRES Ollama. Tests the complete path: user prompt → Ollama → sanitize →
+gate → preflight → (mock) execute.
+
+Uses the same 6 categories as Layer 8 but with real Ollama responses.
+The execute step is mocked (no real QEMU) but all AI and validation layers
+are real.
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 11 — REMOTE SPLIT TESTS  (tests/layer11_remote_split.py)
+────────────────────────────────────────────────────────────────────────────────
+No Ollama. Uses FastAPI TestClient (in-process HTTP, no real network).
+19 tests. Requires API_TOKEN env var.
+Speed: ~50ms per test.
+
+HOW LAYER 11 WORKS
+  The test file:
+  1. Clears sys.modules cache for any old api_server imports
+  2. Imports client.server.api_server → creates the FastAPI app
+  3. Creates TestClient(app) — talks to the app in-process
+  4. Mocks execute_tool and _preflight_check with patch()
+     (patching the canonical paths: "client.executioner.tool_executor.execute_tool"
+      and "shared.preflight.validator._preflight_check")
+  5. Each test sends HTTP requests to the TestClient and asserts the response
+
+The 19 tests cover:
+
+  Authentication (3 tests)
+    Valid token → 200
+    Missing Authorization header → 401 (HTTPBearer raises it)
+    Wrong token → 401
+
+  Tool allowlist (2 tests)
+    Tool in allowed_remote_tools → proceeds to preflight
+    Tool NOT in allowed_remote_tools → 403 Forbidden
+
+  Preflight routing (4 tests)
+    Preflight returns "ok" → execute_tool called, result returned
+    Preflight returns "abort" → execute_tool NOT called, error in body (HTTP 200)
+    Preflight returns "ask_user" → execute_tool NOT called, clarify in body
+    Preflight returns "auto_fix" → fixed_args used for execute_tool call
+
+  Display override for launch_vm (3 tests)
+    display="sdl" → overridden to "vnc" + vnc_bind_local=True
+    display="gtk" → overridden to "vnc" + vnc_bind_local=True
+    display="vnc" → vnc_bind_local=True injected (no override needed)
+
+  VNC result enrichment in executor_client (3 tests)
+    Remote VNC result → ssh_tunnel_cmd added by executor_client
+    Remote VNC result → vnc_connect_cmd added
+    Non-VNC result → no connection string fields added
+
+  Stateless preflight split (2 tests)
+    stateless_only=True (provider side) → VM existence not checked
+    stateless_only=False (client side) → VM existence IS checked
+
+  Health endpoint (1 test)
+    GET /health → {"status":"ok"} with no auth required
+
+  Rotate token (1 test)
+    POST /rotate-token with valid token → new token accepted
+
+────────────────────────────────────────────────────────────────────────────────
+PIPELINE TEST DESIGN STATEMENT (summary)
+────────────────────────────────────────────────────────────────────────────────
+
+The 6 test categories that EVERY new tool must be tested against:
+
+  1. valid      Args are correct. Expect success or minimal auto-fix.
+  2. missing    Required args absent. Expect ask_user or gate clarify.
+  3. broken     Args present but wrong type/value. Expect auto-fix or abort.
+  4. conflict   Two args that contradict each other. Expect abort or ask_user.
+  5. foreign    Args for a completely different tool (wrong shape). Expect no crash.
+  6. junk       Random garbage. Expect no exception, graceful handling.
+
+This design ensures the sanitizer + preflight combination handles the full
+realistic range of bad AI output — not just the cases we think of in advance.
+
+────────────────────────────────────────────────────────────────────────────────
+PART B: SECURITY REFERENCE
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+1. AUTHENTICATION
+────────────────────────────────────────────────────────────────────────────────
+
+Mechanism: HTTP Bearer token
+  Every API request (except GET /health) must include:
+    Authorization: Bearer <token>
+  The server extracts the token via FastAPI's HTTPBearer() dependency.
+  A request without this header gets 401 automatically (HTTPBearer raises it).
+  A request with the wrong token gets 401 from _require_token().
+
+Token storage — client machine:
+  Primary: API_TOKEN environment variable (highest priority)
+  Fallback: ~/.qemu-api.token file (chmod 0600 — owner-only read)
+  The server refuses to start if neither is set.
+
+Token storage — provider machine:
+  Primary: API_TOKEN environment variable
+  Written to ~/.zshrc by setup_provider.sh in a labelled block.
+  Also passed in HTTP requests as the Bearer token.
+
+Token quality:
+  setup_client.sh generates with: secrets.token_urlsafe(32)
+  This produces 32 bytes of cryptographically secure random data, base64url-
+  encoded. The result is approximately 43 characters of randomness.
+  Token minimum for rotate-token: 16 characters.
+
+Token rotation:
+  POST /rotate-token with current token in Authorization header.
+  New token must be ≥ 16 characters.
+  Effect is immediate (in-memory + file update).
+  Provider must update API_TOKEN to match.
+
+GET /health is intentionally unauthenticated:
+  This is the liveness probe — if it required auth, the provider would
+  need to send credentials every 30 seconds just to check if the server
+  is alive, which creates unnecessary exposure. The health endpoint reveals
+  only that the server is running, not any VM data.
+
+────────────────────────────────────────────────────────────────────────────────
+2. TOOL ALLOWLIST
+────────────────────────────────────────────────────────────────────────────────
+
+The allowed_remote_tools list in client/executioner/config.json is a whitelist.
+Any tool_name NOT in the list gets HTTP 403 before preflight runs.
+
+This is a security boundary: even if an attacker has a valid API token,
+they cannot call tools that are not in the allowlist.
+
+Default exclusions and why:
+  send_monitor_cmd — sends raw QEMU human monitor commands.
+    The monitor can pause/resume VMs, save state, execute arbitrary QEMU
+    commands. This is too powerful for remote access without tight controls.
+    If needed, add it explicitly and audit all monitor commands in use.
+
+Design principle:
+  The allowlist is on the SERVER (client machine), not the provider.
+  Even if the provider machine is compromised, it cannot call unapproved tools.
+
+────────────────────────────────────────────────────────────────────────────────
+3. VNC SECURITY
+────────────────────────────────────────────────────────────────────────────────
+
+VNC is ALWAYS bound to 127.0.0.1 (localhost) in remote mode.
+  -vnc 127.0.0.1:{display},password=on
+  This means no external machine can reach VNC directly — not even through
+  NAT. Only a process on the same machine (or an SSH tunnel endpoint) can
+  connect.
+
+One-time VNC password:
+  Generated with secrets.token_urlsafe(8) — 8 bytes of randomness (~11 chars).
+  Set via QMP set_password immediately after QEMU starts.
+  Expires 10 minutes after VM start via QMP expire_password.
+  If the password expires, stop and relaunch the VM — a new password is
+  generated on each launch.
+
+QMP retry loop:
+  The code tries 15 times with 0.5s delays (7.5s total) to connect to the
+  QMP socket after QEMU starts. This handles slow VM startup without hanging.
+  If QMP connection fails, the VM runs but VNC has no password — the caller
+  is warned.
+
+SSH tunnel is the expected VNC access method:
+  ssh -L 5901:127.0.0.1:5901 user@host
+  The VNC password adds a second layer in case the SSH tunnel endpoint
+  is shared (e.g. an SSH server used by multiple people).
+
+────────────────────────────────────────────────────────────────────────────────
+4. TLS / TRANSPORT SECURITY
+────────────────────────────────────────────────────────────────────────────────
+
+The API server supports TLS via --cert and --key flags on the serve command:
+  python3 provider/ollama_wrapper.py serve 0.0.0.0 8443 \
+      --cert server.crt --key server.key
+
+When TLS is enabled:
+  - All API traffic is encrypted in transit
+  - The Bearer token is not exposed in plaintext
+  - The VM command output is not visible to network observers
+
+When using SSH tunnel instead of TLS:
+  - The SSH connection itself encrypts all traffic
+  - No need for TLS certificates
+  - The API server listens on HTTP (localhost only) — the SSH tunnel
+    is the encryption layer
+
+TLS verification:
+  API_CA_CERT=/path/to/ca.pem  — custom CA for self-signed certs
+  API_VERIFY_SSL=0             — disable verification (NEVER in production)
+
+Recommendation:
+  SSH tunnel is simpler and equally secure for personal use.
+  TLS direct is appropriate for permanent/multi-user deployments.
+
+────────────────────────────────────────────────────────────────────────────────
+5. PREFLIGHT AS SECURITY LAYER
+────────────────────────────────────────────────────────────────────────────────
+
+The preflight validator runs on BOTH sides in remote mode:
+  Provider side (stateless_only=True): catches shape/logic errors before
+    sending the request — saves a round trip for obvious mistakes.
+  Client side (stateless_only=False): the authoritative check using real
+    state. The client ALWAYS runs this regardless of what the provider did.
+
+This means even if the provider-side preflight is bypassed (e.g. by a
+custom client), the server-side preflight will still catch violations.
+
+The server is the authority. The provider is a convenience layer.
+
+Key preflight security checks:
+  - delete_vm: ALWAYS requires user confirmation (ask_user action)
+  - resize_disk shrink: ALWAYS aborted (irreversible data loss)
+  - snapshot_restore: ALWAYS requires confirmation
+  - snapshot_delete: ALWAYS requires confirmation
+  - dangerous monitor commands: ask_user (e.g. "commit all", "quit")
+
+────────────────────────────────────────────────────────────────────────────────
+6. SANITIZER AS SECURITY LAYER
+────────────────────────────────────────────────────────────────────────────────
+
+The sanitizer is not a security boundary (an attacker controlling the
+provider could bypass it), but it prevents accidental harm from bad AI output:
+
+  Resource caps prevent the AI from accidentally:
+    - Allocating all host RAM to a VM (max 95%)
+    - Allocating more CPU cores than the host has
+    - Creating a disk smaller than 8GB (too small to be useful)
+
+  Placeholder name clearing prevents the AI from accidentally:
+    - Creating or deleting VMs with generic names that might already exist
+    - Overwriting an existing VM because it had the same generic name
+
+  ARM/x86 mismatch detection prevents:
+    - Creating a VM that will fail to boot because the CPU model is incompatible
+      with the machine architecture
+
+────────────────────────────────────────────────────────────────────────────────
+7. WSL2 SECURITY CONSIDERATIONS
+────────────────────────────────────────────────────────────────────────────────
+
+The Windows port proxy (netsh portproxy) forwards the SSH port externally:
+  Windows port 2222 → WSL2 port 22
+
+This means anyone who can reach the Windows machine on port 2222 can
+attempt an SSH connection to the WSL2 Linux user. Mitigations:
+
+  1. SSH key authentication (strongly recommended):
+     ssh-keygen -t ed25519 inside WSL2
+     Add public key to ~/.ssh/authorized_keys
+     Disable password auth: edit /etc/ssh/sshd_config → PasswordAuthentication no
+
+  2. Firewall rule restricts port 2222 to TCP inbound only (already done by
+     setup_wsl2.ps1 — New-NetFirewallRule -LocalPort 2222 -Protocol TCP)
+
+  3. The API server binds to 127.0.0.1:8080 inside WSL2.
+     Even if someone SSH's in, they need the API_TOKEN to call the API.
+
+  4. The SSH tunnel approach means you never need to expose port 8080
+     externally at all. Only port 2222 (SSH) is open.
+
+Scheduled task security:
+  The task runs as SYSTEM (highest Windows privilege).
+  It only runs the helper script at C:\Windows\System32\qemu-api-wsl2-forward.ps1
+  which only runs netsh commands. The script is written by setup_wsl2.ps1
+  and only contains the portproxy commands — no user input is executed.
+
+────────────────────────────────────────────────────────────────────────────────
+8. WHAT IS NOT SECURED (KNOWN LIMITATIONS)
+────────────────────────────────────────────────────────────────────────────────
+
+ACPI OEM strings
+  Still show "BOCHS" / "BXPC" inside the guest even with stealth mode.
+  A determined attacker with root inside the VM can read ACPI tables.
+  Future project: inject custom ACPI DSDT table.
+
+/sys PCI vendor IDs
+  The lspci wrapper replaces output of the lspci command, but
+  /sys/bus/pci/devices/*/vendor and /subsystem_vendor still show
+  the real QEMU PCI IDs (1234:1111 for std VGA, 15ad for VMware).
+  Programs that read /sys directly (instead of running lspci) will still
+  see the real IDs.
+
+dmesg QEMU strings
+  The Linux kernel logs QEMU-specific strings at boot time:
+  "[    0.000000] DMI: QEMU Standard PC (Q35+ICH9), BIOS 0.0.0"
+  These are visible with: dmesg | grep -i qemu
+  Suppressing these would require patching the kernel.
+
+Serial number uniqueness
+  If all VMs use the same serial_number, a service that tracks hardware
+  across connections could flag this. Each VM should have a unique serial.
+
+One-time VNC password TTL
+  The VNC password expires in 10 minutes. If the VNC viewer is not started
+  within this window, a new launch (stop + launch_vm) is needed.
+
+================================================================================
