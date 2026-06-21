@@ -3,39 +3,42 @@ fingerprint.py — VM Fingerprint Analysis Layer
 
 Simulates what inxi would report from inside a VM guest. Checks each
 SMBIOS/hardware field against known VM signatures and scores the result.
-
-Bug fixes vs original ollama_wrapper.py:
-  - cfg.mac_address → cfg.networks[0].mac (MachineConfig has no mac_address attr)
-  - cfg.network_mode → cfg.networks[0].mode (MachineConfig has no network_mode attr)
 """
 
 import json
 import os
 from typing import Dict
 
-from client.api.qemu_config import MachineConfig
-from .display     import console
-from rich        import box
-from rich.panel  import Panel
-from rich.table  import Table
+from shared.display import console
+from rich import box
+from rich.panel import Panel
+from rich.table import Table
 
-_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
-_FP  = _CFG["fingerprint"]
+_CFG_PATH = os.path.join(os.path.dirname(__file__), "..", "server", "ai", "config.json")
+try:
+    _CFG = json.load(open(_CFG_PATH))
+    _FP  = _CFG.get("fingerprint", {})
+except FileNotFoundError:
+    _FP  = {}
 
-_VM_BIOS_VENDORS   = set(_FP["vm_bios_vendors"])
-_VM_CHASSIS_TYPES  = set(_FP["vm_chassis_types"])
-_QEMU_OUI_PREFIXES = set(_FP["qemu_oui_prefixes"])
-_SCORE_GOOD        = _FP["score_good"]
-_SCORE_WARN        = _FP["score_warn"]
+_VM_BIOS_VENDORS   = set(_FP.get("vm_bios_vendors",   ["seabios", "ovmf", "tianocore", "edk ii", "bochs"]))
+_VM_CHASSIS_TYPES  = set(_FP.get("vm_chassis_types",   ["other", "unspecified", ""]))
+_QEMU_OUI_PREFIXES = set(_FP.get("qemu_oui_prefixes",  ["52:54:00", "00:1a:4a"]))
+_SCORE_GOOD        = _FP.get("score_good", 80)
+_SCORE_WARN        = _FP.get("score_warn", 50)
+
+try:
+    from client.api.qemu_config import MachineConfig
+except ImportError:
+    MachineConfig = None  # type: ignore[assignment,misc]
 
 
 # Simulates what inxi -M -N -C -D -A -G would report from inside the guest, scoring each field and printing a recommendation panel.
 # In: str VM name → Out: nothing (console output)
 def _tf_report(name: str, summary: bool = False) -> dict:
-    """
-    Simulate inxi -M -N -C -D -A -G output for a VM config.
-    Reports what a fingerprinting tool would see from inside the guest.
-    """
+    if MachineConfig is None:
+        return {"success": False, "error": "fingerprint not available in provider-only mode"}
+
     try:
         cfg = MachineConfig.load(name)
     except Exception as e:
@@ -118,7 +121,6 @@ def _tf_report(name: str, summary: bool = False) -> dict:
                         "detail": "Chassis type set (e.g. Notebook, Desktop)"})
 
     # ── inxi -N: Network / MAC ────────────────────────────────────────────────
-    # Bug fix: mac lives on NetworkConfig, not MachineConfig
     mac = ""
     network_mode = ""
     if cfg.networks:

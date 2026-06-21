@@ -456,13 +456,13 @@ def _t_remote_vnc_launch_builds_connection_strings() -> List[str]:
     }
 
     import importlib
-    for _mod in ("executioner.executor_client", "provider.executor_client"):
+    for _mod in ("executioner.executor_client", "server.executor_client"):
         if _mod in sys.modules:
             del sys.modules[_mod]
 
     with patch.dict(os.environ, {"API_URL": "http://192.168.1.50:8080", "API_TOKEN": "tok"}):
         with patch("requests.post", return_value=mock_response):
-            import provider.executor_client as ec
+            import server.executor_client as ec
             result = ec.execute_tool("launch_vm", {"name": "myvm"})
 
     issues = []
@@ -498,13 +498,13 @@ def _t_remote_non_vnc_no_connection_strings() -> List[str]:
     }
 
     import importlib
-    for _mod in ("executioner.executor_client", "provider.executor_client"):
+    for _mod in ("executioner.executor_client", "server.executor_client"):
         if _mod in sys.modules:
             del sys.modules[_mod]
 
     with patch.dict(os.environ, {"API_URL": "http://192.168.1.50:8080", "API_TOKEN": "tok"}):
         with patch("requests.post", return_value=mock_response):
-            import provider.executor_client as ec
+            import server.executor_client as ec
             result = ec.execute_tool("list_vms", {})
 
     issues = []

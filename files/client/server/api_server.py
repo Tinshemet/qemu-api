@@ -5,7 +5,7 @@ Runs on the client machine. Exposes execute_tool over HTTP so the AI provider
 can drive QEMU/libvirt remotely. Every request must carry a valid Bearer token.
 
 Preflight runs here (with the real QemuManager) before every execute_tool call,
-so validation uses actual VM/disk state — not the empty state on the AI provider.
+so validation uses actual VM/disk state — not the empty state on the AI server.
 Preflight responses are returned as structured dicts so the AI provider's existing
 clarify/error handlers pick them up without any changes on that side.
 

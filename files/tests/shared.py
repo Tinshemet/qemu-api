@@ -18,13 +18,13 @@ from rich.progress import track
 # Add files/ to sys.path so layer-module imports resolve correctly
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from provider.ollama_wrapper import (
+from server.ollama_wrapper import (
     execute_tool, OLLAMA_URL, OLLAMA_MODEL, TOOLS,
     _build_system_prompt, manager,
     _sanitise_args, _preflight_check, _resolve_iso,
     _validate_with_internet, _validate_profile_for_host,
 )
-from provider.ai.context_assistant import check_context
+from server.ai.context_assistant import check_context
 from shared.preflight.validator import (
     _get_qemu_machine_types, _get_qemu_cpu_models,
     _is_arm_cpu, _is_x86_cpu, _net_get, _net_head,

@@ -48,7 +48,7 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
             verify=_VERIFY,
         )
     except requests.ConnectionError:
-        from provider.ai.display import console
+        from shared.display import console
         console.print(
             f"[bold red]Cannot connect to client machine at {API_URL}[/bold red]\n"
             f"  → On the client machine run: [bold]qemu-api serve[/bold]\n"
@@ -57,7 +57,7 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
         sys.exit(1)
 
     if resp.status_code == 401:
-        from provider.ai.display import console
+        from shared.display import console
         console.print(
             f"[bold red]API server rejected the token (401)[/bold red]\n"
             f"  → Make sure API_TOKEN matches on both machines"

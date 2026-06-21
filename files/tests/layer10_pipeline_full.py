@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .shared import TestResult, execute_tool
-from provider.ai.context_assistant import check_context
+from server.ai.context_assistant import check_context
 
 
 # ── Full-pipeline test dataclass ──────────────────────────────────────────────

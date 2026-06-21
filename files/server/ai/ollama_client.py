@@ -13,9 +13,13 @@ from typing import Dict, List
 
 import requests
 
-from client.api.qemu_config import OVMF, list_profiles
+try:
+    from client.api.qemu_config import OVMF, list_profiles
+except ImportError:
+    OVMF = {"available": False, "code": "", "vars": ""}
+    def list_profiles(): return []                                            # type: ignore[misc]
 from .tools        import TOOLS
-from .display      import console
+from shared.display import console
 import shared.preflight.validator as _validator
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))

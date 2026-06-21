@@ -31,13 +31,13 @@ from shared.sanitizer.sanitizer import (
 )
 from shared.sanitizer.context_gate import gate_check
 from shared.preflight.validator import _preflight_check, _show_preflight_warning
-from provider.ai.display import (
+from shared.display import (
     console,
     _render_compat, _render_monitor, _render_profiles,
     _render_snapshots, _render_status, _render_system,
     _render_vm_failure, _render_vm_list,
 )
-from provider.ai.fingerprint import _tf_report
+from shared.fingerprint import _tf_report
 from rich.panel import Panel
 
 manager = QemuManager()

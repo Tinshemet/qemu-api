@@ -12,7 +12,10 @@ import re
 import tempfile
 from typing import Any, Dict, List, Optional
 
-from client.api.qemu_config import get_all_profiles
+try:
+    from client.api.qemu_config import get_all_profiles
+except ImportError:
+    def get_all_profiles(): return {}                                         # type: ignore[misc]
 
 _CFG                = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _BOUNDS             = _CFG["bounds"]

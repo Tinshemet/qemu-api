@@ -645,7 +645,7 @@ def run_sanitiser_test(tc: SanitiserTest) -> TestResult:
 
 def run_preview_tests() -> List[TestResult]:
     import time as _time
-    from provider.ai.cli import _build_vm_spec_rows
+    from server.ai.cli import _build_vm_spec_rows
 
     cases = [
         {

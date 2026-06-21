@@ -20,8 +20,12 @@ from rich.table   import Table
 from rich.text    import Text
 from rich.theme   import Theme
 
-_CFG   = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
-THEME  = Theme(_CFG["theme"])
+_CFG_PATH = os.path.join(os.path.dirname(__file__), "..", "server", "ai", "config.json")
+try:
+    _CFG  = json.load(open(_CFG_PATH))
+    THEME = Theme(_CFG["theme"])
+except (FileNotFoundError, KeyError):
+    THEME = Theme({})
 console = Console(theme=THEME)
 
 

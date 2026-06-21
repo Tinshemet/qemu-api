@@ -21,7 +21,12 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from client.api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
+try:
+    from client.api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
+except ImportError:
+    OVMF = {"available": False, "code": "", "vars": ""}
+    def check_system_capabilities(): return {}                                # type: ignore[misc]
+    def get_all_profiles(): return {}                                         # type: ignore[misc]
 from shared.sanitizer.sanitizer import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))

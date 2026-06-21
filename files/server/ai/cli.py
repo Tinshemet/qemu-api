@@ -18,20 +18,32 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-from client.api.qemu_config import _MC, OVMF, check_profile_compatibility, check_system_capabilities, get_all_profiles, list_profiles
+try:
+    from client.api.qemu_config import _MC, OVMF, check_profile_compatibility, check_system_capabilities, get_all_profiles, list_profiles
+except ImportError:
+    _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
+    OVMF = {"available": False, "code": "", "vars": ""}
+    def list_profiles(): return []                                            # type: ignore[misc]
+    def get_all_profiles(): return {}                                         # type: ignore[misc]
+    def check_profile_compatibility(*a, **kw): return {"compatible": True, "issues": [], "warnings": []}  # type: ignore[misc]
+    def check_system_capabilities(): return {}                                # type: ignore[misc]
 from .session      import AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session, save_session, set_auto_clear, set_loop_max, get_loop_max
-from .display      import (
+from shared.display import (
     console,
     _print_banner, _render_compat, _render_monitor, _render_profiles,
     _render_snapshots, _render_status, _render_system, _render_vm_list, _render_vm_specs,
 )
-from .fingerprint        import _tf_report
+from shared.fingerprint import _tf_report
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots
 from shared.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from shared.sanitizer.sanitizer import OS_TYPE_ALIASES
-from provider.executor_client import execute_tool, API_URL, _VERIFY, _TOKEN, _TIMEOUT
-from client.executioner.tool_executor  import manager, _VM_DEFS
+from server.executor_client import execute_tool, API_URL, _VERIFY, _TOKEN, _TIMEOUT
+try:
+    from client.executioner.tool_executor import manager, _VM_DEFS
+except ImportError:
+    manager = None                                                            # type: ignore[assignment]
+    _VM_DEFS = {"disk_size_gb": 60, "network_mode": "nat", "disk_bus": "virtio"}
 from shared.preflight.validator import set_custom_mode, _preflight_check, _show_preflight_warning
 
 _CFG            = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
@@ -800,7 +812,7 @@ def chat_loop(verbose: bool = False):
                     and result.get("success")
                     and result.get("vnc_connect_cmd")
                 ):
-                    from provider.ai.display import _render_vnc_connect
+                    from shared.display import _render_vnc_connect
                     _render_vnc_connect(console, result)
                     result = {
                         "success": True, "name": result.get("name"), "display": "vnc",
@@ -1012,6 +1024,10 @@ def chat_loop(verbose: bool = False):
 # Dispatches direct sub-commands (list, launch, stop, snapshot, network, etc.) to the manager and renders output.
 # In: List[str] args, bool verbose → Out: nothing
 def cli_direct(args: List[str], verbose: bool = False):
+    if manager is None:
+        console.print("[bold yellow]Direct CLI requires the client package. In server-only mode use the AI chat — commands execute remotely via API_URL.[/bold yellow]")
+        return
+
     def pp(data):
         if verbose:
             console.print_json(json.dumps(data, default=str))
@@ -1204,7 +1220,7 @@ def cli_direct(args: List[str], verbose: bool = False):
 
     elif cmd == "serve":
         import uvicorn
-        from provider.executor_client import _EX
+        from server.executor_client import _EX
         # Parse: serve [host] [port] [--cert cert.pem --key key.pem]
         positional = [a for a in rest if not a.startswith("--")]
         flags      = rest  # full list for --flag parsing
