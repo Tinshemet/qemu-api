@@ -57,7 +57,7 @@ def _qemu_version_warn() -> None:
     if major >= 7:
         warnings.append(
             f"QEMU {ver_str}: 'vgamem_mb' property removed — "
-            "virtio-vga-gl will be used without memory size arg (handled automatically)"
+            "virtio-vga 'vgamem_mb' property removed — resolution set via xres/yres (handled automatically)"
         )
     if major >= 6:
         warnings.append(
@@ -490,8 +490,8 @@ class QemuArgBuilder:
         gl_ok     = gl_wanted and self._gl_available()
         gl_flag   = "gl=on" if gl_ok else "gl=off"
 
-        # If gl=on was wanted but unavailable, also downgrade virtio-vga-gl → virtio-vga
-        if gl_wanted and not gl_ok and self.cfg.gpu == "virtio":
+        # virtio-vga-gl requires GL; downgrade to virtio-vga when GL is off or unavailable
+        if self.cfg.gpu == "virtio" and not gl_ok:
             gpu_device = "virtio-vga"
 
         if self.cfg.display == "sdl":

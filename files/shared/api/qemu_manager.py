@@ -383,7 +383,11 @@ class QemuManager:
             return {"success": True, "dry_run": True, "command": " ".join(cmd), "message": "Dry run — command not executed."}
 
         if self._is_running(name):
-            return {"success": False, "error": f"VM '{name}' is already running."}
+            result: Dict[str, Any] = {"success": False, "already_running": True, "error": f"VM '{name}' is already running."}
+            if config.display == "vnc":
+                result["display"]  = "vnc"
+                result["vnc_port"] = config.vnc_port or 5900
+            return result
 
         if config.tpm and not config.machine_arch == "aarch64":
             tpm_err = self._start_swtpm(config)

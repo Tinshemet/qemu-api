@@ -172,7 +172,7 @@ def run(args: List[str], verbose: bool = False):
         r     = manager.launch_vm(rest[0], display=rest[1] if len(rest) > 1 else None)
         style = "success" if r.get("success") else "error"
         console.print(f"[{style}]{r.get('message', r.get('error', ''))}[/{style}]")
-        if r.get("success") and r.get("display") == "vnc":
+        if r.get("display") == "vnc" and (r.get("success") or r.get("already_running")):
             port = r.get("vnc_port", 5900)
             opened = None
             for _viewer in ("vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"):
