@@ -80,7 +80,7 @@ def _render_tool_results(tool_results: list, verbose: bool = False):
         tool   = tr.get("tool", "")
         result = tr.get("result", {})
         try:
-            if tool == "launch_vm" and result.get("success") and result.get("display") == "vnc":
+            if tool == "launch_vm" and result.get("display") == "vnc" and (result.get("success") or result.get("already_running")):
                 port   = result.get("vnc_port", 5900)
                 viewer = _try_open_vnc(port)
                 if viewer:

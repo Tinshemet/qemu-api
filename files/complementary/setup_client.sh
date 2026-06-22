@@ -154,16 +154,17 @@ header "Shell Integration"
 
 sed -i '/# qemu-api client start/,/# qemu-api client end/d' "$SHELL_RC" 2>/dev/null || true
 
-ENV_BLOCK=""
-ENV_BLOCK+="export SERVER_URL=\"$CHOSEN_URL\"\n"
-[[ -n "$CHOSEN_TOKEN"   ]] && ENV_BLOCK+="export API_TOKEN=\"$CHOSEN_TOKEN\"\n"
-[[ -n "$CHOSEN_CA_CERT" ]] && ENV_BLOCK+="export API_CA_CERT=\"$CHOSEN_CA_CERT\"\n"
+{
+    echo ""
+    echo "# qemu-api client start"
+    echo "source \"$VENV_DIR/bin/activate\""
+    printf 'export SERVER_URL="%s"\n' "$CHOSEN_URL"
+    [[ -n "$CHOSEN_TOKEN"   ]] && printf 'export API_TOKEN="%s"\n' "$CHOSEN_TOKEN"
+    [[ -n "$CHOSEN_CA_CERT" ]] && printf 'export API_CA_CERT="%s"\n' "$CHOSEN_CA_CERT"
+} >> "$SHELL_RC"
 
 cat >> "$SHELL_RC" << SHELLEOF
-
-# qemu-api client start
-source "$VENV_DIR/bin/activate"
-$(printf '%b' "$ENV_BLOCK")qemu-api() {
+qemu-api() {
     if ! curl -sf "\$SERVER_URL/health" &>/dev/null; then
         echo "  ⚠  Server at \$SERVER_URL is not reachable."
         echo "     Make sure the server is running and the SSH tunnel is open (if remote)."
