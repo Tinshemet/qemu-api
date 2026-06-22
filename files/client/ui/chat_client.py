@@ -62,12 +62,21 @@ def _save_session_id(sid: str):
 
 # ── Tool-result renderer ──────────────────────────────────────────────────────
 
+def _vnc_host() -> str:
+    """Return the VNC host — server's hostname when remote, localhost otherwise."""
+    from urllib.parse import urlparse
+    parsed = urlparse(SERVER_URL)
+    host   = parsed.hostname or "localhost"
+    return "localhost" if host in ("localhost", "127.0.0.1", "::1") else host
+
+
 def _try_open_vnc(port: int):
     """Spawn a VNC viewer in the background, trying common clients."""
     import subprocess as _sp
+    host = _vnc_host()
     for viewer in ("vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"):
         try:
-            _sp.Popen([viewer, f"localhost:{port}"],
+            _sp.Popen([viewer, f"{host}:{port}"],
                       stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
             return viewer
         except FileNotFoundError:
@@ -82,21 +91,22 @@ def _render_tool_results(tool_results: list, verbose: bool = False):
         try:
             if tool == "launch_vm" and result.get("display") == "vnc" and (result.get("success") or result.get("already_running")):
                 port   = result.get("vnc_port", 5900)
+                host   = _vnc_host()
                 viewer = _try_open_vnc(port)
                 if viewer:
                     console.print(Panel(
                         f"[bold green]✓ VNC viewer launched automatically[/bold green]\n\n"
                         f"If the window didn't appear, connect manually:\n"
-                        f"  [bold yellow]vncviewer localhost:{port}[/bold yellow]",
-                        title=f"[bold]VM Display — localhost:{port}[/bold]",
+                        f"  [bold yellow]vncviewer {host}:{port}[/bold yellow]",
+                        title=f"[bold]VM Display — {host}:{port}[/bold]",
                         border_style="green",
                     ))
                 else:
                     console.print(Panel(
                         f"Connect to the VM display:\n\n"
-                        f"  [bold yellow]vncviewer localhost:{port}[/bold yellow]\n\n"
+                        f"  [bold yellow]vncviewer {host}:{port}[/bold yellow]\n\n"
                         f"[dim]Or install a VNC viewer: sudo apt install tigervnc-viewer[/dim]",
-                        title=f"[bold]VM Display — localhost:{port}[/bold]",
+                        title=f"[bold]VM Display — {host}:{port}[/bold]",
                         border_style="cyan",
                     ))
             elif tool == "list_vms":

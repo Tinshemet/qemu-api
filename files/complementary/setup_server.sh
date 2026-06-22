@@ -297,6 +297,14 @@ if [[ -z "\$API_TOKEN" ]]; then
     echo "INFO: No API token — localhost connections only (remote access disabled)"
 fi
 
+# Free port 8080 if something else is holding it
+EXISTING=\$(lsof -ti:8080 2>/dev/null || true)
+if [[ -n "\$EXISTING" ]]; then
+    echo "  → Freeing port 8080 (PID \$(echo \$EXISTING | tr '\n' ' '))..."
+    echo "\$EXISTING" | xargs kill 2>/dev/null || true
+    sleep 1
+fi
+
 exec uvicorn server.http.api_server:app --host 0.0.0.0 --port 8080
 STARTEOF
 
