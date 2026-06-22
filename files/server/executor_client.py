@@ -36,5 +36,5 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
         args = dict(args)
         if args.get("display", "sdl") in _LOCAL_ONLY_DISPLAYS or "display" not in args:
             args["display"] = "vnc"
-        args["vnc_bind_local"] = True
+        args["vnc_bind_local"] = False
     return _execute_tool(tool_name, args, verbose)
