@@ -203,6 +203,19 @@ else
     ok "Model '$OLLAMA_MODEL' ready"
 fi
 
+# Write model choice into config so the server reads it without env vars
+AI_CFG="$FILES_DIR/server/ai/config.json"
+if [[ -f "$AI_CFG" ]]; then
+    python3 -c "
+import json, sys
+path = sys.argv[1]; model = sys.argv[2]
+c = json.load(open(path))
+c['model'] = model
+json.dump(c, open(path, 'w'), indent=4)
+" "$AI_CFG" "$OLLAMA_MODEL"
+    ok "Wrote model '$OLLAMA_MODEL' to $AI_CFG"
+fi
+
 # ── Ollama systemd service ────────────────────────────────────────────────────
 header "Ollama Systemd Service"
 
@@ -299,7 +312,6 @@ cat >> "$SHELL_RC" << SHELLEOF
 
 # qemu-api server start
 source "$VENV_DIR/bin/activate"
-export OLLAMA_MODEL="$OLLAMA_MODEL"
 export PATH="\$HOME/.local/bin:\$PATH"
 alias qemu-api-serve='$START_SCRIPT'
 alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
