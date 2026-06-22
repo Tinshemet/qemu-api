@@ -446,3 +446,30 @@ def image_download(vm_name: str, request: Request) -> StreamingResponse:
         media_type="application/octet-stream",
         headers=headers,
     )
+
+
+@app.get("/vms/{vm_name}/bundle", dependencies=[Depends(_require_token)])
+def vm_bundle(vm_name: str) -> StreamingResponse:
+    """Stream the entire VM folder as a gzipped tar archive."""
+    import subprocess as _sp
+    vm_dir = pathlib.Path.home() / ".qemu_vms" / vm_name
+    if not vm_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"VM '{vm_name}' not found.")
+
+    def _tar_stream() -> Iterator[bytes]:
+        proc = _sp.Popen(
+            ["tar", "czf", "-", "-C", str(vm_dir.parent), vm_name],
+            stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+        )
+        try:
+            for chunk in iter(lambda: proc.stdout.read(65536), b""):
+                yield chunk
+        finally:
+            proc.stdout.close()
+            proc.wait()
+
+    return StreamingResponse(
+        _tar_stream(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{vm_name}.tar.gz"'},
+    )
