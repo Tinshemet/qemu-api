@@ -396,6 +396,9 @@ class QemuManager:
 
         auto_detached_iso = self._maybe_auto_detach_iso(config)
 
+        if config.display == "vnc" and not config.vnc_port:
+            config.vnc_port = _next_free_port(VNC_PORT_START, self._used_ports("vnc"))
+
         cmd     = QemuArgBuilder(config).build()
         cmd_str = " ".join(cmd)
 
