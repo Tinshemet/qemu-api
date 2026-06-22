@@ -169,7 +169,43 @@ def run(args: List[str], verbose: bool = False):
 
     elif cmd == "launch" and rest:
         _require_manager()
-        r     = manager.launch_vm(rest[0], display=rest[1] if len(rest) > 1 else None)
+        vm_name = rest[0]
+        display = rest[1] if len(rest) > 1 else None
+
+        # If the VM exists locally, check whether it also exists on the server
+        local_exists = any(v.get("name") == vm_name for v in manager.list_vms())
+        remote_exists = False
+        if local_exists and _SERVER and _TOKEN:
+            try:
+                resp = requests.get(f"{_SERVER}/execute", headers=_HEADERS,
+                                    json={"tool": "list_vms", "args": {}},
+                                    timeout=10, verify=_VERIFY)
+                if resp.ok:
+                    remote_vms = resp.json().get("result", {}).get("vms", [])
+                    remote_exists = any(v.get("name") == vm_name for v in remote_vms)
+            except Exception:
+                pass
+
+        use_remote = False
+        if local_exists and remote_exists:
+            console.print(
+                f"\n  [bold yellow]'{vm_name}' exists both locally and on the remote server.[/bold yellow]\n"
+                f"  [1] Local  (this machine)\n"
+                f"  [2] Remote ({_SERVER})\n"
+            )
+            choice = input("  Launch which? [1/2]: ").strip()
+            use_remote = choice == "2"
+
+        if use_remote:
+            try:
+                resp = requests.post(f"{_SERVER}/execute", headers=_HEADERS,
+                                     json={"tool": "launch_vm", "args": {"name": vm_name, "display": display or "vnc"}},
+                                     timeout=_TIMEOUT, verify=_VERIFY)
+                r = resp.json().get("result", {}) if resp.ok else {"error": resp.text}
+            except Exception as e:
+                r = {"error": str(e)}
+        else:
+            r = manager.launch_vm(vm_name, display=display)
         style = "success" if r.get("success") else "error"
         console.print(f"[{style}]{r.get('message', r.get('error', ''))}[/{style}]")
         if r.get("display") == "vnc" and (r.get("success") or r.get("already_running")):
