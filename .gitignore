@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Per-machine configs — never commit these
+files/client/connection_config.json
+files/server/connection_config.json
