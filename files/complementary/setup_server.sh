@@ -300,23 +300,9 @@ cat >> "$SHELL_RC" << SHELLEOF
 # qemu-api server start
 source "$VENV_DIR/bin/activate"
 export OLLAMA_MODEL="$OLLAMA_MODEL"
+export PATH="\$HOME/.local/bin:\$PATH"
 alias qemu-api-serve='$START_SCRIPT'
-qemu-api() {
-    if ! curl -sf "http://localhost:8080/health" &>/dev/null; then
-        echo "  → Starting qemu-api server..."
-        nohup $START_SCRIPT &>/tmp/qemu-api-server.log &
-        local attempts=0
-        until curl -sf "http://localhost:8080/health" &>/dev/null || (( attempts++ >= 15 )); do
-            sleep 0.5
-        done
-        if ! curl -sf "http://localhost:8080/health" &>/dev/null; then
-            echo "  ✗ Server failed to start. Check /tmp/qemu-api-server.log"
-            return 1
-        fi
-        echo "  ✓ Server ready"
-    fi
-    PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py "\$@"
-}
+alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
 # qemu-api server end
 SHELLEOF
 

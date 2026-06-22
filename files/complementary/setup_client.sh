@@ -154,24 +154,12 @@ header "Shell Integration"
 
 sed -i '/# qemu-api client start/,/# qemu-api client end/d' "$SHELL_RC" 2>/dev/null || true
 
-{
-    echo ""
-    echo "# qemu-api client start"
-    echo "source \"$VENV_DIR/bin/activate\""
-    printf 'export SERVER_URL="%s"\n' "$CHOSEN_URL"
-    [[ -n "$CHOSEN_TOKEN"   ]] && printf 'export API_TOKEN="%s"\n' "$CHOSEN_TOKEN"
-    [[ -n "$CHOSEN_CA_CERT" ]] && printf 'export API_CA_CERT="%s"\n' "$CHOSEN_CA_CERT"
-} >> "$SHELL_RC"
-
 cat >> "$SHELL_RC" << SHELLEOF
-qemu-api() {
-    if ! curl -sf "\$SERVER_URL/health" &>/dev/null; then
-        echo "  ⚠  Server at \$SERVER_URL is not reachable."
-        echo "     Make sure the server is running and the SSH tunnel is open (if remote)."
-        echo "     Trying to connect anyway..."
-    fi
-    PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py "\$@"
-}
+
+# qemu-api client start
+source "$VENV_DIR/bin/activate"
+export PATH="\$HOME/.local/bin:\$PATH"
+alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
 # qemu-api client end
 SHELLEOF
 
