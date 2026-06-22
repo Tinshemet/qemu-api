@@ -6,33 +6,33 @@ Every source file is documented with its purpose, its public functions, what
 each function does, its inputs and outputs. Config keys are in handbook part 4.
 
 ────────────────────────────────────────────────────────────────────────────────
-PROVIDER SIDE  (files/provider/)
+PROVIDER SIDE  (files/server/)
 ────────────────────────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ollama_wrapper.py
+server/ollama_wrapper.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
-  The entry point script. Re-exports all symbols from provider/ and shared/
+  The entry point script. Re-exports all symbols from server/ and shared/
   so they are importable from one place. Also calls cli_direct() or chat_loop()
   from cli.py. This is the file the alias points at.
 
 HOW IT WORKS
   It imports and re-exports:
-    from provider.ai.cli           import chat_loop, cli_direct
-    from provider.ai.display       import console, _print_banner
-    from provider.ai.fingerprint   import _tf_report
-    from provider.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL, _call_ollama, _build_system_prompt
+    from server.ai.cli           import chat_loop, cli_direct
+    from server.ai.display       import console, _print_banner
+    from server.ai.fingerprint   import _tf_report
+    from server.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL, _call_ollama, _build_system_prompt
     from shared.sanitizer.sanitizer import _sanitise_args, _resolve_iso, _resolve_vm_name
-    from provider.ai.session       import load_session, save_session, clear_session
-    from provider.executor_client  import execute_tool, API_URL
-    from client.executioner.tool_executor import manager
-    from provider.ai.tools         import TOOLS
+    from server.ai.session       import load_session, save_session, clear_session
+    from server.executor_client  import execute_tool, API_URL
+    from shared.executioner.tool_executor import manager
+    from server.ai.tools         import TOOLS
     from shared.preflight.validator import ...
   Then calls cli_direct(sys.argv[1:]) or chat_loop() depending on args.
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/executor_client.py
+server/executor_client.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   THE SEAM. The single point where the provider decides: direct call or HTTP.
@@ -41,7 +41,7 @@ PURPOSE
   directly.
 
 MODULE-LEVEL STATE (initialised at import time)
-  _CFG      — loaded from client/executioner/config.json
+  _CFG      — loaded from shared/executioner/config.json
   _EX       — _CFG["executor"] sub-dict
   API_URL   — os.environ.get("API_URL", _EX["url"])  → "local" or URL
   _TOKEN    — os.environ.get("API_TOKEN", _EX.get("token",""))
@@ -53,7 +53,7 @@ FUNCTION: execute_tool(tool_name, args, verbose=False)
   IN:  tool_name str, args dict, verbose bool
   OUT: result dict
   If API_URL == "local":
-    imports and calls client.executioner.tool_executor.execute_tool() directly
+    imports and calls shared.executioner.tool_executor.execute_tool() directly
   Else:
     POST {API_URL}/execute with JSON body and Authorization header
     On ConnectionError: prints user-friendly error, sys.exit(1)
@@ -62,7 +62,7 @@ FUNCTION: execute_tool(tool_name, args, verbose=False)
     On VNC result: injects ssh_tunnel_cmd, vnc_connect_cmd, vnc_note fields
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/cli.py
+server/ai/cli.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Main entry point and chat loop. Handles both interactive AI chat mode and
@@ -70,7 +70,7 @@ PURPOSE
   guest setup scripts and the liveness monitor thread.
 
 MODULE-LEVEL STATE
-  _CFG          — config from provider/ai/config.json
+  _CFG          — config from server/ai/config.json
   _EXIT_CMDS    — set of strings that exit the chat loop
   _SHORTCUTS    — dict of instant-response commands (list, profiles, etc.)
   _LOOP_MAX     — max consecutive AI tool call iterations per prompt
@@ -117,7 +117,7 @@ FUNCTION: _serve_guest_setup(vm_dir, port=8080)
   Used so the guest can download guest_setup.sh or guest_setup.ps1.
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/ollama_client.py
+server/ai/ollama_client.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   HTTP client for the Ollama API. Builds the system prompt and sends
@@ -148,7 +148,7 @@ FUNCTION: _build_system_prompt(vm_list, custom_mode=False)
   - Guidance on when to ask vs assume
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/display.py
+server/ai/display.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   All Rich console rendering. Each _render_*() function takes a result dict
@@ -193,7 +193,7 @@ KEY FUNCTIONS
     Only shown in remote mode when display=="vnc".
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/fingerprint.py
+server/ai/fingerprint.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Simulates what inxi would report from inside the guest OS by reading the
@@ -213,7 +213,7 @@ FUNCTION: _tf_report(vm_name, summary=False)
   Returns structured dict; also prints Rich table if summary=False.
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/session.py
+server/ai/session.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Manages the AI conversation history (session). Loads and saves to
@@ -245,7 +245,7 @@ FUNCTION: set_loop_max(val)    /  get_loop_max()
   Get/set the auto_clear and tool_loop_max settings from config.
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/tools.py
+server/ai/tools.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Defines the TOOLS list — the complete set of tool definitions passed to
@@ -291,7 +291,7 @@ KEY TOOLS DEFINED
   revert           Undo the last reversible action
 
 ────────────────────────────────────────────────────────────────────────────────
-provider/ai/context_assistant.py
+server/ai/context_assistant.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Checks whether the AI's planned tool call is semantically consistent with
@@ -314,14 +314,14 @@ CLIENT SIDE  (files/client/)
 ────────────────────────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────────────────────────
-client/server/api_server.py
+server/http/api_server.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   The FastAPI HTTP server that runs on the client machine. Exposes
   execute_tool over HTTP with authentication.
 
 MODULE-LEVEL STATE
-  _CFG_PATH         — path to client/executioner/config.json
+  _CFG_PATH         — path to shared/executioner/config.json
   _CFG              — loaded config
   _EX               — _CFG["executor"] sub-dict
   _ALLOWED_TOOLS    — set from _EX["allowed_remote_tools"]
@@ -375,14 +375,14 @@ HELPER: _disk_path(vm_name)
   Raises HTTPException(404) if VM dir or qcow2 not found.
 
 ────────────────────────────────────────────────────────────────────────────────
-client/executioner/tool_executor.py
+shared/executioner/tool_executor.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   The main tool dispatch layer. Owns the QemuManager singleton. Handles all
   tool names, manages revert state, calls Rich display functions.
 
 MODULE-LEVEL STATE
-  _CFG                 — loaded from client/executioner/config.json
+  _CFG                 — loaded from shared/executioner/config.json
   _VM_DEFS             — _CFG["create_vm_defaults"]
   _TOOL_DEFS           — _CFG["tool_defaults"]
   _VALID_MACHINE_TYPES — set from _CFG["valid_machine_types"]
@@ -457,7 +457,7 @@ TOOL HANDLERS (all inside execute_tool() dispatch)
     All call _clear_revert() (irreversible — no safe undo).
 
 ────────────────────────────────────────────────────────────────────────────────
-client/api/qemu_manager.py
+shared/api/qemu_manager.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   The actual VM engine. All QEMU/KVM operations happen here. Owns
@@ -583,7 +583,7 @@ KEY METHODS (all on QemuManager instance)
     Starts swtpm socket daemon. Creates tpm/ dir. Waits for tpm.sock to appear.
 
 ────────────────────────────────────────────────────────────────────────────────
-client/api/qemu_arg_builder.py
+shared/api/qemu_arg_builder.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Builds the complete QEMU command-line argument list from a MachineConfig.
@@ -649,7 +649,7 @@ KEY SUB-FUNCTIONS
     If display=="none": -nographic
 
 ────────────────────────────────────────────────────────────────────────────────
-client/api/qemu_config.py
+shared/api/qemu_config.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Configuration dataclasses (MachineConfig, DiskConfig, NetworkConfig).
@@ -724,7 +724,7 @@ KEY FUNCTIONS
     Deletes a custom profile file.
 
 ────────────────────────────────────────────────────────────────────────────────
-client/api/qmp_client.py
+shared/api/qmp_client.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Client for the QEMU Machine Protocol (QMP). Connects to qmp.sock and sends

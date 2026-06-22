@@ -700,8 +700,8 @@ def run_preview_tests() -> List[TestResult]:
 
 def run_arg_builder_tests() -> List[TestResult]:
     import time as _time, traceback as _tb
-    from client.api.qemu_config import MachineConfig
-    from client.api.qemu_arg_builder import QemuArgBuilder
+    from shared.api.qemu_config import MachineConfig
+    from shared.api.qemu_arg_builder import QemuArgBuilder
 
     results: List[TestResult] = []
 

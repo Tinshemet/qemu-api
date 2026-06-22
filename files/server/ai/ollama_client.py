@@ -14,7 +14,7 @@ from typing import Dict, List
 import requests
 
 try:
-    from client.api.qemu_config import OVMF, list_profiles
+    from shared.api.qemu_config import OVMF, list_profiles
 except ImportError:
     OVMF = {"available": False, "code": "", "vars": ""}
     def list_profiles(): return []                                            # type: ignore[misc]
@@ -85,8 +85,11 @@ ARM/Pi  → kvm=false + qemu_binary=qemu-system-aarch64 + machine_type=virt
 
 6. FAILURE: "why did it fail" or VM stopped → call get_vm_logs immediately.
 
-7. DELETE: "delete/kill/remove VM" → call delete_vm IMMEDIATELY.
-   Do NOT call clarify first — the system has its own confirmation gate for deletions.
+7. DELETE vs KILL (CRITICAL DISTINCTION):
+   - "delete <vm>" / "remove <vm>" / "destroy <vm>" / "wipe <vm>" → delete_vm (permanent, removes disk)
+   - "kill <vm>" / "kill the process" / "force stop" / "hard stop" / "SIGKILL" → stop_vm(force=True) ONLY — this is a process kill, NOT deletion
+   NEVER call delete_vm when the user says "kill". "Kill" in computing means terminate the process, not delete it.
+   Do NOT call clarify first for either — the system has its own confirmation gates.
 
 8. BRIDGE: bridge_iface must be a bridge (virbr0, br0). Never use eth0/ens33/wlan0.
 
@@ -104,6 +107,11 @@ ARM/Pi  → kvm=false + qemu_binary=qemu-system-aarch64 + machine_type=virt
     based on a case mismatch. Instead, call clarify with the correctly-cased name as a
     suggestion: e.g. user says "launch adams" → call clarify("Did you mean 'Adams'?",
     options=["Adams"]). Only report a VM as not found if no case-insensitive match exists.
+
+12. USER REJECTIONS: If the user says "no", "nope", "cancel", "stop", "never mind",
+    "don't", "forget it", or any clear refusal — accept it immediately with one word:
+    "Understood." Do NOT rephrase the question, offer the same action again, or ask
+    "are you sure?". Drop the topic entirely and wait for the next request.
 """
 
 

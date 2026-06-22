@@ -423,6 +423,9 @@ class QemuManager:
             "message": f"VM '{name}' launched (PID {proc.pid}).",
         }
 
+        if config.display == "vnc":
+            result["vnc_port"] = config.vnc_port
+
         if config.display == "vnc" and config.vnc_bind_local:
             import secrets
             from datetime import datetime, timedelta, timezone
@@ -484,18 +487,28 @@ class QemuManager:
                 f"pid, flag, name = {proc.pid}, {repr(relaunch_flag)}, {repr(name)}\n"
                 f"try:\n"
                 f"    p = psutil.Process(pid)\n"
-                f"    p.wait()\n"
-                f"    rc = p.returncode if hasattr(p, 'returncode') else 0\n"
-                f"except Exception: rc = 0\n"
+                f"    while True:\n"
+                f"        try:\n"
+                f"            if not p.is_running() or p.status() == 'zombie':\n"
+                f"                break\n"
+                f"        except Exception:\n"
+                f"            break\n"
+                f"        time.sleep(0.5)\n"
+                f"except Exception: pass\n"
                 f"if os.path.exists(flag):\n"
                 f"    os.unlink(flag)\n"
                 f"    time.sleep(2)\n"
-                f"    from client.api.qemu_manager import QemuManager\n"
+                f"    from shared.api.qemu_manager import QemuManager\n"
                 f"    mgr = QemuManager()\n"
                 f"    mgr.launch_vm(name)\n"
-                f"    stealth_done = os.path.join(os.path.expanduser('~/.qemu_vms'), name, '.stealth_done')\n"
-                f"    while not os.path.exists(stealth_done):\n"
-                f"        time.sleep(5)\n"
+                f"    try:\n"
+                f"        from shared.api.qemu_config import MachineConfig\n"
+                f"        cfg = MachineConfig.load(name)\n"
+                f"        if cfg.stealth:\n"
+                f"            stealth_done = os.path.join(os.path.expanduser('~/.qemu_vms'), name, '.stealth_done')\n"
+                f"            while not os.path.exists(stealth_done):\n"
+                f"                time.sleep(5)\n"
+                f"    except Exception: pass\n"
             )
             subprocess.Popen(
                 [sys.executable, "-c", watcher_script],
@@ -522,21 +535,32 @@ class QemuManager:
         return None
 
     def stop_vm(self, name: str, force: bool = False) -> Dict[str, Any]:
+        # Diagnostic: log every stop_vm call with a traceback so unexpected kills can be traced.
+        import traceback as _tb
+        _log_dir = os.path.expanduser(f"~/.qemu_vms/{name}")
+        if os.path.isdir(_log_dir):
+            with open(os.path.join(_log_dir, "stop_vm.log"), "a") as _lf:
+                import datetime as _dt
+                _lf.write(f"\n--- stop_vm(name={name!r}, force={force}) at {_dt.datetime.now()} ---\n")
+                _tb.print_stack(file=_lf)
+
+        # Always cancel auto-relaunch first — intentional stop must win even for zombies.
+        relaunch_flag = os.path.join(os.path.expanduser(f"~/.qemu_vms/{name}"), ".relaunch_after_install")
+        if os.path.exists(relaunch_flag):
+            os.unlink(relaunch_flag)
+
         if not self._is_running(name):
             pid = self._find_qemu_pid(name)
             if not pid:
+                self._state.set_stopped(name)
                 return {"success": False, "error": f"VM '{name}' is not running."}
             try:
                 p = psutil.Process(pid)
                 self._procs[name] = _PsutilProcWrapper(p)
                 self._state.set_running(name, pid)
             except psutil.NoSuchProcess:
+                self._state.set_stopped(name)
                 return {"success": False, "error": f"VM '{name}' is not running."}
-
-        # Cancel auto-relaunch before stopping — this is an intentional stop.
-        relaunch_flag = os.path.join(os.path.expanduser(f"~/.qemu_vms/{name}"), ".relaunch_after_install")
-        if os.path.exists(relaunch_flag):
-            os.unlink(relaunch_flag)
 
         if not force:
             try:
@@ -1553,7 +1577,7 @@ Write-Host "Verify WebGL at: https://browserleaks.com/webgl (expect: {webgl_rend
                     return True
             else:
                 try:
-                    if proc.is_running():
+                    if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
                         return True
                 except Exception:
                     pass
@@ -1561,7 +1585,7 @@ Write-Host "Verify WebGL at: https://browserleaks.com/webgl (expect: {webgl_rend
         if pid:
             try:
                 p = psutil.Process(pid)
-                if p.is_running():
+                if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
                     self._procs[name] = _PsutilProcWrapper(p)
                     return True
             except psutil.NoSuchProcess:
@@ -1572,7 +1596,7 @@ Write-Host "Verify WebGL at: https://browserleaks.com/webgl (expect: {webgl_rend
         if pid:
             try:
                 p = psutil.Process(pid)
-                if p.is_running():
+                if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
                     self._procs[name] = _PsutilProcWrapper(p)
                     self._state.set_running(name, pid)
                     return True

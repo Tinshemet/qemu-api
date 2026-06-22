@@ -116,6 +116,6 @@ class _PsutilProcWrapper:
     # In: nothing → Out: bool
     def is_running(self):
         try:
-            return self._proc.is_running()
+            return self._proc.is_running() and self._proc.status() != "zombie"
         except psutil.NoSuchProcess:
             return False

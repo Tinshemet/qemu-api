@@ -27,14 +27,14 @@ KVM
   extensions (Intel VT-x or AMD-V). KVM is what makes VMs fast. It is not
   available on Windows (only Linux has it) and is limited or absent in some
   WSL2 configurations. Check with: ls /dev/kvm
-  Source: client/api/qemu_manager.py, client/executioner/config.json
+  Source: shared/api/qemu_manager.py, shared/executioner/config.json
 
 KVM acceleration
   When kvm=True in MachineConfig, QEMU is launched with -enable-kvm and
   -cpu host. This lets the guest CPU run at near the speed of the physical CPU.
   When kvm=False (e.g. ARM emulation on x86, or no /dev/kvm), QEMU fully
   emulates all CPU instructions in software.
-  Source: client/api/qemu_arg_builder.py
+  Source: shared/api/qemu_arg_builder.py
 
 Hypervisor
   A piece of software that creates and manages virtual machines. QEMU is a
@@ -46,7 +46,7 @@ Hypervisor bit / -hypervisor CPUID flag
   Programs inside the VM can read this flag to detect they are virtualised.
   When hardened=True, qemu-api passes kvm=off and -vmx to QEMU which hides
   this flag from the guest, making the VM harder to detect.
-  Source: client/api/qemu_arg_builder.py → _harden()
+  Source: shared/api/qemu_arg_builder.py → _harden()
 
 CPUID
   A CPU instruction that returns information about the processor — model,
@@ -79,7 +79,7 @@ qcow2
   - Encryption
   Stored as a single file: ~/.qemu_vms/<name>/disk0.qcow2
   Alternative: raw (faster random IO, no thin provisioning, no snapshots).
-  Source: client/api/qemu_config.py → DiskConfig
+  Source: shared/api/qemu_config.py → DiskConfig
 
 raw (disk format)
   A flat binary disk image. No metadata, no compression, no snapshots. Faster
@@ -93,14 +93,14 @@ OVMF
     ovmf      → OVMF_CODE_4M.fd       standard UEFI, no Secure Boot
     ovmf_ms   → OVMF_CODE_4M.ms.fd   Secure Boot with Microsoft keys
   The _4M suffix indicates a 4 MB flash chip (modern systems).
-  Source: client/api/qemu_config.py → OVMF dict, detect_ovmf()
+  Source: shared/api/qemu_config.py → OVMF dict, detect_ovmf()
 
 OVMF_VARS.fd
   Per-VM writable UEFI variable store. Copied from the system template on VM
   creation and stored in ~/.qemu_vms/<name>/OVMF_VARS.fd. Stores boot order,
   Secure Boot keys, and other UEFI settings independently per VM. If this file
   is missing, the VM will crash immediately at launch.
-  Source: client/api/qemu_manager.py → create_vm()
+  Source: shared/api/qemu_manager.py → create_vm()
 
 UEFI
   Unified Extensible Firmware Interface. Modern replacement for BIOS. Required
@@ -130,7 +130,7 @@ TPM / TPM 2.0
   certificates, and measurements. Required for Windows 11 BitLocker and
   attestation. In QEMU, emulated by swtpm (software TPM).
   Enable with tpm=True in MachineConfig.
-  Source: client/api/qemu_manager.py → _start_tpm()
+  Source: shared/api/qemu_manager.py → _start_tpm()
 
 swtpm
   Software TPM. A Linux daemon that emulates a TPM 2.0 chip over a Unix socket.
@@ -145,7 +145,7 @@ q35 machine type
   - IOMMU support
   Used when hardened=True or when Windows is detected. The other common type
   is pc (i440FX), which is older but more compatible.
-  Source: client/api/qemu_config.py → MachineConfig
+  Source: shared/api/qemu_config.py → MachineConfig
 
 virt machine type
   A generic virtual machine type for ARM (AArch64). Used automatically when
@@ -163,7 +163,7 @@ RTC / RTC clock
   off. QEMU emulates an RTC. Setting rtc_clock='utc' with driftfix='slew'
   in MachineConfig prevents an "invalid datetime format" crash that occurs
   with the default 'localtime' setting on some host configurations.
-  Source: client/api/qemu_manager.py → launch_vm()
+  Source: shared/api/qemu_manager.py → launch_vm()
 
 ACPI
   Advanced Configuration and Power Interface. A specification for hardware
@@ -171,7 +171,7 @@ ACPI
   describe the virtual hardware to the guest OS. The ACPI OEM ID field normally
   reads "BOCHS" or "BXPC" in QEMU — stealth mode changes this to the
   manufacturer name (e.g. "Dell I") to reduce fingerprinting.
-  Source: client/api/qemu_arg_builder.py → _apply_stealth()
+  Source: shared/api/qemu_arg_builder.py → _apply_stealth()
 
 SMBIOS
   System Management BIOS. A standard for how firmware (BIOS/UEFI) describes
@@ -179,7 +179,7 @@ SMBIOS
   inxi, dmidecode, and Windows System Information. QEMU exposes a full set of
   SMBIOS tables. This project sets SMBIOS fields (manufacturer, product_name,
   serial_number, bios_vendor, etc.) to make the VM appear as real hardware.
-  Source: client/api/qemu_arg_builder.py → _build_smbios()
+  Source: shared/api/qemu_arg_builder.py → _build_smbios()
 
 SMBIOS type 0
   BIOS information: vendor, version, release date.
@@ -211,7 +211,7 @@ smbios_chassis.bin
   passed to QEMU via -smbios file=. Because Linux reads the last type-3 entry
   it finds in memory, this file's entry overrides the default one that QEMU
   generates. This is the only way to set the chassis type byte from QEMU's CLI.
-  Source: client/api/qemu_manager.py → _write_smbios_chassis_bin()
+  Source: shared/api/qemu_manager.py → _write_smbios_chassis_bin()
 
 inxi
   A system information tool. Used inside the guest to verify that the SMBIOS
@@ -234,48 +234,43 @@ dmidecode
 B. PROJECT ARCHITECTURE TERMS
 ────────────────────────────────────────────────────────────────────────────────
 
-provider
-  The AI machine side. The machine where the user types. Runs Ollama,
-  the chat loop, the sanitizer, and the preflight validator (stateless).
-  Source files: files/provider/
+server
+  The machine that runs everything: Ollama (AI), QEMU, the API server, the tool
+  executor, sanitizer, and preflight. The user never needs to log into this
+  machine — it exposes a single /chat HTTP endpoint.
+  Source files: files/server/  +  files/shared/
 
 client
-  The QEMU machine side. The machine where VMs actually run. Runs the
-  QemuManager, the tool executor, the FastAPI API server, and the preflight
-  validator (full/stateful).
+  The thin UI on the user's laptop. Sends messages to the server's /chat endpoint
+  and renders responses locally. No QEMU or Ollama required.
   Source files: files/client/
 
 shared
-  Code used by both provider and client. Contains the sanitizer and the
-  preflight validator. Shared does not mean "neither" — it means "both sides
-  import from here."
+  Code used by the server at runtime. Contains the QEMU engine (api/), tool
+  executor (executioner/), sanitizer, preflight, and display helpers.
   Source files: files/shared/
 
 the seam
-  Informal name for provider/executor_client.py. The single point where the
-  provider decides whether to dispatch a tool call locally (direct function
-  call) or remotely (HTTP POST). Nothing above the seam knows whether execution
-  is local or remote. Nothing below it knows about Ollama or the chat loop.
+  Informal name for server/executor_client.py. Re-exports execute_tool from
+  shared/executioner/tool_executor. On the server the call is always local —
+  QEMU and AI are co-located. The variable API_URL exists for backward compat.
 
 local mode
-  API_URL="local". The provider and client run in the same Python process on
-  the same machine. execute_tool() is called directly — no HTTP, no network.
+  Server and client running on the same machine for development. The /chat
+  endpoint is still used; it just points to localhost.
 
 remote mode
-  API_URL="http://host:port" (or https://). The provider sends HTTP POST
-  requests to the client machine's FastAPI server. Everything above the seam
-  is on the AI machine; everything below it is on the QEMU machine.
+  Client (laptop) connects to the server over the network via /chat HTTP.
+  VMs run on the server; the client is a thin REPL.
 
 split / folder split
-  The architectural decision to separate all code into provider/, client/,
-  and shared/. There are no backward-compatibility shims — all imports use
-  canonical paths. This is "baked in" — the split exists even in local mode.
+  The architectural decision to separate code into server/, client/, and shared/.
+  There are no backward-compatibility shims — all imports use canonical paths.
 
 stateless_only
-  A flag passed to _preflight_check(). When True (provider side in remote mode),
-  the validator skips checks that require real VM state (VM existence, disk size,
-  QEMU binary). When False (local mode, or client side in remote mode), all
-  checks run including real state.
+  A flag passed to _preflight_check(). When True, the validator skips checks
+  that require real VM state. Currently always False on the server (server has
+  all state available). Reserved for future edge cases.
   Source: shared/preflight/validator.py
 
 preflight
@@ -328,7 +323,7 @@ vnc_bind_local
   Boolean. When True, QEMU is launched with -vnc 127.0.0.1:{display}
   instead of -vnc :{display}. This means the VNC port only accepts connections
   from localhost — not from the network. An SSH tunnel is required to connect.
-  Source: client/api/qemu_arg_builder.py
+  Source: shared/api/qemu_arg_builder.py
 
 SSH tunnel
   A method of forwarding a local port through an encrypted SSH connection.
@@ -361,7 +356,7 @@ WSL2 IP
 
 TLS (Transport Layer Security)
   Encryption for network connections (the "S" in HTTPS). The API server supports
-  TLS via --cert and --key flags on the serve command. The provider side uses
+  TLS via --cert and --key flags on the serve command. The client side uses
   API_CA_CERT for custom CA certs (self-signed) or the system CA bundle
   (Let's Encrypt). API_VERIFY_SSL=0 disables verification (dev only).
 
@@ -369,12 +364,12 @@ self-signed certificate
   A TLS certificate signed by itself rather than a trusted CA. Generated with:
     openssl req -x509 -newkey rsa:4096 -nodes -keyout server.key -out server.crt
   Browsers and tools will reject it unless you explicitly trust it.
-  The provider uses API_CA_CERT=/path/to/server.crt to trust it.
+  The client uses API_CA_CERT=/path/to/server.crt to trust it.
 
 Let's Encrypt
   A free, automated CA that issues publicly trusted TLS certificates for domain
   names. Used when the client machine has a domain name pointing at its public IP.
-  Certs don't need to be copied to the provider machine — they are trusted by
+  Certs don't need to be copied to the client machine — they are trusted by
   default because Let's Encrypt is in all major CA bundles.
 
 dynamic DNS
@@ -391,12 +386,12 @@ tool call
   returns after reading a user prompt. The AI selects which tool to call and
   what arguments to pass. Example:
     {"tool_name": "create_vm", "args": {"name": "dev-box", "memory_mb": 4096}}
-  Source: provider/ai/ollama_client.py
+  Source: server/ai/ollama_client.py
 
 TOOLS list
   A list of tool definitions (name, description, parameter schema) passed to
   Ollama in each API call. Tells the model what actions are available and what
-  arguments each action expects. Defined in provider/ai/tools.py.
+  arguments each action expects. Defined in server/ai/tools.py.
 
 tool definition
   One entry in the TOOLS list. Includes: name, description, parameters
@@ -449,7 +444,7 @@ execute_tool(tool_name, args, verbose, skip_gate)
   The main dispatch function in tool_executor.py. Sanitises args, runs the
   context gate, resolves VM names, and dispatches to QemuManager or the
   config layer. Also manages _last_revert_action.
-  Source: client/executioner/tool_executor.py
+  Source: shared/executioner/tool_executor.py
 
 gate_check(tool_name, args)
   Checks whether required context arguments are present for the given tool.
@@ -463,7 +458,7 @@ context assistant
   the conversation context (what the user said, what VMs exist, what was
   recently done). Separate from preflight — focuses on semantic consistency
   rather than state validity.
-  Source: provider/ai/context_assistant.py
+  Source: server/ai/context_assistant.py
 
 revert action / _last_revert_action
   After each reversible tool call, execute_tool saves a "revert recipe" —
@@ -471,13 +466,13 @@ revert action / _last_revert_action
   says "undo" or "revert", the AI calls the revert tool which executes this
   recipe. Only one level of undo is supported. Cleared by any unrelated
   tool call.
-  Source: client/executioner/tool_executor.py → _set_revert(), _clear_revert()
+  Source: shared/executioner/tool_executor.py → _set_revert(), _clear_revert()
 
 _REVERT_AWARE_TOOLS
   The set of tools that manage _last_revert_action themselves (setting it on
   success or clearing it explicitly). These are excluded from the blanket
   clear that happens before unrelated tool calls.
-  Source: client/executioner/tool_executor.py
+  Source: shared/executioner/tool_executor.py
 
 dry_run
   When dry_run=True is passed to launch_vm, the QEMU command is built and
@@ -512,7 +507,7 @@ MachineConfig
   machine_type, machine_arch, stealth, hardened, tpm, kvm, battery, hugepages,
   networks, disks, manufacturer, product_name, serial_number, bios_vendor,
   bios_version, smbios_type, extra_args, etc. Serialised to JSON in config.json.
-  Source: client/api/qemu_config.py
+  Source: shared/api/qemu_config.py
 
 DiskConfig
   Dataclass for a VM disk: path (qcow2 file location), size_gb, format
@@ -528,19 +523,19 @@ hardware profile
   dell_g15_5520, gaming_desktop, office_laptop, server, mac_mini, minimal,
   raspberry_pi_4, raspberry_pi_3b. Custom profiles stored in
   ~/.qemu_vms/_profiles/. Applied to a MachineConfig via apply_profile().
-  Source: client/api/qemu_config.py
+  Source: shared/api/qemu_config.py
 
 API_URL
   Environment variable. The URL of the client machine's API server.
   "local" means direct function call (default).
   "http://host:port" or "https://host:port" means remote mode.
-  Source: provider/executor_client.py
+  Source: server/executor_client.py
 
 API_TOKEN
   Environment variable. The shared secret for API authentication. Must match
-  on both the provider machine and the client machine's server. Also readable
+  on both the server machine and the client machine. Also readable
   from ~/.qemu-api.token file (the file is a fallback; env var takes precedence).
-  Source: provider/executor_client.py, client/server/api_server.py
+  Source: server/executor_client.py, server/http/api_server.py
 
 API_TIMEOUT
   Environment variable. HTTP request timeout in seconds. Default: 120.
@@ -562,7 +557,7 @@ OLLAMA_URL
   "http://localhost:11434". Only change if Ollama is running on another machine.
 
 allowed_remote_tools
-  A list in client/executioner/config.json. Controls which tool names the
+  A list in shared/executioner/config.json. Controls which tool names the
   HTTP API accepts. If a tool_name is not in this list, the server returns
   HTTP 403 before running preflight. Example of what is excluded by default:
   send_monitor_cmd (raw QEMU monitor access).
@@ -650,7 +645,7 @@ QMP (QEMU Machine Protocol)
   A JSON-based protocol for communicating with a running QEMU process over a
   Unix socket. Used to: set VNC passwords, expire passwords, send signals,
   query status, take snapshots. Accessed via qmp.sock.
-  Source: client/api/qmp_client.py
+  Source: shared/api/qmp_client.py
 
 QMP socket (qmp.sock)
   Unix socket created by QEMU at ~/.qemu_vms/<name>/qmp.sock. The project
@@ -722,7 +717,7 @@ OUI prefix (MAC address)
   identify the manufacturer. QEMU's default MAC range starts with 52:54:00
   (QEMU/KVM OUI). This is a well-known VM fingerprint. Setting a real OUI
   (e.g. F0:1F:AF for Dell, A4:C3:F0 for Apple) reduces detectability.
-  Source: client/api/qemu_config.py → NetworkConfig
+  Source: shared/api/qemu_config.py → NetworkConfig
 
 e1000e
   Intel 82574L Gigabit NIC emulation. A common, real-world NIC. Much less
@@ -738,7 +733,7 @@ fingerprint_vm (-tf flag)
   A read-only analysis tool that simulates what inxi would report from inside
   the guest and rates each field as clean/detectable/VM tell. Shows a score
   and recommendations. Never modifies the VM config.
-  Source: provider/ai/fingerprint.py → _tf_report()
+  Source: server/ai/fingerprint.py → _tf_report()
 
 VM tell
   A configuration value that immediately identifies the machine as a virtual
@@ -766,7 +761,7 @@ H. API AND HTTP TERMS
 
 FastAPI
   A Python web framework for building APIs. Used for the client machine's HTTP
-  server (client/server/api_server.py). Known for automatic OpenAPI docs,
+  server (server/http/api_server.py). Known for automatic OpenAPI docs,
   Pydantic validation, and high performance via async.
 
 uvicorn
@@ -787,19 +782,19 @@ HTTP Range (Range header)
   sends "Range: bytes=<start>-<end>" and the server returns just that segment
   with status 206 Partial Content. Used by the fetch command to resume
   interrupted disk image downloads.
-  Source: client/server/api_server.py → image_download()
+  Source: server/http/api_server.py → image_download()
 
 X-SHA256 header
   A custom HTTP response header that carries the SHA-256 checksum of the
-  streamed disk image. The provider reads this after download to verify
+  streamed disk image. The client reads this after download to verify
   file integrity without a separate API call.
-  Source: client/server/api_server.py → image_download()
+  Source: server/http/api_server.py → image_download()
 
 liveness monitor
   A background daemon thread in the chat loop that pings GET /health every
   30 seconds when API_URL != "local". Alerts the user with a yellow warning
   if the client machine stops responding.
-  Source: provider/ai/cli.py → chat_loop()
+  Source: server/ai/cli.py → chat_loop()
 
 rotate-token
   POST /rotate-token endpoint. Replaces the in-memory API token and writes
@@ -808,9 +803,9 @@ rotate-token
 
 fetch command
   A CLI/chat command that downloads the primary disk of a named VM from the
-  remote client machine to the provider machine. Checks SHA-256 first to skip
+  remote server machine to the local machine. Checks SHA-256 first to skip
   redundant downloads, uses HTTP Range to resume interrupted ones.
-  Source: provider/ai/cli.py → fetch subcommand
+  Source: server/ai/cli.py → fetch subcommand
 
 TestClient (FastAPI)
   A synchronous HTTP client that talks to a FastAPI app in-process (no real
@@ -825,7 +820,7 @@ Ollama
   A local LLM server. Runs models (like qwen2.5:7b) on your machine. Exposes
   a REST API at http://localhost:11434. This project calls POST /api/chat
   with the TOOLS list and conversation history.
-  Source: provider/ai/ollama_client.py → _call_ollama()
+  Source: server/ai/ollama_client.py → _call_ollama()
 
 qwen2.5:7b
   The recommended Ollama model for this project. 7 billion parameter model
@@ -844,28 +839,28 @@ system prompt
   - Available tools and their descriptions
   - Whether custom mode (-cu) is active
   - The TOOLS JSON schema
-  Source: provider/ai/ollama_client.py → _build_system_prompt()
+  Source: server/ai/ollama_client.py → _build_system_prompt()
 
 chat_loop
   The main interactive loop. Reads user input, sends to Ollama, receives tool
   calls, sanitises, preflights, executes, displays results, repeats.
   Built-in shortcuts bypass Ollama entirely (list, profiles, system, exit).
-  Source: provider/ai/cli.py → chat_loop()
+  Source: server/ai/cli.py → chat_loop()
 
 cli_direct
   The non-interactive CLI mode. Handles subcommands like qemu-api list,
   qemu-api launch <name>, etc. No AI involved.
-  Source: provider/ai/cli.py → cli_direct()
+  Source: server/ai/cli.py → cli_direct()
 
 session
   The AI conversation history. Loaded from ~/.qemu_vms/.session.json at
   startup and saved after each exchange. Limited to the last 40 messages to
   keep the context manageable. Auto-cleared if drift is detected (the VMs
   the AI thinks exist no longer match reality).
-  Source: provider/ai/session.py
+  Source: server/ai/session.py
 
 auto_clear_session
-  Setting in provider/ai/config.json. When True, the session is automatically
+  Setting in server/ai/config.json. When True, the session is automatically
   cleared when drift is detected between the AI's remembered VM list and
   the actual VM list.
 
@@ -873,12 +868,12 @@ drift detection
   Comparing the VMs the AI remembers (from session history) against the actual
   VM list from manager.list_vms(). If they differ significantly, the session
   may be auto-cleared to prevent the AI from acting on stale state.
-  Source: provider/ai/session.py → detect_drift()
+  Source: server/ai/session.py → detect_drift()
 
 _LOOP_MAX
   Maximum number of AI tool call iterations per user prompt. Prevents infinite
   loops if the AI keeps calling tools in a chain. Configurable in
-  provider/ai/config.json (tool_loop_max or tool_loop_max_override).
+  server/ai/config.json (tool_loop_max or tool_loop_max_override).
 
 ────────────────────────────────────────────────────────────────────────────────
 J. TEST SUITE TERMS
@@ -941,9 +936,9 @@ setup_provider.sh
   and Python packages (no QEMU). Writes a labelled block to shell rc.
 
 setup_client.sh
-  Client-only setup. Run on the QEMU machine. Detects native Linux vs WSL2.
-  Installs QEMU, KVM check, Python venv, token generation, systemd service.
-  Prints the SSH tunnel command and export commands for the provider machine.
+  Thin-client setup. Run on the user's laptop. Installs only Python venv +
+  requests + rich. Prompts for SERVER_URL and API_TOKEN. Writes
+  client/connection_config.json and adds the qemu-api alias.
 
 setup_wsl2.ps1
   Windows PowerShell script. Run as Admin after setup_client.sh when the
@@ -962,9 +957,9 @@ loginctl enable-linger
 
 PYTHONPATH
   Environment variable that adds directories to Python's module search path.
-  Required when running scripts from files/provider/ because Python adds the
-  script's directory (files/provider/) to sys.path, not its parent (files/).
-  Setting PYTHONPATH=files/ makes "from provider.ai.cli import ..." work.
+  Required when running scripts from files/server/ because Python adds the
+  script's directory (files/server/) to sys.path, not its parent (files/).
+  Setting PYTHONPATH=files/ makes "from server.ai.cli import ..." work.
   Source: ~/.zshrc alias, setup scripts
 
 venv (virtual environment)

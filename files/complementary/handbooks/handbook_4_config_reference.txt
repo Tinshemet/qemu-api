@@ -12,79 +12,90 @@ default value. Where env vars override config keys, that is documented too.
 All env vars are read at import time (module level). They override the
 corresponding config.json values.
 
-API_URL
-  Default:  "local"  (from client/executioner/config.json → executor.url)
-  Values:   "local" | "http://host:port" | "https://host:port"
-  Effect:   "local" → direct in-process call to tool_executor
-            URL    → HTTP POST to client machine's API server
-  Read by:  provider/executor_client.py
+SERVER_URL
+  Default:  "http://localhost:8080"  (from client/connection_config.json)
+  Values:   "http://host:port" | "https://host:port"
+  Effect:   URL of the qemu-api server for the chat client to connect to.
+  Read by:  client/ui/chat_client.py
 
 API_TOKEN
-  Default:  "" (from client/executioner/config.json → executor.token)
+  Default:  "" (from connection_config.json on each side)
   Values:   Any string (recommended: 32+ random chars)
-  Effect:   Shared secret for Bearer authentication between provider and client.
-            Provider: sent in Authorization header.
-            Client server: compared against incoming tokens.
-  Read by:  provider/executor_client.py, client/server/api_server.py
-  Also read from: ~/.qemu-api.token (file fallback, lower priority than env var)
+  Effect:   Shared secret for Bearer authentication.
+            Client chat_client: sent in Authorization header.
+            Server api_server: compared against incoming tokens.
+  Read by:  client/ui/chat_client.py, server/http/api_server.py
+  Also read from (server side): ~/.qemu-api.token (file fallback)
 
 API_TIMEOUT
-  Default:  120 (from client/executioner/config.json → executor.timeout)
+  Default:  120 (from connection_config.json)
   Values:   Integer (seconds)
-  Effect:   HTTP request timeout for execute_tool remote calls
-  Read by:  provider/executor_client.py
+  Effect:   HTTP request timeout for /chat and /execute calls.
+  Read by:  client/ui/chat_client.py, server/executor_client.py
 
 API_CA_CERT
   Default:  None
   Values:   Absolute path to a PEM-format CA certificate file
-  Effect:   When set, the provider uses this CA to verify the server's TLS cert.
+  Effect:   When set, the client uses this CA to verify the server's TLS cert.
             Used for self-signed certificates.
             When unset, system CA bundle is used (correct for Let's Encrypt).
-  Read by:  provider/executor_client.py
+  Read by:  client/ui/chat_client.py
 
 API_VERIFY_SSL
   Default:  "1" (verify enabled)
   Values:   "1" (verify) | "0" (skip verification)
   Effect:   "0" disables TLS certificate verification entirely.
             NEVER use in production — only for local development.
-  Read by:  provider/executor_client.py
+  Read by:  client/ui/chat_client.py
 
 OLLAMA_MODEL
-  Default:  "qwen2.5:7b" (from provider/ai/config.json → ollama_model)
+  Default:  "qwen2.5:7b" (from server/ai/config.json → ollama_model)
   Values:   Any Ollama model name ("llama3.1:8b", "mistral", etc.)
   Effect:   Which model is used for all AI calls.
-  Read by:  provider/ai/ollama_client.py
+  Read by:  server/ai/ollama_client.py
 
 OLLAMA_URL
-  Default:  "http://localhost:11434" (from provider/ai/config.json → ollama_url)
+  Default:  "http://localhost:11434" (from server/ai/config.json → ollama_url)
   Values:   Any URL where Ollama is reachable
-  Effect:   Where the Ollama API server is at.
-            Only change if Ollama runs on a different machine.
-  Read by:  provider/ai/ollama_client.py
+  Effect:   Where the Ollama API server is at (always server-local).
+  Read by:  server/ai/ollama_client.py
 
 ────────────────────────────────────────────────────────────────────────────────
-2. client/executioner/config.json
+2. client/connection_config.json  (read by client/ui/chat_client.py)
 ────────────────────────────────────────────────────────────────────────────────
 
-Owned by the client machine. Read by both executor_client.py (provider side,
-to get defaults) and tool_executor.py (client side, for execution config).
+{
+  "server_url": "http://localhost:8080",
+    # URL of the qemu-api server. Override with SERVER_URL env var.
+
+  "token": "",
+    # API token. Leave empty and use API_TOKEN env var.
+
+  "ca_cert": null,
+    # Path to a CA cert PEM file for self-signed HTTPS servers.
+    # null → use system CA bundle (correct for Let's Encrypt).
+
+  "verify_ssl": true,
+    # Set false only for development with self-signed certs without ca_cert.
+
+  "timeout": 120
+    # HTTP request timeout in seconds.
+}
+
+────────────────────────────────────────────────────────────────────────────────
+3. shared/executioner/config.json  (read by shared/executioner/tool_executor.py)
+────────────────────────────────────────────────────────────────────────────────
 
 {
   "executor": {
     "url": "local",
-      # Default API_URL. "local" means same-machine. Override with env var.
-      # Change to "http://192.168.1.10:8080" to default to remote mode.
-
-    "token": "",
-      # Default API_TOKEN. Leave empty and use env var or ~/.qemu-api.token.
-      # Storing a token in a config file is acceptable for local-only use,
-      # but the env var / token file is preferred.
+      # Always "local" on the server — QEMU and AI are co-located.
 
     "port": 8080,
-      # Port the 'serve' command listens on. Also used by setup scripts.
+      # Port the API server listens on. Used by setup scripts.
 
     "timeout": 120,
-      # HTTP request timeout in seconds for remote mode calls.
+      # Timeout for tool execution operations.
 
     "allowed_remote_tools": [
       "create_vm", "launch_vm", "stop_vm", "list_vms", "vm_status",
@@ -123,7 +134,7 @@ to get defaults) and tool_executor.py (client side, for execution config).
 }
 
 ────────────────────────────────────────────────────────────────────────────────
-3. provider/ai/config.json
+3. server/ai/config.json
 ────────────────────────────────────────────────────────────────────────────────
 
 Owned by the provider machine (AI side). Read by cli.py and ollama_client.py.
@@ -173,7 +184,7 @@ Owned by the provider machine (AI side). Read by cli.py and ollama_client.py.
 }
 
 ────────────────────────────────────────────────────────────────────────────────
-4. provider/ai/context_assistant_config.json
+4. server/ai/context_assistant_config.json
 ────────────────────────────────────────────────────────────────────────────────
 
 Message templates and rules for the context assistant.
@@ -271,7 +282,7 @@ returns the question and options as a clarify response.
 }
 
 ────────────────────────────────────────────────────────────────────────────────
-8. client/api/config.json
+8. shared/api/config.json
 ────────────────────────────────────────────────────────────────────────────────
 
 {
@@ -353,8 +364,8 @@ and what it controls in the QEMU command.
 10. HARDWARE PROFILES (built-in defaults)
 ────────────────────────────────────────────────────────────────────────────────
 
-Profiles are stored in client/api/qemu_config.py (built-in) and
-~/.qemu_vms/_profiles/*.json (custom).
+Profiles are stored in shared/api/qemu_config.py (built-in) and
+~/.qemu_vms/_profiles/*.json (custom, on the server machine).
 
 dell_g15_5520
   manufacturer:   "Dell Inc."

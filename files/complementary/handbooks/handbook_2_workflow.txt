@@ -14,24 +14,24 @@ When you run "qemu-api" the following happens in order:
 
   1. Shell expands the alias:
        OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=~/Desktop/qemu-api/files
-       python3 ~/Desktop/qemu-api/files/provider/ollama_wrapper.py
+       python3 ~/Desktop/qemu-api/files/server/ollama_wrapper.py
 
-  2. Python executes provider/ollama_wrapper.py.
-     This file re-exports symbols from provider/ and shared/ so they are
+  2. Python executes server/ollama_wrapper.py.
+     This file re-exports symbols from server/ and shared/ so they are
      importable by any top-level script. Then it calls cli_direct() or
-     chat_loop() from provider/ai/cli.py depending on command-line arguments.
+     chat_loop() from server/ai/cli.py depending on command-line arguments.
 
   3. cli.py initialises:
-     - Loads config from provider/ai/config.json
+     - Loads config from server/ai/config.json
        (Ollama URL, loop limits, exit commands, shortcuts)
-     - Reads API_URL from provider/executor_client.py
-       (which reads from client/executioner/config.json, overridden by env var)
+     - Reads API_URL from server/executor_client.py
+       (which reads from shared/executioner/config.json, overridden by env var)
      - Loads the AI session from ~/.qemu_vms/.session.json (if it exists)
      - Detects drift between session history and real VM list
        (if drift detected and auto_clear=True: session is cleared)
      - Checks if Ollama is reachable (GET http://localhost:11434)
      - If API_URL != "local": starts the liveness monitor background thread
-     - Prints the banner to the terminal (via provider/ai/display.py)
+     - Prints the banner to the terminal (via server/ai/display.py)
      - Enters the chat loop
 
   4. In remote mode, the liveness monitor thread starts:
@@ -46,14 +46,14 @@ When you run "qemu-api" the following happens in order:
 This traces a single user prompt all the way through to the QEMU command.
 Example: User types "create a linux vm called dev-box with 4gb ram"
 
-STEP 1 — INPUT CAPTURE  [provider/ai/cli.py]
+STEP 1 — INPUT CAPTURE  [server/ai/cli.py]
   - chat_loop() reads input from stdin
   - Checks if the input is a built-in shortcut (list, profiles, system, exit)
     → if yes: executes locally, no AI involved
   - Appends the user message to the session history
   - Saves the session to disk
 
-STEP 2 — OLLAMA CALL  [provider/ai/ollama_client.py → _call_ollama()]
+STEP 2 — OLLAMA CALL  [server/ai/ollama_client.py → _call_ollama()]
   - Builds the system prompt:
       - Current VM list (from manager.list_vms())
       - Whether -cu mode is active
@@ -69,7 +69,7 @@ STEP 2 — OLLAMA CALL  [provider/ai/ollama_client.py → _call_ollama()]
       - If tool_calls present: extracts tool_name and args
       - If no tool_calls: it is a plain text response (shown to user, no execution)
 
-STEP 3 — CONTEXT ASSISTANT CHECK  [provider/ai/context_assistant.py]
+STEP 3 — CONTEXT ASSISTANT CHECK  [server/ai/context_assistant.py]
   - check_context(tool_name, args, session_messages) is called
   - Checks for semantic inconsistencies:
       - Does the AI's plan match what the user said?
@@ -127,7 +127,7 @@ STEP 5 — CONTEXT GATE CHECK  [shared/sanitizer/context_gate.py → gate_check(
   This is returned to the AI as a clarification request. The AI asks the user,
   gets the name, and retries the tool call.
 
-STEP 6 — VM NAME RESOLUTION  [client/executioner/tool_executor.py]
+STEP 6 — VM NAME RESOLUTION  [shared/executioner/tool_executor.py]
   For tools that take an existing VM name (launch_vm, stop_vm, etc.):
   - manager.list_vms() is called to get the current VM list
   - _resolve_vm_name(vms, name) fuzzy-matches the input:
@@ -160,7 +160,7 @@ STEP 7 — PREFLIGHT CHECK  [shared/preflight/validator.py → _preflight_check(
     {"action": "ask_user", "question": "...", "options": [...]}
     {"action": "abort", "reason": "..."}
 
-STEP 8 — PREFLIGHT RESPONSE HANDLING  [provider/ai/cli.py / client/server/api_server.py]
+STEP 8 — PREFLIGHT RESPONSE HANDLING  [server/ai/cli.py / server/http/api_server.py]
   Depending on the action:
     ok       → proceed immediately to execution (step 9)
     auto_fix → replace args with fixed_args, proceed (shows yellow note)
@@ -168,9 +168,9 @@ STEP 8 — PREFLIGHT RESPONSE HANDLING  [provider/ai/cli.py / client/server/api_
                wait for answer, re-call the tool with updated args
     abort    → show error panel, feed error back to AI (AI may rephrase)
 
-STEP 9 — DISPATCH: LOCAL OR REMOTE?  [provider/executor_client.py → execute_tool()]
+STEP 9 — DISPATCH: LOCAL OR REMOTE?  [server/executor_client.py → execute_tool()]
   if API_URL == "local":
-    → call client/executioner/tool_executor.execute_tool() directly
+    → call shared/executioner/tool_executor.execute_tool() directly
     → same Python process, no network
   else:
     → POST {API_URL}/execute  with JSON body:
@@ -181,7 +181,7 @@ STEP 9 — DISPATCH: LOCAL OR REMOTE?  [provider/executor_client.py → execute_
     → on 401: print token mismatch error, sys.exit(1)
     → on non-OK: return {"success": False, "error": "..."}
 
-STEP 10 — SERVER-SIDE (remote mode only)  [client/server/api_server.py → /execute]
+STEP 10 — SERVER-SIDE (remote mode only)  [server/http/api_server.py → /execute]
   The FastAPI server receives the request and:
   1. Extracts Bearer token from Authorization header
   2. Compares with _TOKEN (loaded from env or ~/.qemu-api.token)
@@ -196,7 +196,7 @@ STEP 10 — SERVER-SIDE (remote mode only)  [client/server/api_server.py → /ex
      → if auto_fix: applies fixed_args
   6. Calls execute_tool(tool_name, args, verbose) from tool_executor.py
 
-STEP 11 — TOOL DISPATCH  [client/executioner/tool_executor.py → execute_tool()]
+STEP 11 — TOOL DISPATCH  [shared/executioner/tool_executor.py → execute_tool()]
   The main dispatch switch handles all tool names:
   - For create_vm: builds MachineConfig, validates, calls manager.create_vm()
   - For launch_vm: calls manager.launch_vm()
@@ -206,7 +206,7 @@ STEP 11 — TOOL DISPATCH  [client/executioner/tool_executor.py → execute_tool
   - Manages _last_revert_action (set on success of reversible operations)
   - Calls Rich display functions (unless verbose=True)
 
-STEP 12 — QEMU MANAGER  [client/api/qemu_manager.py → QemuManager]
+STEP 12 — QEMU MANAGER  [shared/api/qemu_manager.py → QemuManager]
   The actual VM operations happen here. For launch_vm:
   1. Load config.json from vm_dir
   2. Build QEMU command via qemu_arg_builder.py
@@ -220,7 +220,7 @@ STEP 12 — QEMU MANAGER  [client/api/qemu_manager.py → QemuManager]
      - Call QMP expire_password with 10-minute timestamp
   9. Return result dict with vnc_port, vnc_password if VNC
 
-STEP 13 — ARG BUILDER  [client/api/qemu_arg_builder.py]
+STEP 13 — ARG BUILDER  [shared/api/qemu_arg_builder.py]
   Builds the full QEMU command-line argument list from MachineConfig:
   - -name, -machine, -cpu, -smp, -m (memory)
   - -drive (disk)
@@ -427,7 +427,7 @@ The sanitizer makes these decisions, in order:
 
   4. CPU model cleaning
      ARM CPU names on x86_64 VMs → replaced with "host"
-     ARM_CPU_PREFIXES loaded from client/executioner/config.json
+     ARM_CPU_PREFIXES loaded from shared/executioner/config.json
 
   5. Enum normalisation
      All string enum fields are lowercased and aliased:
@@ -562,7 +562,7 @@ ON YOUR LAPTOP (once):
     export API_URL="http://localhost:8080"
     export API_TOKEN="<token>"
     export OLLAMA_MODEL="qwen2.5:7b"
-    alias qemu-api='PYTHONPATH=... python3 .../provider/ollama_wrapper.py'
+    alias qemu-api='PYTHONPATH=... python3 .../server/ollama_wrapper.py'
 
 EVERY SESSION:
 

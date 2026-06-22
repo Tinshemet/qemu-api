@@ -28,7 +28,7 @@ _SCORE_GOOD        = _FP.get("score_good", 80)
 _SCORE_WARN        = _FP.get("score_warn", 50)
 
 try:
-    from client.api.qemu_config import MachineConfig
+    from shared.api.qemu_config import MachineConfig
 except ImportError:
     MachineConfig = None  # type: ignore[assignment,misc]
 

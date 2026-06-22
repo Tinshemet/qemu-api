@@ -118,7 +118,8 @@ fi
 header "System Packages"
 
 # Minimal set — no QEMU, no KVM, no bridge tools
-PKGS=(python3-venv python3-pip curl)
+PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+PKGS=(python3-venv "python${PY_VER}-venv" python3-pip curl)
 
 MISSING=()
 for pkg in "${PKGS[@]}"; do
@@ -229,7 +230,7 @@ cat >> "$SHELL_RC" << SHELLEOF
 
 # qemu-api provider start
 source "$VENV_DIR/bin/activate"
-$(printf '%b' "$ENV_BLOCK")alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/provider/ollama_wrapper.py'
+$(printf '%b' "$ENV_BLOCK")alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/server/ollama_wrapper.py'
 # qemu-api provider end
 SHELLEOF
 
@@ -253,13 +254,13 @@ if [[ "$CHOSEN_URL" == "local" ]]; then
     # Local mode: just verify the imports work
     if python3 -c "
 import sys; sys.path.insert(0, '$FILES_DIR')
-from provider.executor_client import execute_tool, API_URL
+from server.executor_client import execute_tool, API_URL
 assert API_URL == 'local', f'Expected local, got {API_URL}'
 print('ok')
 " 2>/dev/null | grep -q ok; then
         ok "Local mode import check passed"
     else
-        warn "Import check had issues — run: python3 -c \"from provider.executor_client import execute_tool\""
+        warn "Import check had issues — run: python3 -c \"from server.executor_client import execute_tool\""
     fi
 else
     # Remote mode: ping the client machine's /health endpoint

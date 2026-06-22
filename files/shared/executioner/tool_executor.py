@@ -18,13 +18,13 @@ _TOOL_DEFS           = _CFG["tool_defaults"]
 _VALID_MACHINE_TYPES = set(_CFG["valid_machine_types"])
 _ARM_CPU_PREFIXES    = tuple(_CFG["arm_cpu_prefixes"])
 
-from client.api.qemu_config import (
+from shared.api.qemu_config import (
     MachineConfig, DiskConfig, NetworkConfig,
     OVMF, apply_profile, check_profile_compatibility,
     check_system_capabilities, delete_custom_profile,
     get_all_profiles, list_profiles, save_custom_profile,
 )
-from client.api.qemu_manager import QemuManager
+from shared.api.qemu_manager import QemuManager
 from shared.sanitizer.sanitizer import (
     PLACEHOLDER_VM_NAMES,
     _resolve_iso, _resolve_vm_name, _sanitise_args,

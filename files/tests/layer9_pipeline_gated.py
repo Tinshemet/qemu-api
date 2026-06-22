@@ -396,8 +396,8 @@ GATED_TESTS = _dedup(GATED_TESTS)
 
 def cleanup_gated_artifacts():
     import shutil, os
-    from client.executioner.tool_executor import execute_tool as _et
-    from client.api.qemu_config import get_all_profiles, delete_custom_profile
+    from shared.executioner.tool_executor import execute_tool as _et
+    from shared.api.qemu_config import get_all_profiles, delete_custom_profile
 
     vm_dir = os.path.expanduser("~/.qemu_vms")
     if os.path.isdir(vm_dir):

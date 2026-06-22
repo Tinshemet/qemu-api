@@ -196,7 +196,7 @@
         "type": "function",
         "function": {
             "name": "stop_vm",
-            "description": "Stop or shut down a running VM. Use name='all' to stop all VMs. Call this when the user says stop, shut down, halt, or kill a VM. This does not delete anything — the VM can be relaunched afterwards.",
+            "description": "Stop or shut down a running VM. Use name='all' to stop all VMs. Call this when the user says stop, shut down, halt, kill, or force-stop a VM. Set force=true when the user says 'kill', 'force stop', 'hard stop', or 'SIGKILL'. This does not delete anything — the VM can be relaunched afterwards.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -422,7 +422,7 @@
         "type": "function",
         "function": {
             "name": "delete_vm",
-            "description": "Delete and remove an entire VM configuration and its disk files. Call this when the user says delete, remove, or destroy a whole VM. Do NOT use this to delete a snapshot — use snapshot_delete for that.",
+            "description": "Permanently delete a VM configuration and its disk files. Use ONLY when the user says delete, remove, destroy, or wipe a VM. Do NOT call this for 'kill' — kill means stop_vm(force=True). Do NOT use this to delete a snapshot — use snapshot_delete for that.",
             "parameters": {
                 "type": "object",
                 "properties": {

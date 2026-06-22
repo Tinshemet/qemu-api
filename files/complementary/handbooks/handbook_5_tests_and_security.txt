@@ -424,7 +424,7 @@ GET /health is intentionally unauthenticated:
 2. TOOL ALLOWLIST
 ────────────────────────────────────────────────────────────────────────────────
 
-The allowed_remote_tools list in client/executioner/config.json is a whitelist.
+The allowed_remote_tools list in shared/executioner/config.json is a whitelist.
 Any tool_name NOT in the list gets HTTP 403 before preflight runs.
 
 This is a security boundary: even if an attacker has a valid API token,
@@ -473,7 +473,7 @@ SSH tunnel is the expected VNC access method:
 ────────────────────────────────────────────────────────────────────────────────
 
 The API server supports TLS via --cert and --key flags on the serve command:
-  python3 provider/ollama_wrapper.py serve 0.0.0.0 8443 \
+  python3 server/ollama_wrapper.py serve 0.0.0.0 8443 \
       --cert server.crt --key server.key
 
 When TLS is enabled:

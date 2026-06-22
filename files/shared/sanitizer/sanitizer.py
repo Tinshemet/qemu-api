@@ -13,7 +13,7 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 try:
-    from client.api.qemu_config import get_all_profiles
+    from shared.api.qemu_config import get_all_profiles
 except ImportError:
     def get_all_profiles(): return {}                                         # type: ignore[misc]
 

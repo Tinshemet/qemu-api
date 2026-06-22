@@ -22,7 +22,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 try:
-    from client.api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
+    from shared.api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
 except ImportError:
     OVMF = {"available": False, "code": "", "vars": ""}
     def check_system_capabilities(): return {}                                # type: ignore[misc]
