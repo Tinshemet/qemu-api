@@ -89,6 +89,11 @@ def _dispatch(cmd: str):
 def _render(vms: list, events: list, uptime_s: float, height: int) -> Table:
     uptime = f"{int(uptime_s//3600):02d}:{int((uptime_s%3600)//60):02d}:{int(uptime_s%60):02d}"
 
+    # Budget: 3 header + 4 cmdline + 3 borders + 2 table headers = 12 fixed rows
+    body = max(4, height - 12)
+    max_vms = min(len(vms), max(1, body // 3))
+    max_ev  = max(1, body - max_vms)
+
     # ── VM table ──────────────────────────────────────────────────────────────
     vm_t = Table(show_header=True, header_style="bold cyan",
                  box=rbox.SIMPLE, padding=(0, 1), expand=True)
@@ -97,7 +102,6 @@ def _render(vms: list, events: list, uptime_s: float, height: int) -> Table:
     vm_t.add_column("CPU",  justify="right")
     vm_t.add_column("RAM",  justify="right")
     vm_t.add_column("OS",   style="dim")
-    max_vms = max(2, (height - 18) // 3)
     for v in vms[:max_vms]:
         status = v.get("status", "?")
         dot    = "●" if status == "running" else "○"
@@ -118,7 +122,6 @@ def _render(vms: list, events: list, uptime_s: float, height: int) -> Table:
     ev_t.add_column("Target", style="cyan",        no_wrap=True)
     ev_t.add_column("Result", no_wrap=True)
     ev_t.add_column("ms",     justify="right", style="dim")
-    max_ev = max(2, height - 18 - max_vms)
     for e in events[-max_ev:]:
         ts      = e.get("ts", "")[:19].replace("T", " ")
         outcome = e.get("outcome", "")
@@ -161,7 +164,8 @@ def _run_local():
         threading.Thread(target=_read_keys, daemon=True).start()
 
     try:
-        with Live(console=console, refresh_per_second=2, screen=True) as live:
+        with Live(console=console, refresh_per_second=4, screen=False,
+                  vertical_overflow="crop") as live:
             while not _quit.is_set():
                 try:
                     raw = manager.list_vms()
