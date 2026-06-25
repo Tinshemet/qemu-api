@@ -7,9 +7,17 @@ Shows a live dashboard with:
   - Server stats (uptime, event count)
 
 Usage:
-  qemu-api-admin                  # local (reads events.log directly)
-  qemu-api-admin --remote         # pull events from server via /events API
+  qemu-api-admin
 """
+
+import sys
+import os
+
+# Running this file directly adds files/server/ to sys.path, which makes
+# files/server/http/ shadow the stdlib http module. Remove it.
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here in sys.path:
+    sys.path.remove(_here)
 
 import time
 
