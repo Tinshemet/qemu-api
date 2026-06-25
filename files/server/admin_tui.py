@@ -137,10 +137,17 @@ def _event_table(events: list) -> Table:
 
 def _build_layout(vms: list, events: list, uptime_s: float, term_height: int = 40) -> Layout:
     global _cmd_buf, _cmd_msg
+
+    # fixed rows: header=3, cmdline=3, borders/padding≈4
+    body_height = max(6, term_height - 10)
+    # limit rows in tables to what fits (2 for panel border + 1 header row)
+    max_rows    = max(2, body_height - 3)
+    event_rows  = max(2, max_rows - min(len(vms), max_rows // 3))
+
     layout = Layout()
     layout.split_column(
         Layout(name="header",  size=3),
-        Layout(name="body"),
+        Layout(name="body",    size=body_height),
         Layout(name="cmdline", size=3),
     )
     layout["body"].split_row(
@@ -154,19 +161,14 @@ def _build_layout(vms: list, events: list, uptime_s: float, term_height: int = 4
         f"events [dim]{len(events)}[/dim]   vms [dim]{len(vms)}[/dim]",
         style="bold", border_style="cyan",
     ))
-    # Reserve: 3 header + 3 cmdline + 2 borders + 2 table headers = ~10 rows overhead
-    body_rows  = max(4, term_height - 10)
-    vm_rows    = min(len(vms), body_rows // 2)
-    event_rows = max(4, body_rows - vm_rows - 2)
+    layout["vms"].update(Panel(_vm_table(vms[:max_rows]),              title="[bold]VMs[/bold]",           border_style="dim"))
+    layout["events"].update(Panel(_event_table(events[-event_rows:]),  title="[bold]Recent Events[/bold]", border_style="dim"))
 
-    layout["vms"].update(Panel(_vm_table(vms[:vm_rows]),          title="[bold]VMs[/bold]",           border_style="dim"))
-    layout["events"].update(Panel(_event_table(events[-event_rows:]), title="[bold]Recent Events[/bold]", border_style="dim"))
-
-    prompt = f"[bold cyan]>[/bold cyan] {_cmd_buf}[blink]▌[/blink]"
+    prompt   = f"[bold cyan]>[/bold cyan] {_cmd_buf}[blink]▌[/blink]"
     feedback = f"\n[dim]{_cmd_msg}[/dim]" if _cmd_msg else ""
     layout["cmdline"].update(Panel(
         Text.from_markup(prompt + feedback),
-        title="[dim]command  (stop/launch/list <vm>)   q = quit[/dim]",
+        title="[dim]stop/launch/list <vm>   q=quit[/dim]",
         border_style="dim",
     ))
     return layout
