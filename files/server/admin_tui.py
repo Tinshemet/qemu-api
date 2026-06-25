@@ -4,7 +4,7 @@ admin_tui.py — Real-time server admin CLI (TUI)
 Shows a live dashboard with:
   - VM table (name, status, CPU cores, RAM)
   - Recent event feed (tool calls, outcomes, durations)
-  - Server stats (uptime, event count)
+  - Command input line at the bottom
 
 Usage:
   qemu-api-admin
@@ -19,7 +19,11 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here in sys.path:
     sys.path.remove(_here)
 
+import select
+import termios
+import threading
 import time
+import tty
 
 from rich.console import Console
 from rich.layout import Layout
@@ -30,6 +34,66 @@ from rich.text import Text
 
 _REFRESH = 1  # seconds between updates
 
+
+# ── keyboard input ────────────────────────────────────────────────────────────
+
+_cmd_buf   = ""
+_cmd_msg   = ""   # feedback line after executing a command
+_quit      = threading.Event()
+
+
+def _read_keys():
+    """Background thread: read keypresses without blocking the Live loop."""
+    global _cmd_buf, _cmd_msg
+    fd   = sys.stdin.fileno()
+    old  = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while not _quit.is_set():
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                ch = sys.stdin.read(1)
+                if ch in ("\x03", "\x1b"):   # Ctrl-C or Escape
+                    _quit.set()
+                elif ch == "q" and not _cmd_buf:
+                    _quit.set()
+                elif ch in ("\r", "\n"):
+                    _dispatch(_cmd_buf.strip())
+                    _cmd_buf = ""
+                elif ch == "\x7f":           # backspace
+                    _cmd_buf = _cmd_buf[:-1]
+                else:
+                    _cmd_buf += ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _dispatch(cmd: str):
+    """Execute a typed command."""
+    global _cmd_msg
+    if not cmd:
+        return
+    from shared.executioner.tool_executor import manager
+    parts = cmd.split()
+    verb  = parts[0].lower()
+    name  = parts[1] if len(parts) > 1 else ""
+    try:
+        if verb in ("stop", "kill") and name:
+            r = manager.stop_vm(name, force=(verb == "kill"))
+            _cmd_msg = r.get("message") or r.get("error", "")
+        elif verb in ("start", "launch") and name:
+            r = manager.launch_vm(name)
+            _cmd_msg = r.get("message") or r.get("error", "")
+        elif verb == "list":
+            raw = manager.list_vms()
+            vms = raw if isinstance(raw, list) else raw.get("vms", [])
+            _cmd_msg = "  ".join(v.get("name", "") for v in vms)
+        else:
+            _cmd_msg = f"unknown command: {cmd}  (stop/launch/list <vm>)"
+    except Exception as e:
+        _cmd_msg = str(e)
+
+
+# ── rendering ─────────────────────────────────────────────────────────────────
 
 def _vm_table(vms: list) -> Table:
     t = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
@@ -54,11 +118,11 @@ def _vm_table(vms: list) -> Table:
 
 def _event_table(events: list) -> Table:
     t = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    t.add_column("Time",     style="dim",        no_wrap=True)
-    t.add_column("Tool",     style="bold white",  no_wrap=True)
-    t.add_column("Target",   style="cyan",        no_wrap=True)
-    t.add_column("Outcome",  no_wrap=True)
-    t.add_column("ms",       justify="right", style="dim")
+    t.add_column("Time",    style="dim",       no_wrap=True)
+    t.add_column("Tool",    style="bold white", no_wrap=True)
+    t.add_column("Target",  style="cyan",       no_wrap=True)
+    t.add_column("Outcome", no_wrap=True)
+    t.add_column("ms",      justify="right", style="dim")
     for e in reversed(events[-20:]):
         ts      = e.get("ts", "")[:19].replace("T", " ")
         tool    = e.get("tool", "")
@@ -72,11 +136,12 @@ def _event_table(events: list) -> Table:
 
 
 def _build_layout(vms: list, events: list, uptime_s: float) -> Layout:
+    global _cmd_buf, _cmd_msg
     layout = Layout()
     layout.split_column(
-        Layout(name="header", size=3),
+        Layout(name="header",  size=3),
         Layout(name="body"),
-        Layout(name="footer", size=1),
+        Layout(name="cmdline", size=3),
     )
     layout["body"].split_row(
         Layout(name="vms",    ratio=2),
@@ -89,28 +154,40 @@ def _build_layout(vms: list, events: list, uptime_s: float) -> Layout:
         f"events [dim]{len(events)}[/dim]   vms [dim]{len(vms)}[/dim]",
         style="bold", border_style="cyan",
     ))
-    layout["vms"].update(Panel(_vm_table(vms),    title="[bold]VMs[/bold]",    border_style="dim"))
+    layout["vms"].update(Panel(_vm_table(vms),         title="[bold]VMs[/bold]",           border_style="dim"))
     layout["events"].update(Panel(_event_table(events), title="[bold]Recent Events[/bold]", border_style="dim"))
-    layout["footer"].update(Text("  [q] quit   refreshes every 2s", style="dim", justify="left"))
+
+    prompt = f"[bold cyan]>[/bold cyan] {_cmd_buf}[blink]▌[/blink]"
+    feedback = f"\n[dim]{_cmd_msg}[/dim]" if _cmd_msg else ""
+    layout["cmdline"].update(Panel(
+        Text.from_markup(prompt + feedback),
+        title="[dim]command  (stop/launch/list <vm>)   q = quit[/dim]",
+        border_style="dim",
+    ))
     return layout
 
+
+# ── main ──────────────────────────────────────────────────────────────────────
 
 def _run_local():
     from server.event_log import read_events
     from shared.executioner.tool_executor import manager
 
-    start = time.monotonic()
+    start  = time.monotonic()
     console = Console()
 
-    with Live(console=console, refresh_per_second=1, screen=True) as live:
-        while True:
+    key_thread = threading.Thread(target=_read_keys, daemon=True)
+    key_thread.start()
+
+    with Live(console=console, refresh_per_second=2, screen=True) as live:
+        while not _quit.is_set():
             try:
                 raw = manager.list_vms()
                 vms = raw if isinstance(raw, list) else raw.get("vms", [])
             except Exception:
                 vms = []
-            events  = read_events(limit=200)
-            uptime  = time.monotonic() - start
+            events = read_events(limit=200)
+            uptime = time.monotonic() - start
             live.update(_build_layout(vms, events, uptime))
             time.sleep(_REFRESH)
 
