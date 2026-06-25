@@ -190,8 +190,9 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
 3.1  THE SEAM — server/executor_client.py
 ─────────────────────────────────────────────
   On the server machine the AI and QEMU engine are co-located, so tool
-  execution is always a direct in-process call.  executor_client.py is now
-  a thin re-export of shared.executioner.execute_tool.
+  execution is always a direct in-process call.  executor_client.py is a
+  wrapper around shared.executioner.execute_tool that also enforces
+  client access control (see 3.7).
 
   The server's HTTP /chat endpoint calls process_message() in cli.py, which
   calls execute_tool() from server/executor_client.py, which calls
@@ -323,10 +324,12 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
 
   files/server/connection_config.json  (read by server/executor_client.py):
     {
-      "url":        "local",     ← always "local" — server runs QEMU co-located
-      "token":      "",          ← API token for /execute endpoint
-      "timeout":    120,
-      "verify_ssl": true
+      "url":                    "local",   ← always "local" — server runs QEMU co-located
+      "token":                  "",        ← API token for /execute endpoint
+      "timeout":                120,
+      "verify_ssl":             true,
+      "client_allowed_vms":      [],       ← VMs clients can see/use (empty = all)
+      "client_allowed_profiles": []        ← profiles clients can see/use (empty = all)
     }
 
   files/client/connection_config.json  (read by client/ui/chat_client.py):
@@ -361,7 +364,30 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
     The new token is written atomically to ~/.qemu-api.token and takes effect
     immediately without a server restart.
 
-3.7  API ENDPOINTS (server/http/api_server.py)
+3.7  CLIENT ACCESS CONTROL
+────────────────────────────
+  The server controls which VMs and hardware profiles are visible to clients.
+  This is enforced server-side at two layers so clients cannot bypass it:
+
+  Layer 1 — /sync (startup inventory):
+    When the client connects it calls GET /sync. The server filters the VM
+    and profile lists through client_allowed_vms / client_allowed_profiles
+    before returning them. Hidden resources never appear in the Resources panel.
+
+  Layer 2 — executor_client.py (every tool call):
+    All tool calls — whether from a direct /execute POST or from the AI via
+    /chat — pass through executor_client.execute_tool(). If the tool targets
+    a hidden VM, it returns {"success": false, "error": "VM '...' not found."}
+    The "not found" wording is intentional: it avoids leaking that the VM
+    exists but is restricted (opsec).
+
+  To restrict access, add names to connection_config.json on the server:
+    "client_allowed_vms":      ["test", "kali"]
+    "client_allowed_profiles": ["desktop", "laptop"]
+
+  Restart the server after changing these values.
+
+3.8  API ENDPOINTS (server/http/api_server.py)
 ──────────────────────────────────────────────────
   All endpoints except /health require the Authorization: Bearer <token> header.
 
@@ -412,7 +438,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
     Replaces the in-memory token and persists to ~/.qemu-api.token.
     Auth required.
 
-3.8  TOOL ALLOWLIST
+3.9  TOOL ALLOWLIST
 ─────────────────────
   The allowed_remote_tools list in config.json controls which tools can be
   called via the HTTP API. If a tool is not in the list, the server returns
@@ -429,7 +455,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   Tools not in the list (e.g. send_monitor_cmd for raw QEMU monitor access)
   are blocked at the API boundary. Adjust the list to fit your threat model.
 
-3.9  VNC IN REMOTE MODE
+3.10  VNC IN REMOTE MODE
 ─────────────────────────
   When a VM is created or launched via the remote API, the server
   automatically overrides SDL/GTK display to VNC with local binding:
@@ -458,7 +484,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   If expire_password is not supported by the installed QEMU version,
   the password stays valid until the VM is stopped (graceful degradation).
 
-3.10  LIVENESS MONITOR
+3.11  LIVENESS MONITOR
 ──────────────────────
   When API_URL != "local", the chat loop starts a background daemon thread
   that pings GET /health every 30 seconds.
@@ -472,7 +498,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   The monitor thread is a daemon — it exits automatically when the provider
   process exits.
 
-3.11  FETCH — DOWNLOAD VM DISK
+3.12  FETCH / BUNDLE — DOWNLOAD VM DISK OR FULL VM
 ────────────────────────────────
   fetch <vm_name> [--out /destination/dir]
 
@@ -494,6 +520,20 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   The disk is saved as <vm_name>.qcow2 in the output directory.
   If the VM is running, the image reflects in-flight state — stop the VM
   first for a consistent disk image.
+
+  bundle <vm_name> [dest_dir]
+
+  Downloads the entire VM folder (disk + config.json + OVMF vars) as a
+  .tar.gz archive and extracts it to dest_dir (default: ~/.qemu_vms/).
+  Absolute paths in config.json are rewritten to match the destination machine.
+  Use this to move a VM to a new machine so it's ready to launch immediately.
+
+  Example:
+    qemu-api bundle test
+    qemu-api bundle kali ~/vms/
+
+  After bundling, launch locally with:
+    qemu-api launch <vm_name>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 4 — FLAGS  (-cu  and  -tf)

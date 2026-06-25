@@ -61,7 +61,32 @@ OLLAMA_URL
   Read by:  server/ai/ollama_client.py
 
 ────────────────────────────────────────────────────────────────────────────────
-2. client/connection_config.json  (read by client/ui/chat_client.py)
+2. server/connection_config.json  (read by server/executor_client.py and api_server.py)
+────────────────────────────────────────────────────────────────────────────────
+
+{
+  "url":   "local",
+    # Always "local" — server runs QEMU co-located.
+
+  "token": "",
+    # API token. Match this to API_TOKEN env var or ~/.qemu-api.token.
+
+  "client_allowed_vms": [],
+    # VMs visible and accessible to clients. Empty = all VMs allowed.
+    # Non-empty = allowlist. Hidden VMs return "not found" to clients (opsec).
+
+  "client_allowed_profiles": []
+    # Hardware profiles visible to clients. Empty = all profiles allowed.
+}
+
+ACCESS CONTROL ENFORCEMENT:
+  Two-layer enforcement — clients cannot bypass either layer:
+  1. GET /sync filters the VM/profile inventory before the client sees it.
+  2. executor_client.execute_tool() blocks tool calls targeting hidden VMs
+     for both direct /execute calls AND AI-initiated calls through /chat.
+
+────────────────────────────────────────────────────────────────────────────────
+3. client/connection_config.json  (read by client/ui/chat_client.py)
 ────────────────────────────────────────────────────────────────────────────────
 
 {

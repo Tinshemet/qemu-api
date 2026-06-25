@@ -935,9 +935,11 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
 | `/health` | GET | No | Returns `{"status":"ok"}` — used by liveness monitor |
+| `/sync` | GET | Yes | Returns server-authoritative config (shortcuts, allowed tools, visible VMs/profiles) |
 | `/execute` | POST | Yes | Execute a tool call. Body: `{tool_name, args, verbose}` |
 | `/images/{vm_name}` | GET | Yes | Stream primary disk (qcow2), supports HTTP Range resume |
 | `/images/{vm_name}/sha256` | GET | Yes | SHA-256 checksum of primary disk |
+| `/vms/{vm_name}/bundle` | GET | Yes | Stream entire VM folder (disk + config + OVMF vars) as `.tar.gz` |
 | `/rotate-token` | POST | Yes | Replace token (min 16 chars) and persist to `~/.qemu-api.token` |
 
 ### /execute request flow
@@ -957,6 +959,24 @@ Preflight `ask_user` → HTTP 200, body contains `{"clarify": true, "question": 
 ### Tool Allowlist
 
 `allowed_remote_tools` in `shared/executioner/config.json` controls which tools the HTTP API accepts. Tools not in the list get `403 Forbidden` before preflight runs. `send_monitor_cmd` (raw QEMU monitor access) is excluded by default.
+
+### Client Access Control
+
+The server controls which VMs and hardware profiles are visible and accessible to clients. This is configured in `files/server/connection_config.json`:
+
+```json
+{
+  "client_allowed_vms":      ["test", "kali"],
+  "client_allowed_profiles": ["desktop", "laptop"]
+}
+```
+
+- **Empty list (default)** — all VMs/profiles are accessible.
+- **Non-empty list** — only listed names are accessible; everything else is hidden.
+
+Enforcement happens at two levels:
+1. **`/sync`** — filters VMs and profiles before sending the client its startup inventory, so hidden resources never appear in the Resources panel.
+2. **`executor_client.py`** — blocks tool calls (launch, stop, delete, etc.) targeting hidden VMs at the executor level, covering both direct `/execute` calls and AI-initiated calls through `/chat`. Hidden VMs return `"not found"` to avoid leaking their existence.
 
 ---
 
@@ -979,13 +999,17 @@ Preflight `ask_user` → HTTP 200, body contains `{"clarify": true, "question": 
 **`files/server/connection_config.json`** — read by the AI/Ollama machine:
 ```json
 {
-  "url":        "local",
-  "token":      "",
-  "timeout":    120,
-  "verify_ssl": true,
-  "ca_cert":    ""
+  "url":                    "local",
+  "token":                  "",
+  "timeout":                120,
+  "verify_ssl":             true,
+  "ca_cert":                "",
+  "client_allowed_vms":      [],
+  "client_allowed_profiles": []
 }
 ```
+
+`client_allowed_vms` and `client_allowed_profiles` are optional. Empty arrays (default) mean all VMs and profiles are accessible. Add names to restrict access — hidden resources appear non-existent to clients.
 
 Set `url` to `"local"` for same-machine mode or `"http://10.0.2.2:8080"` for remote.
 
