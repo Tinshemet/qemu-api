@@ -182,7 +182,7 @@ def _run_local():
         key_thread.start()
 
     try:
-        with Live(console=console, refresh_per_second=2, screen=True) as live:
+        with Live(console=console, refresh_per_second=2) as live:
             while not _quit.is_set():
                 try:
                     raw = manager.list_vms()
