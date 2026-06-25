@@ -160,7 +160,7 @@ cat >> "$SHELL_RC" << SHELLEOF
 source "$VENV_DIR/bin/activate"
 export PATH="\$HOME/.local/bin:\$PATH"
 alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
-alias qemu-api-admin='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/server/admin_tui.py --remote'
+alias qemu-api-admin='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/admin_tui.py --remote'
 # qemu-api client end
 SHELLEOF
 
