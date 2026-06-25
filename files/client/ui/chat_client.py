@@ -1,34 +1,25 @@
 """
-chat_client.py — Remote AI Chat Client
+chat_client.py — Curses AI Chat Client
 
-Sends messages to the qemu-api server's /chat endpoint and renders responses
-with the same Rich panels used by the server-side interactive loop.
-
-The server owns the AI (Ollama) and the QEMU engine.  This client is a thin
-UI that requires no Ollama installation locally.
+Full-screen TUI that sends messages to the qemu-api server's /chat endpoint.
+Mirrors the admin TUI visual style: header bar, scrollable chat area,
+command input at bottom.
 """
 
+import curses
 import json
 import os
+import queue
 import sys
+import textwrap
+import threading
+import time
 import uuid
 
 import requests
-from rich.panel import Panel
-
-from shared.display import (
-    console,
-    _print_banner,
-    _render_vm_list,
-    _render_status,
-    _render_monitor,
-    _render_profiles,
-    _render_snapshots,
-    _render_system,
-    _render_vnc_connect,
-)
 
 # ── Connection config ─────────────────────────────────────────────────────────
+
 _CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 _CFG       = json.load(open(_CFG_PATH))
 SERVER_URL = os.environ.get("SERVER_URL",   _CFG.get("server_url", "http://localhost:8080"))
@@ -42,9 +33,8 @@ _VERIFY    = (
 _HEADERS   = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}
 
 # ── Session persistence ───────────────────────────────────────────────────────
-_SESSION_FILE = os.path.expanduser("~/.qemu_vms/.chat_session_id")
 
-_EXIT_CMDS = {"exit", "quit", "q", "bye"}
+_SESSION_FILE = os.path.expanduser("~/.qemu_vms/.chat_session_id")
 
 
 def _load_session_id() -> str:
@@ -60,10 +50,166 @@ def _save_session_id(sid: str):
         f.write(sid)
 
 
-# ── Tool-result renderer ──────────────────────────────────────────────────────
+# ── Colour pairs ──────────────────────────────────────────────────────────────
+
+C_HEADER = 1
+C_CYAN   = 2
+C_GREEN  = 3
+C_RED    = 4
+C_DIM    = 5
+C_YELLOW = 6
+C_BOLD   = 7
+
+
+_CUSTOM_COLOR_SLOT = 16   # first free slot above the standard 8+8
+
+
+def _hex_to_curses(hex_color: str) -> tuple:
+    """Parse #RRGGBB → (r, g, b) scaled to 0-1000 for curses.init_color()."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return (667, 667, 667)   # fallback ~gray
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return (r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
+
+
+def _init_colours(color_hex: str = "#aaaaaa"):
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(C_HEADER, curses.COLOR_WHITE,  curses.COLOR_BLUE)
+    curses.init_pair(C_CYAN,   curses.COLOR_CYAN,   -1)
+    curses.init_pair(C_GREEN,  curses.COLOR_GREEN,  -1)
+    curses.init_pair(C_RED,    curses.COLOR_RED,    -1)
+    curses.init_pair(C_YELLOW, curses.COLOR_YELLOW, -1)
+    curses.init_pair(C_BOLD,   curses.COLOR_WHITE,  -1)
+
+    if curses.can_change_color():
+        r, g, b = _hex_to_curses(color_hex)
+        curses.init_color(_CUSTOM_COLOR_SLOT, r, g, b)
+        curses.init_pair(C_DIM, _CUSTOM_COLOR_SLOT, -1)
+    else:
+        # Terminal can't redefine colors — fall back to nearest standard
+        curses.init_pair(C_DIM, 8, -1)  # bright-black (gray)
+
+
+def _cp(n):
+    return curses.color_pair(n)
+
+
+# ── Shared state ──────────────────────────────────────────────────────────────
+
+_history:       list  = []        # (curses_attr, text) tuples
+_lock           = threading.Lock()
+_resp_q         = queue.Queue()   # HTTP worker puts results here
+_quit           = threading.Event()
+_waiting        = False           # True while HTTP call is in flight
+_needs_confirm  = False           # True when server returned needs_input
+_is_confirm     = False           # whether pending confirm is auto_confirm
+_pending_kill   = ""              # VM name waiting for force-kill confirmation
+_session_id     = ""
+
+# sync data
+_REMOTE_VMS:        list = []
+_REMOTE_PROFILES:   list = []
+_SC_LIST     = {"list", "vms", "ls"}
+_SC_SYSTEM   = {"system"}
+_SC_PROFILES = {"profiles"}
+_SC_DRIFT    = {"drift"}
+_SC_CLEAR    = {"clear session", "forget", "/clear"}
+_SC_HELP     = {"help", "?", "/help"}
+_EXIT_CMDS   = {"exit", "quit", "q", "bye"}
+
+
+# ── History helpers ───────────────────────────────────────────────────────────
+
+def _add(text: str, attr: int = 0, wrap: int = 0):
+    with _lock:
+        if wrap:
+            for line in textwrap.wrap(text, wrap) or [""]:
+                _history.append((attr, line))
+        else:
+            _history.append((attr, text))
+
+
+def _add_sep():
+    _add("  " + "─" * 62, _cp(C_DIM))
+
+
+# ── Draw ──────────────────────────────────────────────────────────────────────
+
+def _draw(stdscr, input_buf: str):
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+
+    # Header
+    spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    spin  = f" {spin_chars[int(time.time() * 5) % len(spin_chars)]}" if _waiting else "  "
+    with _lock:
+        vm_parts = [
+            ("● " if v.get("status") == "running" else "○ ") + v.get("name", "")
+            for v in _REMOTE_VMS[:6]
+        ]
+    vm_str = "   ".join(vm_parts)
+    hdr    = f" qemu-api{spin} {SERVER_URL}   {vm_str}"
+    try:
+        stdscr.addstr(0, 0, hdr[:w - 1].ljust(w - 1), _cp(C_HEADER) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+    # Separator
+    try:
+        stdscr.addstr(1, 0, "─" * (w - 1), _cp(C_DIM))
+    except curses.error:
+        pass
+
+    # Chat history (rows 2 .. h-5)
+    chat_rows = max(1, h - 6)
+    with _lock:
+        visible = list(_history[-chat_rows:])
+    for i, (attr, text) in enumerate(visible):
+        row = 2 + i
+        if row >= h - 4:
+            break
+        try:
+            stdscr.addstr(row, 0, text[:w - 1], attr)
+        except curses.error:
+            pass
+
+    # Input separator
+    try:
+        stdscr.addstr(h - 4, 0, "─" * (w - 1), _cp(C_DIM))
+    except curses.error:
+        pass
+
+    # Input / waiting line
+    if _waiting:
+        try:
+            stdscr.addstr(h - 3, 0, f" ⟳ waiting for response...", _cp(C_DIM))
+        except curses.error:
+            pass
+    else:
+        prompt = f" > {input_buf}"
+        try:
+            stdscr.addstr(h - 3, 0, prompt[:w - 1], _cp(C_CYAN) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+    # Hint line
+    try:
+        stdscr.addstr(h - 2, 0,
+                      "  list  system  profiles  drift  /clear  help  q=quit"[:w - 1],
+                      _cp(C_DIM))
+    except curses.error:
+        pass
+
+    stdscr.refresh()
+
+
+# ── VNC helpers ───────────────────────────────────────────────────────────────
 
 def _vnc_host() -> str:
-    """Return the VNC host — server's hostname when remote, localhost otherwise."""
     from urllib.parse import urlparse
     parsed = urlparse(SERVER_URL)
     host   = parsed.hostname or "localhost"
@@ -71,7 +217,6 @@ def _vnc_host() -> str:
 
 
 def _try_open_vnc(port: int):
-    """Spawn a VNC viewer in the background, trying common clients."""
     import subprocess as _sp
     host = _vnc_host()
     for viewer in ("vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"):
@@ -84,75 +229,157 @@ def _try_open_vnc(port: int):
     return None
 
 
-def _render_tool_results(tool_results: list, verbose: bool = False):
-    for tr in tool_results:
-        tool   = tr.get("tool", "")
-        result = tr.get("result", {})
-        try:
-            if tool == "launch_vm" and result.get("display") == "vnc" and (result.get("success") or result.get("already_running")):
-                port   = result.get("vnc_port", 5900)
-                host   = _vnc_host()
-                viewer = _try_open_vnc(port)
-                if viewer:
-                    console.print(Panel(
-                        f"[bold green]✓ VNC viewer launched automatically[/bold green]\n\n"
-                        f"If the window didn't appear, connect manually:\n"
-                        f"  [bold yellow]vncviewer {host}:{port}[/bold yellow]",
-                        title=f"[bold]VM Display — {host}:{port}[/bold]",
-                        border_style="green",
-                    ))
-                else:
-                    console.print(Panel(
-                        f"Connect to the VM display:\n\n"
-                        f"  [bold yellow]vncviewer {host}:{port}[/bold yellow]\n\n"
-                        f"[dim]Or install a VNC viewer: sudo apt install tigervnc-viewer[/dim]",
-                        title=f"[bold]VM Display — {host}:{port}[/bold]",
-                        border_style="cyan",
-                    ))
-            elif tool == "list_vms":
-                vms = result if isinstance(result, list) else result.get("vms", [])
-                _render_vm_list(vms)
-            elif tool == "check_system":
-                _render_system(result)
-            elif tool == "list_profiles":
-                _render_profiles(result if isinstance(result, list) else result.get("profiles", []))
-            elif tool in ("vm_status", "monitor_vm"):
-                _render_monitor(result)
-            elif tool == "list_snapshots":
-                _render_snapshots(result)
-            elif result.get("vnc_connect_cmd"):
-                _render_vnc_connect(console, result)
-            elif result.get("setup_cmd"):
-                # Stealth guest setup required
-                setup_cmd  = result["setup_cmd"]
-                vm_name    = result.get("name", "")
-                is_windows = setup_cmd.startswith("irm ")
-                how_line   = (
-                    "Open [bold]PowerShell[/bold] inside the VM and run:"
-                    if is_windows else
-                    "Open a terminal inside the VM and run (then reboot):"
-                )
-                console.print(Panel(
-                    f"[bold]Stealth guest setup required.[/bold] {how_line}\n\n"
-                    f"[cyan]{setup_cmd}[/cyan]\n\n"
-                    f"[dim]When done, run:[/dim] [bold]setup-done {vm_name}[/bold]",
-                    title="Stealth Setup", border_style="yellow",
-                ))
-            elif not result.get("success") and result.get("error"):
-                console.print(f"[bold red]✖[/bold red] {result['error']}")
-            elif verbose:
-                console.print(Panel(
-                    json.dumps(result, indent=2, default=str),
-                    title=f"[dim]{tool}[/dim]",
-                    border_style="dim",
-                ))
-        except Exception:
-            pass  # never crash the UI over a renderer error
+# ── Tool result rendering ─────────────────────────────────────────────────────
+
+_ISO_DISTRO_KEYWORDS = [
+    ("kali",       "kali"),
+    ("ubuntu",     "ubuntu"),
+    ("debian",     "debian"),
+    ("fedora",     "fedora"),
+    ("mint",       "mint"),
+    ("manjaro",    "manjaro"),
+    ("opensuse",   "opensuse"),
+    ("centos",     "centos"),
+    ("rocky",      "rocky"),
+    ("alma",       "almalinux"),
+    ("arch",       "arch"),
+    ("nixos",      "nixos"),
+    ("win10",      "windows"),
+    ("win11",      "windows"),
+    ("windows",    "windows"),
+    ("macos",      "macos"),
+    ("darwin",     "macos"),
+]
+
+
+def _iso_distro_hint(iso_name: str) -> str:
+    """Return the distro name implied by the ISO filename, or '' if unknown."""
+    s = iso_name.lower()
+    for keyword, distro in _ISO_DISTRO_KEYWORDS:
+        if keyword in s:
+            return distro
+    return ""
+
+def _render_tool_result(tool: str, result: dict):
+    if tool == "list_vms":
+        vms = result if isinstance(result, list) else result.get("vms", [])
+        if not vms:
+            _add("  (no VMs)", _cp(C_DIM))
+            return
+        for v in vms:
+            status = v.get("status", "?")
+            dot    = "● " if status == "running" else "○ "
+            color  = _cp(C_GREEN) if status == "running" else _cp(C_DIM)
+            ram    = f"{v.get('memory_mb', 0) // 1024}GB"
+            cpu    = v.get("cpu_cores", "")
+            os_s   = v.get("os", "")[:18]
+            name   = v.get("name", "")[:22]
+            _add(f"  {dot}{name:<22} {status:<12} {cpu}cpu  {ram:<6} {os_s}", color)
+
+    elif tool == "launch_vm":
+        if result.get("success") or result.get("already_running"):
+            port   = result.get("vnc_port", 5900)
+            host   = _vnc_host()
+            viewer = _try_open_vnc(port)
+            msg    = f"  ✓ VNC: {host}:{port}"
+            if viewer:
+                msg += f"  (opened {viewer})"
+            else:
+                msg += f"  —  run: vncviewer {host}:{port}"
+            _add(msg, _cp(C_GREEN) | curses.A_BOLD)
+        else:
+            _add(f"  ✖ {result.get('error', 'launch failed')}", _cp(C_RED))
+
+    elif tool == "check_system":
+        caps = result
+        kvm  = caps.get("kvm_available") and caps.get("kvm_readable")
+        virt = caps.get("vmx") or caps.get("svm")
+        ovmf = caps.get("ovmf") or {}
+        rows = [
+            ("CPU",        f"{caps.get('host_cpu_cores', '?')} cores  ({caps.get('host_cpu', '?')})"),
+            ("RAM",        f"{caps.get('host_memory_mb', 0) // 1024} GB"),
+            ("Disk free",  f"{caps.get('home_free_gb', '?')} GB"),
+            ("Arch",       caps.get("host_arch", "?")),
+            ("KVM",        "✓" if kvm  else "✗"),
+            ("VT-x/AMD-V", "✓" if virt else "✗"),
+        ]
+        qemu = caps.get("qemu_version", "")
+        if qemu:
+            rows.append(("QEMU", qemu[:70]))
+        if caps.get("qemu_arm_installed"):
+            rows.append(("qemu-arm", "✓"))
+        if ovmf.get("code"):
+            rows.append(("OVMF", ovmf["code"]))
+        for label, value in rows:
+            if value in ("✓", "✗"):
+                attr = _cp(C_GREEN) if value == "✓" else _cp(C_RED)
+            else:
+                attr = _cp(C_DIM)
+            _add(f"    {label:<16} {value}", attr)
+
+    elif tool == "create_vm":
+        if result.get("success"):
+            _vm_msg = result.get("message") or f"VM '{result.get('name', '')}' created."
+            _add(f"  ✓ {_vm_msg}", _cp(C_GREEN))
+            iso_name = (result.get("iso_name") or "").lower()
+            os_name  = (result.get("os_name")  or "").lower()
+            iso_distro = _iso_distro_hint(iso_name)
+            if iso_distro and os_name and iso_distro not in os_name and os_name not in iso_distro:
+                _add(f"  ⚠ ISO ({result['iso_name']}) looks like {iso_distro}"
+                     f" but OS declared as '{result['os_name']}' — may be wrong.",
+                     _cp(C_YELLOW) | curses.A_BOLD)
+                _add( "    To fix: delete the VM and recreate, specifying the correct OS name.",
+                     _cp(C_DIM))
+            elif iso_distro and not os_name:
+                _add(f"  ℹ ISO suggests distro: {iso_distro}", _cp(C_DIM))
+        else:
+            _add(f"  ✖ {result.get('error', 'create_vm failed')}", _cp(C_RED))
+
+    elif tool in ("list_profiles",):
+        profiles = result if isinstance(result, list) else result.get("profiles", [])
+        for p in profiles:
+            name = (p.get("name", "") if isinstance(p, dict) else str(p))
+            desc = (p.get("description", "") if isinstance(p, dict) else "")
+            _add(f"  {name:<28} {desc}", _cp(C_DIM))
+        if not profiles:
+            _add("  (no profiles)", _cp(C_DIM))
+
+    elif tool in ("vm_status", "monitor_vm"):
+        status = result.get("status", "?")
+        color  = _cp(C_GREEN) if status == "running" else _cp(C_DIM)
+        _add(f"  {result.get('name', '')}  status={status}  "
+             f"cpu={result.get('cpu', '?')}%  mem={result.get('memory', '?')}", color)
+
+    elif tool == "list_snapshots":
+        snaps = result if isinstance(result, list) else result.get("snapshots", [])
+        for s in snaps:
+            _add(f"  {s.get('name', ''):<24} {s.get('date', '')}", _cp(C_DIM))
+        if not snaps:
+            _add("  (no snapshots)", _cp(C_DIM))
+
+    elif result.get("setup_cmd"):
+        setup_cmd = result["setup_cmd"]
+        vm_name   = result.get("name", "")
+        is_win    = setup_cmd.startswith("irm ")
+        dest      = "PowerShell inside the VM" if is_win else "a terminal inside the VM (then reboot)"
+        _add(f"  ▶ Stealth setup required. Open {dest} and run:", _cp(C_YELLOW) | curses.A_BOLD)
+        _add(f"      {setup_cmd}", _cp(C_CYAN))
+        _add(f"  When done:  setup-done {vm_name}", _cp(C_DIM))
+
+    elif result.get("vnc_connect_cmd"):
+        _add(f"  VNC: {result['vnc_connect_cmd']}", _cp(C_CYAN))
+
+    elif not result.get("success") and result.get("error"):
+        _add(f"  ✖ {result['error']}", _cp(C_RED))
+
+    elif result.get("success") and result.get("message"):
+        _add(f"  ✓ {result['message']}", _cp(C_GREEN))
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-def _post_chat(message: str, session_id: str, auto_confirm: bool = False, verbose: bool = False) -> dict:
+def _post_chat(message: str, session_id: str,
+               auto_confirm: bool = False, verbose: bool = False) -> dict:
     payload = {
         "message":      message,
         "session_id":   session_id,
@@ -162,70 +389,104 @@ def _post_chat(message: str, session_id: str, auto_confirm: bool = False, verbos
     try:
         resp = requests.post(
             f"{SERVER_URL}/chat",
-            json=payload,
-            headers=_HEADERS,
-            timeout=_TIMEOUT,
-            verify=_VERIFY,
+            json=payload, headers=_HEADERS,
+            timeout=_TIMEOUT, verify=_VERIFY,
         )
     except requests.ConnectionError:
-        console.print(f"\n[bold red]Cannot connect to server at {SERVER_URL}[/bold red]")
-        console.print("  → Make sure the server is running: [bold]qemu-api-serve[/bold]")
-        sys.exit(1)
+        return {"error": f"Cannot connect to {SERVER_URL}"}
+    except Exception as e:
+        return {"error": str(e)}
 
     if resp.status_code == 401:
-        console.print("[bold red]Server rejected the token (401)[/bold red]")
-        console.print("  → Check that API_TOKEN matches on both machines")
-        sys.exit(1)
-
+        return {"error": "Server rejected token (401) — check API_TOKEN"}
     if not resp.ok:
-        return {
-            "text":         f"Server error {resp.status_code}: {resp.text}",
-            "session_id":   session_id,
-            "tool_results": [],
-            "needs_input":  None,
-        }
+        return {"error": f"Server error {resp.status_code}"}
 
     return resp.json()
 
 
-def _handle_response(result: dict, session_id: str, verbose: bool) -> str:
-    """Render a /chat response.  Returns the (possibly updated) session_id."""
-    sid = result.get("session_id", session_id)
-    _save_session_id(sid)
-
-    _render_tool_results(result.get("tool_results", []), verbose)
-
-    text = result.get("text", "").strip()
-    if text:
-        console.print(f"\n[bold green]Assistant:[/bold green] {text}\n")
-
-    return sid
-
-
-# ── Shortcut sets — defaults, overwritten by /sync at startup ─────────────────
-
-_SC_LIST     = {"list", "vms", "show", "show vms", "list vms", "ls", "list all",
-                "show all", "list all vms", "show all vms"}
-_SC_SYSTEM   = {"system", "system info", "check system", "show system"}
-_SC_PROFILES = {"profiles", "list profiles", "show profiles"}
-_SC_DRIFT    = {"drift", "check drift", "drift check", "drift status", "drift report"}
-_SC_CLEAR    = {"clear session", "session clear", "clear_session", "forget", "/clear"}
-_SC_HELP     = {"help", "?", "/help", "commands", "show commands"}
-
-_SYNC_ALLOWED_TOOLS: list = []
-_REMOTE_VMS:        list = []
-_REMOTE_PROFILES:   list = []
-
-
-def _sync_from_server() -> bool:
-    """Fetch /sync and apply server-authoritative config. Returns True on success."""
-    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SC_CLEAR
-    global _SYNC_ALLOWED_TOOLS, _REMOTE_VMS, _REMOTE_PROFILES
+def _execute(tool_name: str, args: dict = {}) -> dict:
     try:
-        resp = requests.get(
-            f"{SERVER_URL}/sync",
-            headers=_HEADERS, timeout=10, verify=_VERIFY,
+        resp = requests.post(
+            f"{SERVER_URL}/execute",
+            json={"tool_name": tool_name, "args": args, "verbose": False},
+            headers=_HEADERS, timeout=_TIMEOUT, verify=_VERIFY,
         )
+        if not resp.ok:
+            return {"success": False, "error": f"Server error {resp.status_code}"}
+        return resp.json().get("result", {})
+    except requests.ConnectionError:
+        return {"success": False, "error": f"Cannot connect to {SERVER_URL}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ── Auto-start server (localhost only) ───────────────────────────────────────
+
+def _is_localhost() -> bool:
+    from urllib.parse import urlparse
+    host = urlparse(SERVER_URL).hostname or "localhost"
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def _server_reachable() -> bool:
+    try:
+        r = requests.get(f"{SERVER_URL}/health", timeout=2, verify=_VERIFY)
+        return r.ok
+    except Exception:
+        return False
+
+
+def _autostart_server(stdscr) -> bool:
+    """Launch the server if server files are present alongside the client. Returns True when ready."""
+    _client_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _files_dir  = os.path.dirname(_client_dir)
+    _server_mod = os.path.join(_files_dir, "server", "http", "api_server.py")
+
+    if not os.path.exists(_server_mod):
+        return False
+
+    from urllib.parse import urlparse
+    port = urlparse(SERVER_URL).port or 8080
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _files_dir
+    try:
+        token = open(os.path.expanduser("~/.qemu-api.token")).read().strip()
+        env["API_TOKEN"] = token
+    except Exception:
+        pass
+
+    log_path = "/tmp/qemu-api-server.log"
+    import subprocess as _sp
+    _sp.Popen(
+        [sys.executable, "-m", "uvicorn",
+         "server.http.api_server:app",
+         "--host", "0.0.0.0", f"--port", str(port),
+         "--log-level", "warning"],
+        cwd=_files_dir, env=env,
+        start_new_session=True,
+        stdout=open(log_path, "w"),
+        stderr=_sp.STDOUT,
+    )
+
+    for _ in range(20):
+        time.sleep(0.5)
+        _draw(stdscr, "")
+        if _server_reachable():
+            return True
+
+    return False
+
+
+# ── Sync ──────────────────────────────────────────────────────────────────────
+
+def _sync_from_server():
+    global _REMOTE_VMS, _REMOTE_PROFILES
+    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SC_CLEAR
+    try:
+        resp = requests.get(f"{SERVER_URL}/sync",
+                            headers=_HEADERS, timeout=10, verify=_VERIFY)
         if not resp.ok:
             return False
         data = resp.json()
@@ -233,328 +494,296 @@ def _sync_from_server() -> bool:
         return False
 
     sc = data.get("shortcut_commands", {})
-    if sc.get("list"):
-        _SC_LIST     = set(sc["list"])
-    if sc.get("system"):
-        _SC_SYSTEM   = set(sc["system"])
-    if sc.get("profiles"):
-        _SC_PROFILES = set(sc["profiles"])
-    if sc.get("drift"):
-        _SC_DRIFT    = set(sc["drift"])
-    if sc.get("clear_session"):
-        _SC_CLEAR    = set(sc["clear_session"]) | {"/clear"}
+    if sc.get("list"):          _SC_LIST     = set(sc["list"])
+    if sc.get("system"):        _SC_SYSTEM   = set(sc["system"])
+    if sc.get("profiles"):      _SC_PROFILES = set(sc["profiles"])
+    if sc.get("drift"):         _SC_DRIFT    = set(sc["drift"])
+    if sc.get("clear_session"): _SC_CLEAR    = set(sc["clear_session"]) | {"/clear"}
 
-    _SYNC_ALLOWED_TOOLS = data.get("allowed_remote_tools", [])
-    _REMOTE_VMS         = data.get("vms", [])
-    _REMOTE_PROFILES    = data.get("profiles", [])
+    _REMOTE_VMS      = data.get("vms", [])
+    _REMOTE_PROFILES = data.get("profiles", [])
     return True
 
 
-def _execute(tool_name: str, args: dict = {}, verbose: bool = False) -> dict:
-    """Call /execute directly — bypasses AI for known shortcut commands."""
-    try:
-        resp = requests.post(
-            f"{SERVER_URL}/execute",
-            json={"tool_name": tool_name, "args": args, "verbose": verbose},
-            headers=_HEADERS,
-            timeout=_TIMEOUT,
-            verify=_VERIFY,
-        )
-        if not resp.ok:
-            return {"success": False, "error": f"Server error {resp.status_code}"}
-        return resp.json().get("result", {})
-    except requests.ConnectionError:
-        console.print(f"\n[bold red]Cannot connect to server at {SERVER_URL}[/bold red]")
-        return {"success": False, "error": "Connection error"}
+# ── Response processing ───────────────────────────────────────────────────────
 
+def _process_response(result: dict, verbose: bool = False):
+    global _session_id, _needs_confirm, _is_confirm
 
-def _render_shortcut_result(tool_name: str, result: dict, verbose: bool):
-    """Render the result of a shortcut /execute call with a brief ack line."""
-    try:
-        if tool_name == "list_vms":
-            vms = result if isinstance(result, list) else result.get("vms", [])
-            console.print(f"\n[dim]VMs ({len(vms)} found):[/dim]")
-            _render_vm_list(vms)
-        elif tool_name == "check_system":
-            console.print("\n[dim]System info:[/dim]")
-            _render_system(result)
-        elif tool_name == "list_profiles":
-            profiles = result if isinstance(result, list) else result.get("profiles", [])
-            console.print(f"\n[dim]Profiles ({len(profiles)} found):[/dim]")
-            _render_profiles(profiles)
-        elif tool_name == "check_drift":
-            drift = result if isinstance(result, dict) else {}
-            if not drift.get("drifted"):
-                console.print("\n[dim green]✓ No drift detected.[/dim green]")
-            else:
-                console.print(Panel(
-                    json.dumps(drift, indent=2, default=str),
-                    title="[yellow]Drift detected[/yellow]", border_style="yellow",
-                ))
-        elif verbose:
-            import json as _json
-            console.print(Panel(
-                _json.dumps(result, indent=2, default=str),
-                title=f"[dim]{tool_name}[/dim]", border_style="dim",
-            ))
-    except Exception:
-        pass
+    if result.get("error"):
+        _add(f"  ✖ {result['error']}", _cp(C_RED))
+        return
 
+    sid = result.get("session_id", _session_id)
+    if sid:
+        _session_id = sid
+        _save_session_id(sid)
 
-# ── Help panel ───────────────────────────────────────────────────────────────
+    for tr in result.get("tool_results", []):
+        tool = tr.get("tool", "")
+        res  = tr.get("result", {})
+        if tool:
+            _add(f"  [{tool}]", _cp(C_DIM))
+        _render_tool_result(tool, res)
 
-def _render_help():
-    console.print(Panel(
-        "[bold]Shortcut commands (instant, no AI):[/bold]\n"
-        "  [cyan]list[/cyan]  /  [cyan]vms[/cyan]             List all VMs\n"
-        "  [cyan]system[/cyan]                  System capabilities\n"
-        "  [cyan]profiles[/cyan]                Hardware profiles\n"
-        "  [cyan]drift[/cyan]                   Configuration drift check\n"
-        "  [cyan]kill <name>[/cyan]             Force-kill a VM (SIGKILL, asks confirm)\n"
-        "  [cyan]force stop <name>[/cyan]       Force-kill a VM (SIGKILL, asks confirm)\n"
-        "  [cyan]clear session[/cyan]           Clear conversation history\n"
-        "  [cyan]help[/cyan]  /  [cyan]?[/cyan]               Show this message\n"
-        "  [cyan]exit[/cyan]  /  [cyan]quit[/cyan]  /  [cyan]q[/cyan]     Exit\n\n"
-        "[bold]Common AI requests (natural language):[/bold]\n"
-        "  \"create a Ubuntu VM called myvm\"\n"
-        "  \"create myvm with 8GB RAM and 100GB disk\"\n"
-        "  \"launch myvm\"  /  \"start myvm\"\n"
-        "  \"stop myvm\"  /  \"shutdown myvm\"\n"
-        "  \"delete myvm\"\n"
-        "  \"status myvm\"  /  \"monitor myvm\"\n"
-        "  \"clone myvm as myvm-copy\"\n"
-        "  \"create snapshot of myvm called before-update\"\n"
-        "  \"resize myvm to 200GB\"\n"
-        "  \"why did myvm fail\"\n\n"
-        "[bold]VNC (all server-launched VMs run headless in VNC mode):[/bold]\n"
-        "  Connect:  [bold yellow]vncviewer localhost:5900[/bold yellow]   (first VM)\n"
-        "            [bold yellow]vncviewer localhost:5901[/bold yellow]   (second VM, etc.)\n"
-        "  The exact port is shown after launch, or ask: [cyan]\"status myvm\"[/cyan]\n"
-        "  For local-display mode run VMs directly: [dim]qemu-api launch <vm> sdl[/dim]\n\n"
-        "[dim]For direct CLI commands (no AI), run: qemu-api help[/dim]",
-        title="[bold]qemu-api — help[/bold]",
-        border_style="cyan",
-    ))
+    text = result.get("text", "").strip()
+    if text:
+        _add(f" AI:", _cp(C_CYAN) | curses.A_BOLD)
+        for line in textwrap.wrap(text, 120) or [""]:
+            _add(f"    {line}", _cp(C_CYAN))
 
-
-# ── Needs-input renderer ─────────────────────────────────────────────────────
-
-def _render_needs_input(ni_type: str, question: str, opts: list, proposed: str = ""):
-    """Render a needs_input prompt with appropriate styling per type."""
-    if ni_type == "confirm_critical":
-        body = f"[bold red]{question}[/bold red]"
+    ni = result.get("needs_input")
+    if ni:
+        _needs_confirm = True
+        ni_type  = ni.get("type", "clarify")
+        question = ni.get("question", "Confirm?")
+        opts     = ni.get("options", [])
+        proposed = ni.get("proposed", "")
+        _is_confirm = ni_type in ("confirm_yn", "confirm_name", "confirm_critical", "preflight")
+        color    = _cp(C_RED) if ni_type == "confirm_critical" else _cp(C_YELLOW)
+        _add(f"  ▶ {question}", color | curses.A_BOLD)
         if proposed:
-            body += f"\n[dim]You must type [bold red]{proposed}[/bold red] exactly to confirm.[/dim]"
-        console.print(Panel(body, title="[bold red]⚠  Destructive Action[/bold red]",
-                            border_style="red"))
-    elif ni_type in ("confirm_yn", "confirm_name"):
-        body = question
+            _add(f"    Type exactly: {proposed}", _cp(C_RED))
         if opts:
-            body += "\n" + "  ".join(f"[bold cyan][{o}][/bold cyan]" for o in opts)
-        console.print(Panel(body, title="[yellow]Confirm[/yellow]", border_style="yellow"))
-    elif ni_type == "preflight":
-        body = question
-        if opts:
-            body += "\n" + "  ".join(f"[bold cyan][{o}][/bold cyan]" for o in opts)
-        console.print(Panel(body, title="[cyan]Pre-flight Check[/cyan]", border_style="cyan"))
+            _add(f"    Options: {' / '.join(opts)}", _cp(C_DIM))
     else:
-        # clarify
-        body = question
-        if opts:
-            body += "\n" + "  ".join(f"[dim][{o}][/dim]" for o in opts)
-        console.print(Panel(body, title="[blue]More info needed[/blue]", border_style="blue"))
+        _needs_confirm = False
+        _is_confirm    = False
 
 
-# ── Chat loop ─────────────────────────────────────────────────────────────────
+# ── Help ──────────────────────────────────────────────────────────────────────
 
-def chat_loop(verbose: bool = False):
-    # Health check
-    try:
-        r = requests.get(f"{SERVER_URL}/health", timeout=5, verify=_VERIFY)
-        if not r.ok:
-            console.print(f"[bold yellow]⚠ Server health check failed ({r.status_code})[/bold yellow]")
-    except Exception:
-        console.print(f"[bold red]Cannot reach server at {SERVER_URL}[/bold red]")
-        console.print("  → Start the server with: [bold]qemu-api-serve[/bold]")
-        sys.exit(1)
+def _show_help():
+    _add_sep()
+    _add("  Shortcuts (instant, no AI):", _cp(C_CYAN) | curses.A_BOLD)
+    helps = [
+        ("list / vms",          "List all VMs on the server"),
+        ("system",              "Host capabilities (KVM, CPU, RAM)"),
+        ("profiles",            "Hardware profiles"),
+        ("drift",               "Configuration drift check"),
+        ("kill <vm>",           "Force-kill a VM (asks confirmation)"),
+        ("clear / clear session","Wipe conversation history"),
+        ("help / ?",            "Show this"),
+        ("q / quit / exit / bye", "Exit"),
+    ]
+    for cmd, desc in helps:
+        _add(f"    {cmd:<28} {desc}", _cp(C_DIM))
+    _add("  Natural language examples:", _cp(C_CYAN) | curses.A_BOLD)
+    examples = [
+        "create a Ubuntu VM called dev with 4GB RAM",
+        "launch dev",
+        "stop dev",
+        "clone dev as dev-backup",
+        "create snapshot of dev called pre-update",
+        "delete dev",
+        "why did dev fail",
+    ]
+    for ex in examples:
+        _add(f"    {ex}", _cp(C_DIM))
+    _add_sep()
 
-    # Fetch server info + sync authoritative config
-    try:
-        info_r = requests.get(f"{SERVER_URL}/info", headers=_HEADERS,
-                               timeout=5, verify=_VERIFY)
-        srv = info_r.json() if info_r.ok else {}
-    except Exception:
-        srv = {}
 
-    _sync_from_server()
+# ── HTTP worker ───────────────────────────────────────────────────────────────
 
-    _print_banner(
-        verbose        = verbose,
-        ollama_model   = srv.get("ollama_model", "unknown"),
-        ollama_url     = srv.get("ollama_url",   "unknown"),
-        ovmf_available = srv.get("ovmf_available", False),
-        ovmf_code      = srv.get("ovmf_code", ""),
-        api_url        = SERVER_URL,
-    )
+def _http_worker(message: str, auto_confirm: bool, verbose: bool):
+    result = _post_chat(message, _session_id, auto_confirm, verbose)
+    _resp_q.put(result)
 
-    # Show local vs remote VMs and profiles
-    if _REMOTE_VMS or _REMOTE_PROFILES:
-        remote_names  = [v["name"] for v in _REMOTE_VMS]
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+
+def _dispatch(cmd: str, verbose: bool) -> bool:
+    """Handle a built-in shortcut. Returns True if handled (no HTTP needed)."""
+    global _waiting, _pending_kill, _needs_confirm, _is_confirm, _session_id
+
+    low = cmd.lower().strip()
+
+    if low in _EXIT_CMDS:
+        _quit.set()
+        return True
+
+    if low in _SC_CLEAR:
         try:
-            from shared.executioner.tool_executor import manager as _local_mgr
-            local_names = [v.get("name") for v in _local_mgr.list_vms().get("vms", [])]
+            requests.delete(f"{SERVER_URL}/sessions/{_session_id}",
+                            headers=_HEADERS, timeout=10, verify=_VERIFY)
         except Exception:
-            local_names = []
+            pass
+        _session_id = str(uuid.uuid4())
+        _save_session_id(_session_id)
+        _add("  Session cleared.", _cp(C_DIM))
+        _needs_confirm = False
+        _is_confirm    = False
+        return True
+
+    if low in _SC_HELP:
+        _show_help()
+        return True
+
+    if low in _SC_LIST:
+        result = _execute("list_vms")
+        _render_tool_result("list_vms", result)
+        return True
+
+    if low in _SC_SYSTEM:
+        result = _execute("check_system")
+        _render_tool_result("check_system", result)
+        return True
+
+    if low in _SC_PROFILES:
+        result = _execute("list_profiles")
+        _render_tool_result("list_profiles", result)
+        return True
+
+    if low in _SC_DRIFT:
+        result = _execute("check_drift")
+        if result.get("drifted"):
+            _add("  Drift detected:", _cp(C_YELLOW) | curses.A_BOLD)
+            for k, v in result.items():
+                if k != "drifted":
+                    _add(f"    {k}: {v}", _cp(C_DIM))
+        else:
+            _add("  ✓ No drift detected.", _cp(C_GREEN))
+        return True
+
+    # kill <name> shortcut
+    for pfx in ("kill ", "force stop ", "force kill ", "hard stop "):
+        if low.startswith(pfx):
+            name = cmd[len(pfx):].strip()
+            if name:
+                _pending_kill = name
+                _add(f"  Force-kill (SIGKILL) VM: {name}?  [yes / cancel]",
+                     _cp(C_YELLOW) | curses.A_BOLD)
+                return True
+
+    return False
+
+
+# ── Main TUI loop ─────────────────────────────────────────────────────────────
+
+def _run(stdscr, verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13):
+    global _waiting, _session_id, _needs_confirm, _is_confirm, _pending_kill
+
+    curses.curs_set(0)
+    stdscr.timeout(100)
+    _init_colours(color_hex)
+
+    # Resize terminal and set font size (best-effort; xterm-compatible terminals)
+    sys.stdout.write(f"\033]50;xft:Monospace:size={font_size}\007")
+    sys.stdout.write("\033[8;44;200t")
+    sys.stdout.flush()
+    time.sleep(0.12)
+
+    _session_id = _load_session_id() or str(uuid.uuid4())
+    _save_session_id(_session_id)
+
+    _add(f"  Connecting to {SERVER_URL}...", _cp(C_DIM))
+    _draw(stdscr, "")
+
+    if _is_localhost() and not _server_reachable():
+        _add("  Server not running — starting it...", _cp(C_YELLOW))
+        _draw(stdscr, "")
+        started = _autostart_server(stdscr)
+        if started:
+            _add("  Server ready.", _cp(C_GREEN))
+        else:
+            _add("  Could not start server. Check /tmp/qemu-api-server.log", _cp(C_RED))
+        _draw(stdscr, "")
+
+    ok = _sync_from_server()
+
+    with _lock:
+        _history.clear()
+
+    _add(f"  qemu-api  →  {SERVER_URL}", _cp(C_GREEN) | curses.A_BOLD)
+    if not ok:
+        _add(f"  ⚠ Could not reach server. Check connection.", _cp(C_YELLOW))
+    elif _REMOTE_VMS:
+        vm_summary = "  ".join(
+            ("● " if v.get("status") == "running" else "○ ") + v.get("name", "")
+            for v in _REMOTE_VMS
+        )
+        _add(f"  VMs:  {vm_summary}", _cp(C_DIM))
+    if _REMOTE_PROFILES:
+        _add(f"  Profiles:  {',  '.join(str(p) if not isinstance(p, dict) else p.get('name','') for p in _REMOTE_PROFILES[:8])}", _cp(C_DIM))
+    _add("", 0)
+    _add('  Type a message or ask the AI anything. Type "help" for shortcuts.', _cp(C_DIM))
+    _add("", 0)
+
+    input_buf = ""
+
+    while not _quit.is_set():
+        # Drain HTTP response queue
         try:
-            from shared.api.qemu_config import list_profiles as _lp
-            local_profiles = [p.get("name") if isinstance(p, dict) else p for p in _lp()]
-        except Exception:
-            local_profiles = []
+            result = _resp_q.get_nowait()
+            _waiting = False
+            _process_response(result, verbose)
+        except queue.Empty:
+            pass
 
-        lines = []
-        if remote_names or local_names:
-            all_vms = sorted(set(remote_names) | set(local_names))
-            tagged  = []
-            for n in all_vms:
-                tags = []
-                if n in local_names:  tags.append("[dim]local[/dim]")
-                if n in remote_names: tags.append("[bold]remote[/bold]")
-                tagged.append(f"  {n}  ({', '.join(tags)})")
-            lines.append("[bold]VMs:[/bold]\n" + "\n".join(tagged))
-        if _REMOTE_PROFILES or local_profiles:
-            all_p   = sorted(set(_REMOTE_PROFILES) | set(local_profiles))
-            p_tagged = []
-            for p in all_p:
-                tags = []
-                if p in local_profiles:   tags.append("[dim]local[/dim]")
-                if p in _REMOTE_PROFILES: tags.append("[bold]remote[/bold]")
-                p_tagged.append(f"  {p}  ({', '.join(tags)})")
-            lines.append("[bold]Profiles:[/bold]\n" + "\n".join(p_tagged))
+        _draw(stdscr, input_buf if not _waiting else "")
 
-        if lines:
-            console.print(Panel("\n\n".join(lines), title="Resources", border_style="dim"))
+        if _waiting:
+            time.sleep(0.05)
+            continue
 
-    session_id = _load_session_id() or str(uuid.uuid4())
-    _save_session_id(session_id)
-
-    while True:
         try:
-            user_input = console.input("\n[bold cyan]You:[/bold cyan] ").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Goodbye.[/dim]")
+            ch = stdscr.get_wch()
+        except curses.error:
+            continue
+
+        if ch in (3, "\x03"):          # Ctrl-C
+            _quit.set()
             break
 
-        if not user_input:
-            continue
-
-        _ui = user_input.lower().strip()
-
-        # ── Exit ──────────────────────────────────────────────────────────
-        if _ui in _EXIT_CMDS:
-            console.print("[dim]Goodbye.[/dim]")
-            break
-
-        # ── Clear session ─────────────────────────────────────────────────
-        if _ui in _SC_CLEAR:
-            try:
-                requests.delete(f"{SERVER_URL}/sessions/{session_id}",
-                                headers=_HEADERS, timeout=10, verify=_VERIFY)
-            except Exception:
-                pass
-            session_id = str(uuid.uuid4())
-            _save_session_id(session_id)
-            console.print("[dim]Session cleared.[/dim]")
-            continue
-
-        # ── Shortcuts — bypass AI, call /execute directly ─────────────────
-        if _ui in _SC_LIST:
-            _render_shortcut_result("list_vms",    _execute("list_vms",    verbose=verbose), verbose)
-            continue
-        if _ui in _SC_SYSTEM:
-            _render_shortcut_result("check_system", _execute("check_system", verbose=verbose), verbose)
-            continue
-        if _ui in _SC_PROFILES:
-            _render_shortcut_result("list_profiles", _execute("list_profiles", verbose=verbose), verbose)
-            continue
-        if _ui in _SC_DRIFT:
-            _render_shortcut_result("check_drift", _execute("check_drift", verbose=verbose), verbose)
-            continue
-        if _ui in _SC_HELP:
-            _render_help()
-            continue
-
-        # ── kill <name> shortcut → stop_vm(force=True) ───────────────────
-        _kill_match = None
-        for _kpfx in ("kill ", "force stop ", "force kill ", "hard stop "):
-            if _ui.startswith(_kpfx):
-                _kill_match = user_input[len(_kpfx):].strip()
-                break
-        if _kill_match:
-            vm_name = _kill_match
-            _render_needs_input("confirm_yn", f"Force-kill (SIGKILL) VM: {vm_name}?", ["Yes", "Cancel"])
-            try:
-                _kill_ans = console.input("[bold cyan]You:[/bold cyan] ").strip().lower()
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[dim]Cancelled.[/dim]")
+        if ch in ("\n", "\r", curses.KEY_ENTER):
+            cmd = input_buf.strip()
+            input_buf = ""
+            if not cmd:
                 continue
-            if _kill_ans in ("y", "yes"):
-                _res = _execute("stop_vm", {"name": vm_name, "force": True}, verbose)
-                if _res.get("success"):
-                    console.print(f"[dim green]✓ {_res.get('message', f'{vm_name} stopped.')}[/dim green]")
+
+            # Pending kill confirmation
+            if _pending_kill:
+                vm = _pending_kill
+                _pending_kill = ""
+                _add(f"  You: {cmd}", _cp(C_BOLD) | curses.A_BOLD)
+                if cmd.lower() in ("y", "yes"):
+                    result = _execute("stop_vm", {"name": vm, "force": True})
+                    if result.get("success"):
+                        _add(f"  ✓ {vm} force-stopped.", _cp(C_GREEN))
+                    else:
+                        _add(f"  ✖ {result.get('error', 'failed')}", _cp(C_RED))
                 else:
-                    console.print(f"[bold red]✖[/bold red] {_res.get('error', 'Failed.')}")
-            else:
-                console.print("[dim]Cancelled.[/dim]")
-            continue
+                    _add("  Cancelled.", _cp(C_DIM))
+                continue
 
-        # ── Send to /chat (AI turn) ───────────────────────────────────────
-        result = _post_chat(user_input, session_id, verbose=verbose)
-        session_id = _handle_response(result, session_id, verbose)
+            _add(f"  You: {cmd}", _cp(C_BOLD) | curses.A_BOLD)
 
-        # ── Handle needs_input chain (loops for double-confirmation) ─────────
-        _ALL_SHORTCUTS = _SC_LIST | _SC_SYSTEM | _SC_PROFILES | _SC_DRIFT | _SC_CLEAR | _SC_HELP
-        while result.get("needs_input"):
-            ni      = result["needs_input"]
-            ni_type = ni.get("type", "clarify")
-            question = ni.get("question", "Please confirm:")
-            opts     = ni.get("options", [])
-            proposed = ni.get("proposed", "")
+            # Built-in shortcuts
+            if not _needs_confirm and _dispatch(cmd, verbose):
+                continue
 
-            _render_needs_input(ni_type, question, opts, proposed)
+            # Send to AI via HTTP worker thread
+            auto_confirm = _is_confirm if _needs_confirm else False
+            _needs_confirm = False
+            _is_confirm    = False
+            _waiting = True
+            threading.Thread(
+                target=_http_worker,
+                args=(cmd, auto_confirm, verbose),
+                daemon=True,
+            ).start()
 
-            try:
-                answer = console.input("[bold cyan]You:[/bold cyan] ").strip()
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[dim]Cancelled.[/dim]")
-                break
+        elif ch in (curses.KEY_BACKSPACE, "\x7f", 8):
+            input_buf = input_buf[:-1]
 
-            _ans_lower = answer.lower().strip()
+        elif isinstance(ch, str) and ch.isprintable():
+            input_buf += ch
 
-            # Exit commands cancel the pending action and quit
-            if _ans_lower in _EXIT_CMDS:
-                console.print("[dim]Goodbye.[/dim]")
-                return
 
-            # Shortcut commands run inline then re-ask the question
-            if _ans_lower in _ALL_SHORTCUTS:
-                if _ans_lower in _SC_LIST:
-                    _render_shortcut_result("list_vms", _execute("list_vms", verbose=verbose), verbose)
-                elif _ans_lower in _SC_SYSTEM:
-                    _render_shortcut_result("check_system", _execute("check_system", verbose=verbose), verbose)
-                elif _ans_lower in _SC_PROFILES:
-                    _render_shortcut_result("list_profiles", _execute("list_profiles", verbose=verbose), verbose)
-                elif _ans_lower in _SC_DRIFT:
-                    _render_shortcut_result("check_drift", _execute("check_drift", verbose=verbose), verbose)
-                elif _ans_lower in _SC_CLEAR:
-                    console.print("[dim]Can't clear session mid-confirmation.[/dim]")
-                elif _ans_lower in _SC_HELP:
-                    _render_help()
-                continue  # re-show the question
+# ── Public entry point ────────────────────────────────────────────────────────
 
-            if not answer or _ans_lower in ("cancel", "no", "n"):
-                console.print("[dim]Cancelled.[/dim]")
-                break
-
-            is_confirm = ni_type in ("confirm_yn", "confirm_name", "confirm_critical", "preflight")
-            result = _post_chat(answer, session_id, auto_confirm=is_confirm, verbose=verbose)
-            session_id = _handle_response(result, session_id, verbose)
+def chat_loop(verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13):
+    try:
+        curses.wrapper(lambda s: _run(s, verbose, color_hex, font_size))
+    except KeyboardInterrupt:
+        pass
