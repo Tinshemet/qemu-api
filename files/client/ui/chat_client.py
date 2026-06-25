@@ -202,7 +202,7 @@ def _handle_response(result: dict, session_id: str, verbose: bool) -> str:
     return sid
 
 
-# ── Shortcut sets (mirrors server/ai/config.json shortcut_commands) ───────────
+# ── Shortcut sets — defaults, overwritten by /sync at startup ─────────────────
 
 _SC_LIST     = {"list", "vms", "show", "show vms", "list vms", "ls", "list all",
                 "show all", "list all vms", "show all vms"}
@@ -211,6 +211,38 @@ _SC_PROFILES = {"profiles", "list profiles", "show profiles"}
 _SC_DRIFT    = {"drift", "check drift", "drift check", "drift status", "drift report"}
 _SC_CLEAR    = {"clear session", "session clear", "clear_session", "forget", "/clear"}
 _SC_HELP     = {"help", "?", "/help", "commands", "show commands"}
+
+_SYNC_ALLOWED_TOOLS: List[str] = []
+
+
+def _sync_from_server() -> bool:
+    """Fetch /sync and apply server-authoritative config. Returns True on success."""
+    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SYNC_ALLOWED_TOOLS
+    try:
+        resp = requests.get(
+            f"{SERVER_URL}/sync",
+            headers=_HEADERS, timeout=10, verify=_VERIFY,
+        )
+        if not resp.ok:
+            return False
+        data = resp.json()
+    except Exception:
+        return False
+
+    sc = data.get("shortcut_commands", {})
+    if sc.get("list"):
+        _SC_LIST     = set(sc["list"])
+    if sc.get("system"):
+        _SC_SYSTEM   = set(sc["system"])
+    if sc.get("profiles"):
+        _SC_PROFILES = set(sc["profiles"])
+    if sc.get("drift"):
+        _SC_DRIFT    = set(sc["drift"])
+    if sc.get("clear_session"):
+        _SC_CLEAR    = set(sc["clear_session"]) | {"/clear"}
+
+    _SYNC_ALLOWED_TOOLS = data.get("allowed_remote_tools", [])
+    return True
 
 
 def _execute(tool_name: str, args: dict = {}, verbose: bool = False) -> dict:
@@ -341,13 +373,15 @@ def chat_loop(verbose: bool = False):
         console.print("  → Start the server with: [bold]qemu-api-serve[/bold]")
         sys.exit(1)
 
-    # Fetch server info for the banner
+    # Fetch server info + sync authoritative config
     try:
         info_r = requests.get(f"{SERVER_URL}/info", headers=_HEADERS,
                                timeout=5, verify=_VERIFY)
         srv = info_r.json() if info_r.ok else {}
     except Exception:
         srv = {}
+
+    _sync_from_server()
 
     _print_banner(
         verbose        = verbose,

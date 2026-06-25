@@ -113,6 +113,20 @@ def info():
     }
 
 
+@app.get("/sync", dependencies=[Depends(_require_token)])
+def sync():
+    """Return server-authoritative config the client should apply at startup."""
+    ai_cfg_path = pathlib.Path(__file__).parent.parent / "ai" / "config.json"
+    try:
+        ai_cfg = json.loads(ai_cfg_path.read_text())
+    except Exception:
+        ai_cfg = {}
+    return {
+        "shortcut_commands": ai_cfg.get("shortcut_commands", {}),
+        "allowed_remote_tools": list(_ALLOWED_TOOLS),
+    }
+
+
 @app.post("/chat", dependencies=[Depends(_require_token)])
 def chat(req: ChatRequest):
     """
