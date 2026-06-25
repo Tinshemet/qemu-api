@@ -41,11 +41,11 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
             args["display"] = "vnc"
         args["vnc_bind_local"] = False
 
-    # Enforce VM allowlist for all VM-targeting tools
+    # Enforce VM allowlist — report as "not found" to avoid leaking existence
     if tool_name in _VM_TOOLS and _ALLOWED_VMS:
         vm_name = args.get("name", "")
         if vm_name not in _ALLOWED_VMS:
-            return {"success": False, "error": f"VM '{vm_name}' is not accessible to clients."}
+            return {"success": False, "error": f"VM '{vm_name}' not found."}
 
     # Filter list_vms to only show allowed VMs
     result = _execute_tool(tool_name, args, verbose)
