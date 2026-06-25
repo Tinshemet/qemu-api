@@ -186,7 +186,8 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
         pass
     try:
         stdscr.addstr(h - 1, 0,
-                      "  stop/launch/list <vm>   q=quit"[:w-1], _cp(C_DIM))
+                      "  stop/kill/launch/list/stopall <vm>   status  clearlog  shutdown  kill-server  q=quit"[:w-1],
+                      _cp(C_DIM))
     except curses.error:
         pass
 
@@ -195,27 +196,89 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
 
 # ── keyboard ──────────────────────────────────────────────────────────────────
 
+def _server_pid() -> int | None:
+    """Find the PID of the running api_server process."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", "api_server.py"], text=True
+        ).strip()
+        pids = [int(p) for p in out.splitlines() if p.strip()]
+        return pids[0] if pids else None
+    except Exception:
+        return None
+
+
 def _dispatch(cmd: str):
     global _cmd_msg
     if not cmd:
         return
+    import signal as _signal
     from shared.executioner.tool_executor import manager
     parts = cmd.split()
     verb  = parts[0].lower()
     name  = parts[1] if len(parts) > 1 else ""
     try:
+        # ── VM commands ───────────────────────────────────────────────────────
         if verb in ("stop", "kill") and name:
             r = manager.stop_vm(name, force=(verb == "kill"))
             _cmd_msg = r.get("message") or r.get("error", "done")
+
         elif verb in ("start", "launch") and name:
             r = manager.launch_vm(name)
             _cmd_msg = r.get("message") or r.get("error", "done")
+
         elif verb == "list":
             raw  = manager.list_vms()
             vms  = raw if isinstance(raw, list) else raw.get("vms", [])
-            _cmd_msg = "  ".join(v.get("name", "") for v in vms)
+            _cmd_msg = "  ".join(v.get("name", "") for v in vms) or "(none)"
+
+        elif verb == "stopall":
+            raw  = manager.list_vms()
+            vms  = raw if isinstance(raw, list) else raw.get("vms", [])
+            stopped = []
+            for v in vms:
+                if v.get("status") == "running":
+                    manager.stop_vm(v["name"])
+                    stopped.append(v["name"])
+            _cmd_msg = f"stopped: {', '.join(stopped)}" if stopped else "no running VMs"
+
+        # ── server commands ───────────────────────────────────────────────────
+        elif verb in ("shutdown", "shutdown-server"):
+            pid = _server_pid()
+            if pid:
+                os.kill(pid, _signal.SIGTERM)
+                _cmd_msg = f"sent SIGTERM to server (pid {pid})"
+            else:
+                _cmd_msg = "server process not found"
+
+        elif verb == "kill-server":
+            pid = _server_pid()
+            if pid:
+                os.kill(pid, _signal.SIGKILL)
+                _cmd_msg = f"sent SIGKILL to server (pid {pid})"
+            else:
+                _cmd_msg = "server process not found"
+
+        elif verb == "clearlog":
+            from server.event_log import _LOG_FILE
+            open(_LOG_FILE, "w").close()
+            _cmd_msg = "event log cleared"
+
+        elif verb == "status":
+            pid = _server_pid()
+            raw = manager.list_vms()
+            vms = raw if isinstance(raw, list) else raw.get("vms", [])
+            running = sum(1 for v in vms if v.get("status") == "running")
+            _cmd_msg = f"server pid={pid or '?'}  vms={len(vms)}  running={running}"
+
+        elif verb == "help":
+            _cmd_msg = ("stop/kill/launch/list <vm>  stopall  "
+                        "status  clearlog  shutdown  kill-server")
+
         else:
-            _cmd_msg = f"unknown: {cmd}"
+            _cmd_msg = f"unknown: {cmd}  (type 'help')"
+
     except Exception as e:
         _cmd_msg = str(e)[:80]
 
