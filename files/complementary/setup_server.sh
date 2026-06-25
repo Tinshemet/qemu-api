@@ -214,7 +214,17 @@ if [[ ! -f "$SERVER_CFG" ]]; then
   "verify_ssl":             true,
   "ca_cert":                "",
   "client_allowed_vms":      [],
-  "client_allowed_profiles": []
+  "client_allowed_profiles": [],
+  "allowed_remote_tools": [
+    "create_vm", "launch_vm", "stop_vm", "delete_vm", "clone_vm",
+    "list_vms", "vm_status", "monitor_vm", "show_config", "update_config",
+    "resize_disk", "check_disk", "print_command", "fingerprint_vm",
+    "snapshot_create", "snapshot_list", "snapshot_restore", "snapshot_delete",
+    "create_network", "delete_network", "list_networks", "add_vm_to_network",
+    "create_profile", "delete_profile", "list_profiles", "check_profile_compatibility",
+    "check_system", "scan_isos", "get_vm_logs", "setup_done", "generate_guest_setup",
+    "open_display", "open_shell"
+  ]
 }
 CFGEOF
     ok "Created $SERVER_CFG"
