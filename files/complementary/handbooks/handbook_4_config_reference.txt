@@ -103,7 +103,37 @@ ACCESS CONTROL ENFORCEMENT:
      AND tools not in allowed_remote_tools, for both /execute and /chat paths.
 
 ────────────────────────────────────────────────────────────────────────────────
-3. client/connection_config.json  (read by client/ui/chat_client.py)
+3. client/CLI_config.json  (read by client/client_wrapper.py → chat_loop)
+────────────────────────────────────────────────────────────────────────────────
+
+{
+  "text_color": "#aaaaaa",
+    # Hex color for body/dim text in the chat TUI (VM list, system info, hints).
+    # Applied via curses.init_color() if the terminal supports color redefinition.
+    # Falls back to gray (slot 8) if curses.can_change_color() is False.
+
+  "font_size": 13
+    # Font size hint sent as an xterm escape sequence on TUI startup:
+    #   \033]50;xft:Monospace:size=N\007
+    # Works in xterm and xterm-compatible terminals (gnome-terminal, xfce4-terminal).
+    # Silently ignored by terminals that don't support the sequence.
+}
+
+────────────────────────────────────────────────────────────────────────────────
+3a. server/admin_config.json  (read by server/admin_tui.py → _run)
+────────────────────────────────────────────────────────────────────────────────
+
+{
+  "text_color": "#aaaaaa",
+    # Hex color for body/dim text in the admin TUI (same mechanism as CLI_config).
+
+  "font_size": 13
+    # Font size hint — same xterm escape as CLI_config. Admin TUI also resizes
+    # the terminal to 52×200 columns after applying the font size.
+}
+
+────────────────────────────────────────────────────────────────────────────────
+4. client/connection_config.json  (read by client/ui/chat_client.py)
 ────────────────────────────────────────────────────────────────────────────────
 
 {
@@ -125,7 +155,7 @@ ACCESS CONTROL ENFORCEMENT:
 }
 
 ────────────────────────────────────────────────────────────────────────────────
-3. shared/executioner/config.json  (read by shared/executioner/tool_executor.py)
+5. shared/executioner/config.json  (read by shared/executioner/tool_executor.py)
 ────────────────────────────────────────────────────────────────────────────────
 
 {

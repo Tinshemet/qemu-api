@@ -80,9 +80,10 @@ PURPOSE
   The operator console; groundwork for the 1.1+ IaaS fleet management UI.
 
   Launch:  qemu-api-admin  (alias added by setup_server.sh)
+  Config:  server/admin_config.json  (text_color hex, font_size)
 
 LAYOUT (curses, differential updates — no flicker)
-  Row 0      Header bar: "qemu-api admin  uptime HH:MM:SS  vms N  events N"
+  Row 0      Header bar: uptime, VM count, event count, server PID (or "server=stopped")
   Rows 1+    VM table (name, ●/○ status, CPU, RAM, OS) — sized to terminal height
   Rows +     Event feed (time, tool, target, outcome, ms) — fills remaining space
   Last 3     Separator + command prompt + hint line
@@ -90,7 +91,8 @@ LAYOUT (curses, differential updates — no flicker)
 KEYBOARD HANDLING
   A daemon thread calls stdscr.get_wch() in blocking mode (200ms timeout).
   Characters accumulate in _cmd_buf. Enter dispatches _dispatch(). q/Esc/Ctrl-C
-  sets _quit Event which stops both threads.
+  sets _quit Event which stops both threads. "help" sets _help_mode=True; any
+  subsequent key clears it and returns to the normal dashboard.
 
 COMMANDS (entered at the command prompt)
   launch <vm>    — manager.launch_vm(name)
@@ -98,17 +100,25 @@ COMMANDS (entered at the command prompt)
   kill <vm>      — manager.stop_vm(name, force=True)
   stopall        — stop all running VMs
   list           — list VM names in _cmd_msg
+  start-server   — launch uvicorn as detached subprocess; polls for readiness
   status         — show server PID + VM counts
   clearlog       — truncate ~/.qemu_vms/events.log
   shutdown       — os.kill(server_pid, SIGTERM)
   kill-server    — os.kill(server_pid, SIGKILL)
-  help           — print all commands in _cmd_msg
+  help           — show fullscreen help overlay (any key dismisses)
+
+KEY HELPERS
+  _server_pid()    — pgrep -f "api_server" with 2s cache; finds uvicorn-hosted processes
+  _quiet()         — context manager that redirects stdout/stderr to a buffer so Rich
+                     output from manager.* calls never corrupts the curses screen
+  _hex_to_curses() — converts #RRGGBB to (r,g,b) in 0-1000 range for curses.init_color()
+  _draw_help()     — draws a centered popup window listing all commands with descriptions
 
 IMPORTANT NOTES
-  - screen=False to avoid alternate buffer flicker
-  - vertical_overflow="crop" removed in favour of curses (no Rich Live)
   - sys.path fix at module top removes files/server/ from path so stdlib
     http is not shadowed when running admin_tui.py directly
+  - All manager.* calls are wrapped in _quiet() — never let print/Rich corrupt curses
+  - curses.can_change_color() guard before curses.init_color() for terminal portability
 
 ────────────────────────────────────────────────────────────────────────────────
 server/executor_client.py
@@ -391,6 +401,104 @@ FUNCTION: extract_slots(messages)
 ────────────────────────────────────────────────────────────────────────────────
 CLIENT SIDE  (files/client/)
 ────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+client/client_wrapper.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Entry point for the `qemu-api` alias. Reads CLI_config.json, then either
+  launches the curses chat TUI (no args) or dispatches to commands.py (with args).
+
+  Flags:
+    -v                verbose mode (passed to chat_loop or run())
+
+  Config:  client/CLI_config.json — text_color (hex), font_size (int)
+
+FUNCTION: main()
+  1. Strips -v from argv; sets verbose=True if present
+  2. Loads CLI_config.json; reads text_color and font_size
+  3. If argv is non-empty → from client.cli.commands import run; run(argv, verbose)
+  4. If no args          → from client.ui.chat_client import chat_loop;
+                           chat_loop(verbose, color_hex, font_size)
+
+────────────────────────────────────────────────────────────────────────────────
+client/ui/chat_client.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Curses fullscreen AI chat TUI. Connects to the server's /chat endpoint.
+  Same visual language as admin_tui.py: header bar, scrollable content area,
+  command input at bottom. Appearance configured via client/CLI_config.json.
+
+  Entry point:  chat_loop(verbose, color_hex, font_size)
+
+LAYOUT
+  Row 0       Header: server URL, spinner (⠋⠙…) while waiting, VM list (●/○)
+  Row 1       Separator
+  Rows 2..h-5 Scrollable chat history — last N lines of _history
+  Row h-4     Separator
+  Row h-3     "> " + input buffer  (or "⟳ waiting..." when HTTP in flight)
+  Row h-2     Hint line (list / system / profiles / drift / /clear / help / q=quit)
+
+THREADING MODEL
+  Main thread: curses draw loop (100ms timeout) + keyboard input
+  Worker thread (daemon): HTTP POST to /chat; puts result in _resp_q (Queue)
+  Main loop drains _resp_q each tick; sets _waiting=False and calls _process_response()
+
+MODULE-LEVEL STATE
+  _history       list of (curses_attr, text) tuples — the visible chat log
+  _lock          threading.Lock protecting _history and _REMOTE_VMS/_REMOTE_PROFILES
+  _resp_q        queue.Queue for HTTP worker → main thread results
+  _waiting       bool — True while HTTP call is in flight (disables input, shows spinner)
+  _needs_confirm bool — True when last /chat response contained needs_input
+  _is_confirm    bool — whether the pending confirm should use auto_confirm=True
+  _pending_kill  str  — VM name waiting for "y/n" kill confirmation
+  _session_id    str  — current chat session ID (persisted to ~/.qemu_vms/.chat_session_id)
+  _REMOTE_VMS    list — VM list from last /sync
+  _REMOTE_PROFILES list — profile list from last /sync
+  _SC_LIST/SYSTEM/PROFILES/DRIFT/CLEAR  sets of shortcut trigger strings
+
+KEY FUNCTIONS
+  chat_loop(verbose, color_hex, font_size)
+    Entry point. Calls curses.wrapper(_run).
+
+  _run(stdscr, verbose, color_hex, font_size)
+    Initialises curses, applies config, calls _ensure_server() if localhost,
+    syncs from server, then runs the main event loop.
+
+  _autostart_server(stdscr) → bool
+    If SERVER_URL is localhost and /health fails: finds server files next to
+    client, launches uvicorn (start_new_session=True), polls /health up to 10s.
+    Returns True when server is ready. Logs to /tmp/qemu-api-server.log.
+
+  _sync_from_server()
+    GET /sync — populates _REMOTE_VMS, _REMOTE_PROFILES, and shortcut sets.
+
+  _dispatch(cmd, verbose) → bool
+    Handles built-in shortcuts locally (list, system, profiles, drift, /clear,
+    kill <vm>, help, exit). Returns True if handled; False means send to AI.
+
+  _process_response(result, verbose)
+    Processes a /chat response dict: updates _session_id, renders tool results
+    via _render_tool_result(), appends AI text to history, handles needs_input state.
+
+  _render_tool_result(tool, result)
+    Compact inline rendering of tool results as (attr, text) history lines:
+      list_vms     → one line per VM with ●/○, status, cpu, ram, os
+      launch_vm    → VNC line + auto-opens viewer
+      check_system → multi-line key/value table (CPU, RAM, KVM, QEMU, OVMF)
+      list_profiles → one line per profile
+      create_vm    → success line + ISO/OS mismatch warning if distros differ
+      vm_status    → status line
+      list_snapshots → one line per snapshot
+
+  _iso_distro_hint(iso_name) → str
+    Extracts distro name from ISO filename (kali, ubuntu, windows, etc.) for
+    mismatch detection after create_vm.
+
+  _init_colours(color_hex)
+    Initialises curses color pairs. Uses curses.init_color() for the dim/body
+    text pair if curses.can_change_color() is True; falls back to color slot 8
+    (gray) otherwise.
 
 ────────────────────────────────────────────────────────────────────────────────
 server/http/api_server.py

@@ -195,14 +195,16 @@ files/
 │   ├── executor_client.py           Re-exports shared.executioner.execute_tool (always local)
 │   ├── event_log.py                 Structured event log (JSON-lines, 10 MB rotation → ~/.qemu_vms/events.log)
 │   ├── admin_tui.py                 Curses fullscreen server admin TUI (qemu-api-admin)
+│   ├── admin_config.json            Admin TUI appearance (text_color hex, font_size)
 │   └── connection_config.json       Server connection settings (url, token, timeout)
 │
 ├── client/                          User's laptop (thin UI)
 │   ├── ui/
-│   │   └── chat_client.py           Rich chat UI — POSTs to server /chat endpoint
+│   │   └── chat_client.py           Curses fullscreen chat TUI — POSTs to server /chat endpoint
 │   ├── cli/
 │   │   └── commands.py              Direct local QEMU commands (no AI)
-│   ├── client_wrapper.py            Entry point: chat UI or local commands
+│   ├── client_wrapper.py            Entry point: chat UI or local commands; reads CLI_config.json
+│   ├── CLI_config.json              Client TUI appearance (text_color hex, font_size)
 │   └── connection_config.json       Client settings (server_url, token, ca_cert)
 │
 ├── shared/                          Used by both server and client
@@ -933,6 +935,43 @@ For TLS direct (no SSH): generate certs with openssl, forward port 8443 on route
 
 ---
 
+## Chat Client TUI
+
+The client runs as a fullscreen curses TUI (same visual style as the admin TUI):
+
+- **Header bar** — server URL, live spinner while waiting, remote VMs (●/○)
+- **Scrollable chat area** — AI responses, tool results, your messages
+- **Command input** — bottom row; built-in shortcuts bypass the AI
+
+**Auto-start (localhost only):** if the server is not running when you launch `qemu-api`, the client detects this and starts it automatically in the background. No second terminal needed.
+
+### Client shortcuts
+
+| Input | Action |
+|---|---|
+| `list` / `vms` | List VMs (calls `/execute` directly) |
+| `system` | Host capabilities |
+| `profiles` | Hardware profiles |
+| `drift` | Configuration drift check |
+| `/clear` | Wipe conversation history |
+| `kill <vm>` | Force-kill a VM (asks confirmation) |
+| `help` / `?` | Show shortcuts |
+| `q` / `quit` / `bye` | Exit |
+
+### Client appearance
+
+Edit `files/client/CLI_config.json`:
+```json
+{
+  "text_color": "#aaaaaa",
+  "font_size": 13
+}
+```
+
+`text_color` is any hex color. `font_size` is applied via an xterm escape sequence on startup (works in xterm-compatible terminals; silently ignored elsewhere).
+
+---
+
 ## Server Monitoring (Admin TUI)
 
 The server ships with a fullscreen curses-based admin TUI, available only on the server machine.
@@ -942,9 +981,10 @@ qemu-api-admin
 ```
 
 Displays a live dashboard (refreshes every second):
+- **Header bar** — uptime, VM count, event count, server PID
 - **VM table** — name, status (●/○), CPU, RAM, OS
 - **Event feed** — timestamped log of every tool call with outcome and duration
-- **Command line** — type commands directly
+- **Command line** — type commands directly; `help` shows a full overlay
 
 ### Admin Commands
 
@@ -955,12 +995,23 @@ Displays a live dashboard (refreshes every second):
 | `kill <vm>` | Force-kill (SIGKILL) |
 | `stopall` | Stop all running VMs |
 | `list` | Print all VM names in the status line |
+| `start-server` | Start the API server (uvicorn, background) |
 | `status` | Show server PID, VM count, running count |
 | `clearlog` | Wipe the event log |
 | `shutdown` | Send SIGTERM to the api_server process |
 | `kill-server` | Send SIGKILL to the api_server process |
-| `help` | Show all commands |
+| `help` | Show all commands (overlay, any key dismisses) |
 | `q` / Esc / Ctrl-C | Quit the TUI |
+
+### Admin appearance
+
+Edit `files/server/admin_config.json`:
+```json
+{
+  "text_color": "#aaaaaa",
+  "font_size": 13
+}
+```
 
 > The admin TUI is **server-only**. It is not present in the client sparse checkout and has no `--remote` mode.
 

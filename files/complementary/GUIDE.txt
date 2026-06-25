@@ -19,14 +19,16 @@ FILES IN THIS PROJECT
     executor_client.py         Re-export of shared.executioner.execute_tool; enforces access control
     event_log.py               JSON-lines event log (10 MB rotation → ~/.qemu_vms/events.log)
     admin_tui.py               Curses fullscreen admin dashboard (qemu-api-admin, server-only)
+    admin_config.json          Admin TUI appearance settings (text_color hex, font_size)
     connection_config.json     Server-side connection settings (url, token, timeout)
 
   client/                      User's laptop code (thin chat UI)
     ui/
-      chat_client.py           Rich chat client — POSTs to server /chat endpoint
+      chat_client.py           Curses fullscreen chat TUI — POSTs to server /chat endpoint
     cli/
       commands.py              Direct local QEMU commands (no AI, for fetched VMs)
-    client_wrapper.py          Entry point — chat UI or local commands
+    client_wrapper.py          Entry point — reads CLI_config.json, starts chat or direct CLI
+    CLI_config.json            Client TUI appearance settings (text_color hex, font_size)
     connection_config.json     Client settings (server_url, token, ca_cert)
 
   shared/                      Code used by both server and client
@@ -1838,7 +1840,41 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
     GET /events?limit=100                       ← last 100 events
     GET /events?since=2026-06-25T18:00:00       ← events after a timestamp
 
-15.2  ADMIN TUI  (server/admin_tui.py)
+15.2  CHAT CLIENT TUI  (client/ui/chat_client.py)
+─────────────────────────────────────────────────
+  A curses fullscreen TUI — same visual language as the admin TUI.
+
+  Layout:
+    Header bar     — server URL, live spinner (⠋⠙…) while waiting, VM summary (●/○)
+    Chat area      — scrollable; shows AI responses, tool results, your messages
+    Input line     — "> " prompt at bottom
+    Hint line      — shortcut reminder
+
+  Built-in shortcuts (bypass the AI, call /execute directly):
+    list / vms       List all VMs
+    system           Host capabilities (KVM, CPU, RAM, QEMU version, OVMF)
+    profiles         Hardware profiles
+    drift            Configuration drift check
+    kill <vm>        Force-kill a VM (asks confirmation)
+    /clear           Wipe conversation history
+    help / ?         Show shortcuts inline
+    q / quit / bye   Exit
+
+  Auto-start (localhost only):
+    On startup, the client checks if the server is reachable. If not, and if
+    the server files exist alongside the client (single-machine setup), it
+    launches uvicorn automatically as a background process and polls /health
+    until ready. Server logs go to /tmp/qemu-api-server.log.
+
+  Appearance (client/CLI_config.json):
+    text_color   Hex color for body text, e.g. "#7355a3"
+    font_size    Terminal font size hint, applied via xterm escape on startup
+
+  ISO/OS mismatch detection:
+    After create_vm, if the attached ISO filename implies a different distro
+    than the declared os_name, a ⚠ warning is shown with a fix suggestion.
+
+15.3  ADMIN TUI  (server/admin_tui.py)
 ───────────────────────────────────────
   A curses-based fullscreen admin dashboard. Server-only — not in the
   client sparse checkout, no alias added by setup_client.sh.
@@ -1847,7 +1883,7 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
     qemu-api-admin
 
   The terminal auto-resizes to 52×200. Dashboard layout:
-    Header bar     — uptime, VM count, event count
+    Header bar     — uptime, VM count, event count, server PID (or "server=stopped")
     VM table       — name, status (●=running / ○=stopped), CPU, RAM, OS
     Event feed     — timestamp, tool, target VM, outcome, duration (ms)
     Command line   — type and press Enter
@@ -1858,15 +1894,23 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
     kill <vm>         Force-kill (SIGKILL)
     stopall           Stop all running VMs
     list              Print VM names in status line
+    start-server      Launch the API server (uvicorn, background, logs → /tmp/qemu-api-server.log)
     status            Show server PID, VM count, running count
     clearlog          Wipe the event log
     shutdown          Send SIGTERM to the api_server process
     kill-server       Send SIGKILL to the api_server process
-    help              Show all commands
+    help              Show full help overlay (any key dismisses)
     q / Esc / Ctrl-C  Quit
+
+  All manager.* calls are wrapped in a stdout suppressor (_quiet()) so Rich
+  output from the tool layer never corrupts the curses screen.
 
   The TUI calls the tool executor and event log directly (no HTTP, no token).
   This is the server operator console and the groundwork for the IaaS fleet
   management console planned for 1.1+.
+
+  Appearance (server/admin_config.json):
+    text_color   Hex color for body text, e.g. "#aaaaaa"
+    font_size    Terminal font size hint, applied via xterm escape on startup
 
 ================================================================================
