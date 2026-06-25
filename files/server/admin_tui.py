@@ -1,20 +1,14 @@
 """
 admin_tui.py — Real-time server admin CLI (TUI)
 
-Shows a live dashboard with:
-  - VM table (name, status, CPU cores, RAM)
-  - Recent event feed (tool calls, outcomes, durations)
-  - Command input line at the bottom
-
-Usage:
-  qemu-api-admin
+Fullscreen dashboard: VM table, event feed, command prompt.
+Run on the server: qemu-api-admin
 """
 
 import sys
 import os
 
-# Running this file directly adds files/server/ to sys.path, which makes
-# files/server/http/ shadow the stdlib http module. Remove it.
+# Prevent files/server/http/ from shadowing stdlib http
 _here = os.path.dirname(os.path.abspath(__file__))
 if _here in sys.path:
     sys.path.remove(_here)
@@ -26,40 +20,38 @@ import time
 import tty
 
 from rich.console import Console
-from rich.layout import Layout
-from rich.live import Live
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
+from rich.live   import Live
+from rich.panel  import Panel
+from rich.table  import Table
+from rich.text   import Text
+from rich        import box as rbox
 
-_REFRESH = 1  # seconds between updates
+_REFRESH = 1
 
+# ── keyboard ──────────────────────────────────────────────────────────────────
 
-# ── keyboard input ────────────────────────────────────────────────────────────
-
-_cmd_buf   = ""
-_cmd_msg   = ""   # feedback line after executing a command
-_quit      = threading.Event()
+_cmd_buf = ""
+_cmd_msg = ""
+_quit    = threading.Event()
 
 
 def _read_keys():
-    """Background thread: read keypresses without blocking the Live loop."""
     global _cmd_buf, _cmd_msg
-    fd   = sys.stdin.fileno()
-    old  = termios.tcgetattr(fd)
+    fd  = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
         while not _quit.is_set():
             if select.select([sys.stdin], [], [], 0.1)[0]:
                 ch = sys.stdin.read(1)
-                if ch in ("\x03", "\x1b"):   # Ctrl-C or Escape
+                if ch in ("\x03", "\x1b"):
                     _quit.set()
                 elif ch == "q" and not _cmd_buf:
                     _quit.set()
                 elif ch in ("\r", "\n"):
                     _dispatch(_cmd_buf.strip())
                     _cmd_buf = ""
-                elif ch == "\x7f":           # backspace
+                elif ch == "\x7f":
                     _cmd_buf = _cmd_buf[:-1]
                 else:
                     _cmd_buf += ch
@@ -68,7 +60,6 @@ def _read_keys():
 
 
 def _dispatch(cmd: str):
-    """Execute a typed command."""
     global _cmd_msg
     if not cmd:
         return
@@ -84,94 +75,77 @@ def _dispatch(cmd: str):
             r = manager.launch_vm(name)
             _cmd_msg = r.get("message") or r.get("error", "")
         elif verb == "list":
-            raw = manager.list_vms()
-            vms = raw if isinstance(raw, list) else raw.get("vms", [])
+            raw  = manager.list_vms()
+            vms  = raw if isinstance(raw, list) else raw.get("vms", [])
             _cmd_msg = "  ".join(v.get("name", "") for v in vms)
         else:
-            _cmd_msg = f"unknown command: {cmd}  (stop/launch/list <vm>)"
+            _cmd_msg = f"unknown: {cmd}  (stop/launch/list <vm>)"
     except Exception as e:
         _cmd_msg = str(e)
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
 
-def _vm_table(vms: list) -> Table:
-    t = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    t.add_column("VM",     style="bold white", no_wrap=True)
-    t.add_column("Status", no_wrap=True)
-    t.add_column("CPU",    justify="right")
-    t.add_column("RAM",    justify="right")
-    t.add_column("OS",     style="dim")
-    for v in vms:
+def _render(vms: list, events: list, uptime_s: float, height: int) -> Table:
+    uptime = f"{int(uptime_s//3600):02d}:{int((uptime_s%3600)//60):02d}:{int(uptime_s%60):02d}"
+
+    # ── VM table ──────────────────────────────────────────────────────────────
+    vm_t = Table(show_header=True, header_style="bold cyan",
+                 box=rbox.SIMPLE, padding=(0, 1), expand=True)
+    vm_t.add_column("VM",     style="bold white", no_wrap=True)
+    vm_t.add_column("Status", no_wrap=True)
+    vm_t.add_column("CPU",  justify="right")
+    vm_t.add_column("RAM",  justify="right")
+    vm_t.add_column("OS",   style="dim")
+    max_vms = max(2, (height - 18) // 3)
+    for v in vms[:max_vms]:
         status = v.get("status", "?")
-        color  = "green" if status == "running" else "dim"
         dot    = "●" if status == "running" else "○"
-        t.add_row(
-            v.get("name", "?"),
+        color  = "green" if status == "running" else "dim"
+        vm_t.add_row(
+            v.get("name", ""),
             Text(f"{dot} {status}", style=color),
-            str(v.get("cpu_cores", "?")),
-            f"{v.get('memory_mb', 0) // 1024}GB",
+            str(v.get("cpu_cores", "")),
+            f"{v.get('memory_mb',0)//1024}GB",
             v.get("os", ""),
         )
-    return t
 
-
-def _event_table(events: list) -> Table:
-    t = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    t.add_column("Time",    style="dim",       no_wrap=True)
-    t.add_column("Tool",    style="bold white", no_wrap=True)
-    t.add_column("Target",  style="cyan",       no_wrap=True)
-    t.add_column("Outcome", no_wrap=True)
-    t.add_column("ms",      justify="right", style="dim")
-    for e in reversed(events[-20:]):
+    # ── event table ───────────────────────────────────────────────────────────
+    ev_t = Table(show_header=True, header_style="bold cyan",
+                 box=rbox.SIMPLE, padding=(0, 1), expand=True)
+    ev_t.add_column("Time",   style="dim",        no_wrap=True)
+    ev_t.add_column("Tool",   style="bold white",  no_wrap=True)
+    ev_t.add_column("Target", style="cyan",        no_wrap=True)
+    ev_t.add_column("Result", no_wrap=True)
+    ev_t.add_column("ms",     justify="right", style="dim")
+    max_ev = max(2, height - 18 - max_vms)
+    for e in events[-max_ev:]:
         ts      = e.get("ts", "")[:19].replace("T", " ")
-        tool    = e.get("tool", "")
-        args    = e.get("args", {})
         outcome = e.get("outcome", "")
-        ms      = str(int(e.get("duration_ms", 0)))
-        target  = args.get("name") or args.get("profile") or args.get("network") or ""
         color   = "green" if outcome == "ok" else ("yellow" if outcome == "already_running" else "red")
-        t.add_row(ts, tool, target, Text(outcome, style=color), ms)
-    return t
+        args    = e.get("args", {})
+        target  = args.get("name") or args.get("profile") or ""
+        ev_t.add_row(ts, e.get("tool",""), target, Text(outcome, style=color),
+                     str(int(e.get("duration_ms", 0))))
 
-
-def _build_layout(vms: list, events: list, uptime_s: float, term_height: int = 40) -> Layout:
-    global _cmd_buf, _cmd_msg
-
-    # fixed rows: header=3, cmdline=3, borders/padding≈4
-    body_height = max(6, term_height - 10)
-    # limit rows in tables to what fits (2 for panel border + 1 header row)
-    max_rows    = max(2, body_height - 3)
-    event_rows  = max(2, max_rows - min(len(vms), max_rows // 3))
-
-    layout = Layout()
-    layout.split_column(
-        Layout(name="header",  size=3),
-        Layout(name="body",    size=body_height),
-        Layout(name="cmdline", size=3),
-    )
-    layout["body"].split_row(
-        Layout(name="vms",    ratio=2),
-        Layout(name="events", ratio=3),
-    )
-
-    uptime = f"{int(uptime_s // 3600):02d}:{int((uptime_s % 3600) // 60):02d}:{int(uptime_s % 60):02d}"
-    layout["header"].update(Panel(
-        f"[bold cyan]qemu-api server admin[/bold cyan]   uptime [dim]{uptime}[/dim]   "
-        f"events [dim]{len(events)}[/dim]   vms [dim]{len(vms)}[/dim]",
-        style="bold", border_style="cyan",
-    ))
-    layout["vms"].update(Panel(_vm_table(vms[:max_rows]),              title="[bold]VMs[/bold]",           border_style="dim"))
-    layout["events"].update(Panel(_event_table(events[-event_rows:]),  title="[bold]Recent Events[/bold]", border_style="dim"))
-
+    # ── compose ───────────────────────────────────────────────────────────────
     prompt   = f"[bold cyan]>[/bold cyan] {_cmd_buf}[blink]▌[/blink]"
-    feedback = f"\n[dim]{_cmd_msg}[/dim]" if _cmd_msg else ""
-    layout["cmdline"].update(Panel(
+    feedback = f"  [dim]{_cmd_msg}[/dim]" if _cmd_msg else ""
+
+    outer = Table.grid(expand=True)
+    outer.add_row(Panel(
+        f"[bold cyan]qemu-api admin[/bold cyan]   uptime [dim]{uptime}[/dim]   "
+        f"vms [dim]{len(vms)}[/dim]   events [dim]{len(events)}[/dim]",
+        border_style="cyan",
+    ))
+    outer.add_row(Panel(vm_t,  title="[bold]VMs[/bold]",           border_style="dim"))
+    outer.add_row(Panel(ev_t,  title="[bold]Recent Events[/bold]", border_style="dim"))
+    outer.add_row(Panel(
         Text.from_markup(prompt + feedback),
         title="[dim]stop/launch/list <vm>   q=quit[/dim]",
         border_style="dim",
     ))
-    return layout
+    return outer
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -183,10 +157,8 @@ def _run_local():
     start   = time.monotonic()
     console = Console()
 
-    # Only enable raw keyboard if stdin is a real terminal
     if sys.stdin.isatty():
-        key_thread = threading.Thread(target=_read_keys, daemon=True)
-        key_thread.start()
+        threading.Thread(target=_read_keys, daemon=True).start()
 
     try:
         with Live(console=console, refresh_per_second=2, screen=True) as live:
@@ -198,7 +170,7 @@ def _run_local():
                     vms = []
                 events = read_events(limit=200)
                 uptime = time.monotonic() - start
-                live.update(_build_layout(vms, events, uptime, console.size.height))
+                live.update(_render(vms, events, uptime, console.size.height))
                 time.sleep(_REFRESH)
     except Exception as e:
         print(f"\n[admin_tui error] {e}", file=sys.stderr)
