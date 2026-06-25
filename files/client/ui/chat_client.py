@@ -212,9 +212,9 @@ _SC_DRIFT    = {"drift", "check drift", "drift check", "drift status", "drift re
 _SC_CLEAR    = {"clear session", "session clear", "clear_session", "forget", "/clear"}
 _SC_HELP     = {"help", "?", "/help", "commands", "show commands"}
 
-_SYNC_ALLOWED_TOOLS: List[str] = []
-_REMOTE_VMS:        List[dict] = []
-_REMOTE_PROFILES:   List[str]  = []
+_SYNC_ALLOWED_TOOLS: list = []
+_REMOTE_VMS:        list = []
+_REMOTE_PROFILES:   list = []
 
 
 def _sync_from_server() -> bool:

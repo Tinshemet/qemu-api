@@ -28,7 +28,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-_REFRESH = 2  # seconds between updates
+_REFRESH = 1  # seconds between updates
 
 
 def _vm_table(vms: list) -> Table:
