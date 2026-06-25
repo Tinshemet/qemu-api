@@ -203,6 +203,25 @@ else
     ok "Model '$OLLAMA_MODEL' ready"
 fi
 
+# ── Server connection config (create if missing) ─────────────────────────────
+SERVER_CFG="$FILES_DIR/server/connection_config.json"
+if [[ ! -f "$SERVER_CFG" ]]; then
+    cat > "$SERVER_CFG" << CFGEOF
+{
+  "url":                    "local",
+  "token":                  "",
+  "timeout":                120,
+  "verify_ssl":             true,
+  "ca_cert":                "",
+  "client_allowed_vms":      [],
+  "client_allowed_profiles": []
+}
+CFGEOF
+    ok "Created $SERVER_CFG"
+else
+    ok "$SERVER_CFG already exists — skipping"
+fi
+
 # Write model choice into config so the server reads it without env vars
 AI_CFG="$FILES_DIR/server/ai/config.json"
 if [[ -f "$AI_CFG" ]]; then
