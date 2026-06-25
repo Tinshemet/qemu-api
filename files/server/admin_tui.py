@@ -11,13 +11,7 @@ Usage:
   qemu-api-admin --remote         # pull events from server via /events API
 """
 
-import argparse
-import json
-import os
-import sys
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 
 from rich.console import Console
 from rich.layout import Layout
@@ -113,46 +107,8 @@ def _run_local():
             time.sleep(_REFRESH)
 
 
-def _run_remote(server_url: str, token: str, verify: bool = True):
-    import requests
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    start   = time.monotonic()
-    console = Console()
-
-    with Live(console=console, refresh_per_second=1, screen=True) as live:
-        while True:
-            try:
-                vms_r    = requests.post(f"{server_url}/execute",
-                                         headers=headers, json={"tool_name": "list_vms", "args": {}},
-                                         timeout=5, verify=verify)
-                raw      = vms_r.json().get("result", []) if vms_r.ok else []
-                vms      = raw if isinstance(raw, list) else raw.get("vms", [])
-                events_r = requests.get(f"{server_url}/events?limit=200",
-                                        headers=headers, timeout=5, verify=verify)
-                events   = events_r.json().get("events", []) if events_r.ok else []
-            except Exception:
-                vms, events = [], []
-            uptime = time.monotonic() - start
-            live.update(_build_layout(vms, events, uptime))
-            time.sleep(_REFRESH)
-
-
 def main():
-    parser = argparse.ArgumentParser(description="qemu-api server admin TUI")
-    parser.add_argument("--remote", action="store_true", help="Pull data from server API instead of local")
-    args = parser.parse_args()
-
-    if args.remote:
-        cfg_path = Path(__file__).parent.parent / "client" / "connection_config.json"
-        try:
-            cfg = json.loads(cfg_path.read_text())
-        except Exception:
-            cfg = {}
-        server_url = os.environ.get("SERVER_URL", cfg.get("server_url", "http://localhost:8080"))
-        token      = os.environ.get("API_TOKEN",  cfg.get("token", ""))
-        _run_remote(server_url, token)
-    else:
-        _run_local()
+    _run_local()
 
 
 if __name__ == "__main__":
