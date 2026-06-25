@@ -157,6 +157,11 @@ def _run_local():
     from server.event_log import read_events
     from shared.executioner.tool_executor import manager
 
+    # Request terminal resize to minimum comfortable size
+    sys.stdout.write("\033[8;52;200t")
+    sys.stdout.flush()
+    time.sleep(0.1)  # give the terminal time to resize before measuring
+
     start   = time.monotonic()
     console = Console()
 
