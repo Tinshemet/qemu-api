@@ -412,6 +412,11 @@ def execute(req: ExecuteRequest):
         result = execute_tool(req.tool_name, args, req.verbose)
         if action == "auto_fix" and isinstance(result, dict):
             result["_preflight_auto_fixed"] = pf.get("correction", "Pre-flight corrected args.")
+        # Filter list_vms results to only show allowed VMs
+        if req.tool_name == "list_vms" and _ALLOWED_VMS and isinstance(result, list):
+            result = [v for v in result if v.get("name") in _ALLOWED_VMS]
+        elif req.tool_name == "list_vms" and _ALLOWED_VMS and isinstance(result, dict) and "vms" in result:
+            result["vms"] = [v for v in result["vms"] if v.get("name") in _ALLOWED_VMS]
         return {"ok": True, "result": result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
