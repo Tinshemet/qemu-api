@@ -141,7 +141,8 @@ def sync():
         ai_cfg = {}
 
     try:
-        vms = _mgr.list_vms().get("vms", [])
+        raw = _mgr.list_vms()
+        vms = raw if isinstance(raw, list) else raw.get("vms", [])
     except Exception:
         vms = []
 
