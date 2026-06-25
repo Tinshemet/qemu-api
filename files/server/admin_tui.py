@@ -173,23 +173,29 @@ def _run_local():
     from server.event_log import read_events
     from shared.executioner.tool_executor import manager
 
-    start  = time.monotonic()
+    start   = time.monotonic()
     console = Console()
 
-    key_thread = threading.Thread(target=_read_keys, daemon=True)
-    key_thread.start()
+    # Only enable raw keyboard if stdin is a real terminal
+    if sys.stdin.isatty():
+        key_thread = threading.Thread(target=_read_keys, daemon=True)
+        key_thread.start()
 
-    with Live(console=console, refresh_per_second=2, screen=True) as live:
-        while not _quit.is_set():
-            try:
-                raw = manager.list_vms()
-                vms = raw if isinstance(raw, list) else raw.get("vms", [])
-            except Exception:
-                vms = []
-            events = read_events(limit=200)
-            uptime = time.monotonic() - start
-            live.update(_build_layout(vms, events, uptime))
-            time.sleep(_REFRESH)
+    try:
+        with Live(console=console, refresh_per_second=2, screen=True) as live:
+            while not _quit.is_set():
+                try:
+                    raw = manager.list_vms()
+                    vms = raw if isinstance(raw, list) else raw.get("vms", [])
+                except Exception:
+                    vms = []
+                events = read_events(limit=200)
+                uptime = time.monotonic() - start
+                live.update(_build_layout(vms, events, uptime))
+                time.sleep(_REFRESH)
+    except Exception as e:
+        print(f"\n[admin_tui error] {e}", file=sys.stderr)
+        import traceback; traceback.print_exc()
 
 
 def main():
