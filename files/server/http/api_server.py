@@ -128,6 +128,13 @@ def info():
     }
 
 
+@app.get("/events", dependencies=[Depends(_require_token)])
+def get_events(limit: int = 100, since: str = ""):
+    """Return recent server events (tool calls, outcomes, durations)."""
+    from server.event_log import read_events
+    return {"events": read_events(limit=limit, since=since)}
+
+
 @app.get("/sync", dependencies=[Depends(_require_token)])
 def sync():
     """Return server-authoritative config the client should apply at startup."""

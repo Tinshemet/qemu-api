@@ -352,6 +352,7 @@ source "$VENV_DIR/bin/activate"
 export PATH="\$HOME/.local/bin:\$PATH"
 alias qemu-api-serve='$START_SCRIPT'
 alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
+alias qemu-api-admin='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/server/admin_tui.py'
 # qemu-api server end
 SHELLEOF
 
