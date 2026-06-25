@@ -29,7 +29,22 @@ from typing import Any, Dict, Iterator, List, Optional
 # ── Config ────────────────────────────────────────────────────────────────────
 _CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 _CFG      = json.load(open(_CFG_PATH))
-_ALLOWED_TOOLS: set = set(_CFG.get("allowed_remote_tools", []))
+_ALLOWED_TOOLS:    set  = set(_CFG.get("allowed_remote_tools", []))
+# Empty list = all allowed; non-empty = allowlist
+_ALLOWED_VMS:      list = _CFG.get("client_allowed_vms",      [])
+_ALLOWED_PROFILES: list = _CFG.get("client_allowed_profiles", [])
+
+
+def _filter_allowed(names: list, allowlist: list) -> list:
+    """Return names visible to clients. Empty allowlist means all are visible."""
+    if not allowlist:
+        return names
+    return [n for n in names if n in allowlist]
+
+
+def _check_vm_allowed(vm_name: str):
+    if _ALLOWED_VMS and vm_name not in _ALLOWED_VMS:
+        raise HTTPException(status_code=403, detail=f"VM '{vm_name}' is not accessible to clients.")
 
 # ── Token bootstrap ───────────────────────────────────────────────────────────
 # Precedence: env var → ~/.qemu-api.token file → refuse to start.
@@ -135,11 +150,15 @@ def sync():
     except Exception:
         profiles = []
 
+    vm_names      = [v.get("name") for v in vms]
+    profile_names = [p.get("name") if isinstance(p, dict) else p for p in profiles]
+
     return {
-        "shortcut_commands":   ai_cfg.get("shortcut_commands", {}),
+        "shortcut_commands":    ai_cfg.get("shortcut_commands", {}),
         "allowed_remote_tools": list(_ALLOWED_TOOLS),
-        "vms":      [{"name": v.get("name"), "status": v.get("status")} for v in vms],
-        "profiles": [p.get("name") if isinstance(p, dict) else p for p in profiles],
+        "vms":      [{"name": n, "status": next((v.get("status") for v in vms if v.get("name") == n), None)}
+                     for n in _filter_allowed(vm_names, _ALLOWED_VMS)],
+        "profiles": _filter_allowed(profile_names, _ALLOWED_PROFILES),
     }
 
 
@@ -330,6 +349,13 @@ def execute(req: ExecuteRequest):
             detail=f"Tool '{req.tool_name}' is not in the remote allowlist. "
                    f"Add it to executor.allowed_remote_tools in config.json if intentional.",
         )
+
+    # ── VM access control ─────────────────────────────────────────────────────
+    _VM_TOOLS = {"launch_vm", "stop_vm", "delete_vm", "clone_vm", "resize_disk",
+                 "vm_status", "create_snapshot", "restore_snapshot", "delete_snapshot",
+                 "list_snapshots", "show_qemu_cmd", "setup_done", "generate_guest_setup"}
+    if req.tool_name in _VM_TOOLS:
+        _check_vm_allowed(req.args.get("name", ""))
 
     # ── Server-side preflight (authoritative — uses real VM/disk state) ──────
     pf     = _preflight_check(req.tool_name, req.args, manager, req.verbose)
