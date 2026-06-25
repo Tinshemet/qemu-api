@@ -27,6 +27,7 @@ _VM_TOOLS = {"launch_vm", "stop_vm", "delete_vm", "clone_vm", "resize_disk",
              "list_snapshots", "show_qemu_cmd", "setup_done", "generate_guest_setup"}
 
 from shared.executioner.tool_executor import execute_tool as _execute_tool  # noqa: E402
+from server.event_log import log_event as _log_event                        # noqa: E402
 
 
 _LOCAL_ONLY_DISPLAYS = {"sdl", "gtk"}
@@ -48,7 +49,11 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
             return {"success": False, "error": f"VM '{vm_name}' not found."}
 
     # Filter list_vms to only show allowed VMs
+    import time as _time
+    _t0 = _time.monotonic()
     result = _execute_tool(tool_name, args, verbose)
+    _log_event(tool_name, args, result, (_time.monotonic() - _t0) * 1000)
+
     if tool_name == "list_vms" and _ALLOWED_VMS:
         if isinstance(result, list):
             result = [v for v in result if v.get("name") in _ALLOWED_VMS]
