@@ -163,10 +163,11 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
         else:
             res_color = _cp(C_RED)
 
+        outcome_s = outcome[:27]
         try:
             stdscr.addstr(row, 2, f"{ts:<20} {tool:<24} {target:<15} ", _cp(C_NORMAL))
-            stdscr.addstr(row, 2 + 20 + 1 + 24 + 1 + 15 + 1, f"{outcome:<28}", res_color)
-            stdscr.addstr(row, 2 + 20 + 1 + 24 + 1 + 15 + 1 + 29, f"{ms:>6}", _cp(C_DIM))
+            stdscr.addstr(row, 64, f"{outcome_s:<28}", res_color)
+            stdscr.addstr(row, 93, f"{ms:>6}", _cp(C_DIM))
         except curses.error:
             pass
         row += 1
