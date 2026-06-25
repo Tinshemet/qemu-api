@@ -15,8 +15,10 @@ FILES IN THIS PROJECT
       context_assistant_config.json  Context assistant message templates
       tools.json               Tool metadata and descriptions
     http/
-      api_server.py            FastAPI server — /chat, /execute, /health, /images, /rotate-token
-    executor_client.py         Re-export of shared.executioner.execute_tool (always local)
+      api_server.py            FastAPI server — /chat, /execute, /health, /images, /events, /rotate-token
+    executor_client.py         Re-export of shared.executioner.execute_tool; enforces access control
+    event_log.py               JSON-lines event log (10 MB rotation → ~/.qemu_vms/events.log)
+    admin_tui.py               Curses fullscreen admin dashboard (qemu-api-admin, server-only)
     connection_config.json     Server-side connection settings (url, token, timeout)
 
   client/                      User's laptop code (thin chat UI)
@@ -437,6 +439,12 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
     Body: {"new_token": str}   (must be ≥ 16 characters)
     Replaces the in-memory token and persists to ~/.qemu-api.token.
     Auth required.
+
+  GET  /events (auth required)
+    Query params: limit (int, default 100), since (ISO timestamp, optional)
+    Returns a JSON array of recent event log entries, newest last.
+    Each entry: {ts, tool, args, outcome, duration_ms}
+    The same data the admin TUI displays in its Recent Events panel.
 
 3.9  TOOL ALLOWLIST
 ─────────────────────
@@ -1079,6 +1087,7 @@ SECTION 11 — DIRECTORY STRUCTURE
   ~/.qemu_vms/
   ├── .state.json          Running PID tracking (survives terminal restart)
   ├── .session.json        AI conversation history (last 40 messages)
+  ├── events.log           JSON-lines event log (every tool call; 10 MB rotation)
   ├── _profiles/           Custom hardware profiles
   │   └── my-profile.json
   ├── _networks/           Isolated network definitions
@@ -1801,5 +1810,63 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
     Or sign up for a free hostname at no-ip.com or duckdns.org.
     Then use the hostname instead of the raw IP:
       ssh -N -L 8080:127.0.0.1:8080 friendusername@friend.duckdns.org
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 15 — SERVER MONITORING & ADMIN TUI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+15.1  EVENT LOG  (server/event_log.py)
+───────────────────────────────────────
+  Every tool call executed on the server is appended to:
+    ~/.qemu_vms/events.log
+
+  Format: one JSON object per line:
+    {"ts": "2026-06-25T18:20:22", "tool": "create_vm",
+     "args": {"name": "test2", "os_type": "linux"},
+     "outcome": "ok", "duration_ms": 27}
+
+  outcome values:
+    ok                   — tool completed successfully
+    error: <message>     — tool returned an error
+    already_running      — launch_vm called on a running VM
+    not_found            — VM targeted but not in allowed list (opsec)
+
+  The log rotates at 10 MB (old file renamed to events.log.1).
+  Server-local only — clients cannot write to it.
+
+  Queryable via API:
+    GET /events?limit=100                       ← last 100 events
+    GET /events?since=2026-06-25T18:00:00       ← events after a timestamp
+
+15.2  ADMIN TUI  (server/admin_tui.py)
+───────────────────────────────────────
+  A curses-based fullscreen admin dashboard. Server-only — not in the
+  client sparse checkout, no alias added by setup_client.sh.
+
+  Launch:
+    qemu-api-admin
+
+  The terminal auto-resizes to 52×200. Dashboard layout:
+    Header bar     — uptime, VM count, event count
+    VM table       — name, status (●=running / ○=stopped), CPU, RAM, OS
+    Event feed     — timestamp, tool, target VM, outcome, duration (ms)
+    Command line   — type and press Enter
+
+  Commands:
+    launch <vm>       Start a VM
+    stop <vm>         Graceful stop
+    kill <vm>         Force-kill (SIGKILL)
+    stopall           Stop all running VMs
+    list              Print VM names in status line
+    status            Show server PID, VM count, running count
+    clearlog          Wipe the event log
+    shutdown          Send SIGTERM to the api_server process
+    kill-server       Send SIGKILL to the api_server process
+    help              Show all commands
+    q / Esc / Ctrl-C  Quit
+
+  The TUI calls the tool executor and event log directly (no HTTP, no token).
+  This is the server operator console and the groundwork for the IaaS fleet
+  management console planned for 1.1+.
 
 ================================================================================

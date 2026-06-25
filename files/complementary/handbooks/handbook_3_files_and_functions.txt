@@ -32,6 +32,85 @@ HOW IT WORKS
   Then calls cli_direct(sys.argv[1:]) or chat_loop() depending on args.
 
 ────────────────────────────────────────────────────────────────────────────────
+server/event_log.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Persistent structured event log for all tool calls executed on the server.
+  Every call through executor_client.execute_tool() is recorded as one JSON
+  line. Used by the admin TUI and queryable via GET /events.
+
+LOG FILE
+  ~/.qemu_vms/events.log   — active log
+  ~/.qemu_vms/events.log.1 — previous log (after 10 MB rotation)
+
+LOG FORMAT (one JSON object per line)
+  {
+    "ts":          "2026-06-25T18:20:22",   ISO timestamp
+    "tool":        "create_vm",             tool name
+    "args":        {"name": "test2", ...},  sanitised args (passwords redacted)
+    "outcome":     "ok",                    result summary string
+    "duration_ms": 27                       wall-clock time for the call
+  }
+
+  outcome values:
+    "ok"                — success
+    "error: <message>"  — tool returned an error
+    "already_running"   — launch_vm on a VM that is already running
+    "not_found"         — VM is in allowed list but doesn't exist (opsec wording)
+
+FUNCTION: log_event(tool, args, result, duration_ms)
+  IN:  tool str, args dict, result any, duration_ms float
+  OUT: nothing
+  Derives outcome string from result, appends JSON line to log file.
+  Opens in append mode each call (no held file handle).
+  Rotates the file when size exceeds 10 MB.
+
+FUNCTION: read_events(limit=100, since="") -> list
+  IN:  limit int (default 100), since str (ISO timestamp, default "")
+  OUT: list[dict] — up to limit entries, newest last
+  Reads the current log file. If since is set, filters to entries with
+  ts >= since. Used by the admin TUI and /events endpoint.
+
+────────────────────────────────────────────────────────────────────────────────
+server/admin_tui.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Curses-based fullscreen admin dashboard for the server. Server-only —
+  not deployed to the client machine and not listed as a client alias.
+  The operator console; groundwork for the 1.1+ IaaS fleet management UI.
+
+  Launch:  qemu-api-admin  (alias added by setup_server.sh)
+
+LAYOUT (curses, differential updates — no flicker)
+  Row 0      Header bar: "qemu-api admin  uptime HH:MM:SS  vms N  events N"
+  Rows 1+    VM table (name, ●/○ status, CPU, RAM, OS) — sized to terminal height
+  Rows +     Event feed (time, tool, target, outcome, ms) — fills remaining space
+  Last 3     Separator + command prompt + hint line
+
+KEYBOARD HANDLING
+  A daemon thread calls stdscr.get_wch() in blocking mode (200ms timeout).
+  Characters accumulate in _cmd_buf. Enter dispatches _dispatch(). q/Esc/Ctrl-C
+  sets _quit Event which stops both threads.
+
+COMMANDS (entered at the command prompt)
+  launch <vm>    — manager.launch_vm(name)
+  stop <vm>      — manager.stop_vm(name, force=False)
+  kill <vm>      — manager.stop_vm(name, force=True)
+  stopall        — stop all running VMs
+  list           — list VM names in _cmd_msg
+  status         — show server PID + VM counts
+  clearlog       — truncate ~/.qemu_vms/events.log
+  shutdown       — os.kill(server_pid, SIGTERM)
+  kill-server    — os.kill(server_pid, SIGKILL)
+  help           — print all commands in _cmd_msg
+
+IMPORTANT NOTES
+  - screen=False to avoid alternate buffer flicker
+  - vertical_overflow="crop" removed in favour of curses (no Rich Live)
+  - sys.path fix at module top removes files/server/ from path so stdlib
+    http is not shadowed when running admin_tui.py directly
+
+────────────────────────────────────────────────────────────────────────────────
 server/executor_client.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE

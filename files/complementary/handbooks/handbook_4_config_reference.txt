@@ -71,19 +71,36 @@ OLLAMA_URL
   "token": "",
     # API token. Match this to API_TOKEN env var or ~/.qemu-api.token.
 
+  "timeout": 120,
+    # HTTP request timeout (seconds).
+
+  "verify_ssl": true,
+    # TLS certificate verification.
+
+  "ca_cert": "",
+    # Path to custom CA cert (empty = use system bundle).
+
   "client_allowed_vms": [],
     # VMs visible and accessible to clients. Empty = all VMs allowed.
     # Non-empty = allowlist. Hidden VMs return "not found" to clients (opsec).
 
-  "client_allowed_profiles": []
+  "client_allowed_profiles": [],
     # Hardware profiles visible to clients. Empty = all profiles allowed.
+
+  "allowed_remote_tools": ["launch_vm", "stop_vm", ...]
+    # Tools the HTTP API accepts from remote clients. Any tool not in this list
+    # returns 403 Forbidden before preflight runs. Enforced at executor_client
+    # level so it covers both /execute calls and AI-initiated /chat calls.
+    # send_monitor_cmd is excluded by default (raw QEMU monitor = security risk).
+    # Empty list = all tools blocked. Use the full list from setup_server.sh
+    # as your starting point.
 }
 
 ACCESS CONTROL ENFORCEMENT:
   Two-layer enforcement — clients cannot bypass either layer:
   1. GET /sync filters the VM/profile inventory before the client sees it.
   2. executor_client.execute_tool() blocks tool calls targeting hidden VMs
-     for both direct /execute calls AND AI-initiated calls through /chat.
+     AND tools not in allowed_remote_tools, for both /execute and /chat paths.
 
 ────────────────────────────────────────────────────────────────────────────────
 3. client/connection_config.json  (read by client/ui/chat_client.py)

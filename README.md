@@ -191,8 +191,10 @@ files/
 │   │   ├── context_assistant.py     Context gate for AI-aware preflight decisions
 │   │   └── config.json              AI-layer config (Ollama URL, model, loop limits)
 │   ├── http/
-│   │   └── api_server.py            FastAPI: /chat /execute /health /images /rotate-token
+│   │   └── api_server.py            FastAPI: /chat /execute /health /images /events /rotate-token
 │   ├── executor_client.py           Re-exports shared.executioner.execute_tool (always local)
+│   ├── event_log.py                 Structured event log (JSON-lines, 10 MB rotation → ~/.qemu_vms/events.log)
+│   ├── admin_tui.py                 Curses fullscreen server admin TUI (qemu-api-admin)
 │   └── connection_config.json       Server connection settings (url, token, timeout)
 │
 ├── client/                          User's laptop (thin UI)
@@ -347,6 +349,9 @@ API_TOKEN=mysecrettoken PYTHONPATH=files uvicorn server.http.api_server:app --ho
 
 # Or use the alias created by setup_server.sh:
 qemu-api-serve
+
+# Admin TUI (server-only — not available on client):
+qemu-api-admin
 
 # On your laptop — open SSH tunnel (if connecting over the internet)
 ssh -N -L 8080:127.0.0.1:8080 -L 5901:127.0.0.1:5901 user@server-ip
@@ -928,6 +933,39 @@ For TLS direct (no SSH): generate certs with openssl, forward port 8443 on route
 
 ---
 
+## Server Monitoring (Admin TUI)
+
+The server ships with a fullscreen curses-based admin TUI, available only on the server machine.
+
+```bash
+qemu-api-admin
+```
+
+Displays a live dashboard (refreshes every second):
+- **VM table** — name, status (●/○), CPU, RAM, OS
+- **Event feed** — timestamped log of every tool call with outcome and duration
+- **Command line** — type commands directly
+
+### Admin Commands
+
+| Command | Action |
+|---|---|
+| `launch <vm>` | Start a VM |
+| `stop <vm>` | Graceful stop |
+| `kill <vm>` | Force-kill (SIGKILL) |
+| `stopall` | Stop all running VMs |
+| `list` | Print all VM names in the status line |
+| `status` | Show server PID, VM count, running count |
+| `clearlog` | Wipe the event log |
+| `shutdown` | Send SIGTERM to the api_server process |
+| `kill-server` | Send SIGKILL to the api_server process |
+| `help` | Show all commands |
+| `q` / Esc / Ctrl-C | Quit the TUI |
+
+> The admin TUI is **server-only**. It is not present in the client sparse checkout and has no `--remote` mode.
+
+---
+
 ## API Endpoints
 
 All endpoints except `/health` require `Authorization: Bearer <token>`.
@@ -940,6 +978,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 | `/images/{vm_name}` | GET | Yes | Stream primary disk (qcow2), supports HTTP Range resume |
 | `/images/{vm_name}/sha256` | GET | Yes | SHA-256 checksum of primary disk |
 | `/vms/{vm_name}/bundle` | GET | Yes | Stream entire VM folder (disk + config + OVMF vars) as `.tar.gz` |
+| `/events` | GET | Yes | Return recent event log entries. Query: `?limit=N&since=<iso-ts>` |
 | `/rotate-token` | POST | Yes | Replace token (min 16 chars) and persist to `~/.qemu-api.token` |
 
 ### /execute request flow
@@ -1113,6 +1152,7 @@ Results saved to `test_report.json` after every run.
 ├── .state.json                  Running PID tracking (survives terminal restart)
 ├── .session.json                AI conversation history (last 40 messages)
 ├── .chat_session_id             Persisted chat session ID (chat client)
+├── events.log                   Structured event log (JSON-lines, all tool calls)
 ├── _profiles/                   Custom hardware profiles
 │   └── my-profile.json
 ├── _networks/                   Isolated network definitions
