@@ -19,8 +19,9 @@ _TOKEN            = os.environ.get("API_TOKEN", _CFG.get("token", ""))
 _TIMEOUT          = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))
 _CA_CERT          = os.environ.get("API_CA_CERT", _CFG.get("ca_cert") or None)
 _VERIFY           = False if os.environ.get("API_VERIFY_SSL", "1") == "0" else (_CA_CERT or _CFG.get("verify_ssl", True))
-_ALLOWED_VMS:     list = _CFG.get("client_allowed_vms",      [])
+_ALLOWED_VMS:      list = _CFG.get("client_allowed_vms",      [])
 _ALLOWED_PROFILES: list = _CFG.get("client_allowed_profiles", [])
+_ALLOWED_TOOLS:    set  = set(_CFG.get("allowed_remote_tools", []))
 
 _VM_TOOLS = {"launch_vm", "stop_vm", "delete_vm", "clone_vm", "resize_disk",
              "vm_status", "create_snapshot", "restore_snapshot", "delete_snapshot",
@@ -35,7 +36,11 @@ _LOCAL_ONLY_DISPLAYS = {"sdl", "gtk"}
 
 def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
     """Wrapper around shared execute_tool that overrides local-only displays
-    and enforces client VM/profile access control."""
+    and enforces client tool/VM/profile access control."""
+    # Enforce tool allowlist (covers both /execute and /chat paths)
+    if _ALLOWED_TOOLS and tool_name not in _ALLOWED_TOOLS:
+        return {"success": False, "error": f"Tool '{tool_name}' is not available."}
+
     if tool_name == "launch_vm":
         args = dict(args)
         if args.get("display", "sdl") in _LOCAL_ONLY_DISPLAYS or "display" not in args:
