@@ -135,7 +135,7 @@ def _event_table(events: list) -> Table:
     return t
 
 
-def _build_layout(vms: list, events: list, uptime_s: float) -> Layout:
+def _build_layout(vms: list, events: list, uptime_s: float, term_height: int = 40) -> Layout:
     global _cmd_buf, _cmd_msg
     layout = Layout()
     layout.split_column(
@@ -154,8 +154,13 @@ def _build_layout(vms: list, events: list, uptime_s: float) -> Layout:
         f"events [dim]{len(events)}[/dim]   vms [dim]{len(vms)}[/dim]",
         style="bold", border_style="cyan",
     ))
-    layout["vms"].update(Panel(_vm_table(vms),         title="[bold]VMs[/bold]",           border_style="dim"))
-    layout["events"].update(Panel(_event_table(events), title="[bold]Recent Events[/bold]", border_style="dim"))
+    # Reserve: 3 header + 3 cmdline + 2 borders + 2 table headers = ~10 rows overhead
+    body_rows  = max(4, term_height - 10)
+    vm_rows    = min(len(vms), body_rows // 2)
+    event_rows = max(4, body_rows - vm_rows - 2)
+
+    layout["vms"].update(Panel(_vm_table(vms[:vm_rows]),          title="[bold]VMs[/bold]",           border_style="dim"))
+    layout["events"].update(Panel(_event_table(events[-event_rows:]), title="[bold]Recent Events[/bold]", border_style="dim"))
 
     prompt = f"[bold cyan]>[/bold cyan] {_cmd_buf}[blink]▌[/blink]"
     feedback = f"\n[dim]{_cmd_msg}[/dim]" if _cmd_msg else ""
@@ -182,7 +187,7 @@ def _run_local():
         key_thread.start()
 
     try:
-        with Live(console=console, refresh_per_second=2) as live:
+        with Live(console=console, refresh_per_second=2, screen=True) as live:
             while not _quit.is_set():
                 try:
                     raw = manager.list_vms()
@@ -191,7 +196,7 @@ def _run_local():
                     vms = []
                 events = read_events(limit=200)
                 uptime = time.monotonic() - start
-                live.update(_build_layout(vms, events, uptime))
+                live.update(_build_layout(vms, events, uptime, console.size.height))
                 time.sleep(_REFRESH)
     except Exception as e:
         print(f"\n[admin_tui error] {e}", file=sys.stderr)
