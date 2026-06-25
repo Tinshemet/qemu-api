@@ -213,11 +213,14 @@ _SC_CLEAR    = {"clear session", "session clear", "clear_session", "forget", "/c
 _SC_HELP     = {"help", "?", "/help", "commands", "show commands"}
 
 _SYNC_ALLOWED_TOOLS: List[str] = []
+_REMOTE_VMS:        List[dict] = []
+_REMOTE_PROFILES:   List[str]  = []
 
 
 def _sync_from_server() -> bool:
     """Fetch /sync and apply server-authoritative config. Returns True on success."""
-    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SYNC_ALLOWED_TOOLS
+    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SC_CLEAR
+    global _SYNC_ALLOWED_TOOLS, _REMOTE_VMS, _REMOTE_PROFILES
     try:
         resp = requests.get(
             f"{SERVER_URL}/sync",
@@ -242,6 +245,8 @@ def _sync_from_server() -> bool:
         _SC_CLEAR    = set(sc["clear_session"]) | {"/clear"}
 
     _SYNC_ALLOWED_TOOLS = data.get("allowed_remote_tools", [])
+    _REMOTE_VMS         = data.get("vms", [])
+    _REMOTE_PROFILES    = data.get("profiles", [])
     return True
 
 
@@ -391,6 +396,43 @@ def chat_loop(verbose: bool = False):
         ovmf_code      = srv.get("ovmf_code", ""),
         api_url        = SERVER_URL,
     )
+
+    # Show local vs remote VMs and profiles
+    if _REMOTE_VMS or _REMOTE_PROFILES:
+        remote_names  = [v["name"] for v in _REMOTE_VMS]
+        try:
+            from shared.executioner.tool_executor import manager as _local_mgr
+            local_names = [v.get("name") for v in _local_mgr.list_vms().get("vms", [])]
+        except Exception:
+            local_names = []
+        try:
+            from shared.api.qemu_config import list_profiles as _lp
+            local_profiles = [p.get("name") if isinstance(p, dict) else p for p in _lp()]
+        except Exception:
+            local_profiles = []
+
+        lines = []
+        if remote_names or local_names:
+            all_vms = sorted(set(remote_names) | set(local_names))
+            tagged  = []
+            for n in all_vms:
+                tags = []
+                if n in local_names:  tags.append("[dim]local[/dim]")
+                if n in remote_names: tags.append("[bold]remote[/bold]")
+                tagged.append(f"  {n}  ({', '.join(tags)})")
+            lines.append("[bold]VMs:[/bold]\n" + "\n".join(tagged))
+        if _REMOTE_PROFILES or local_profiles:
+            all_p   = sorted(set(_REMOTE_PROFILES) | set(local_profiles))
+            p_tagged = []
+            for p in all_p:
+                tags = []
+                if p in local_profiles:   tags.append("[dim]local[/dim]")
+                if p in _REMOTE_PROFILES: tags.append("[bold]remote[/bold]")
+                p_tagged.append(f"  {p}  ({', '.join(tags)})")
+            lines.append("[bold]Profiles:[/bold]\n" + "\n".join(p_tagged))
+
+        if lines:
+            console.print(Panel("\n\n".join(lines), title="Resources", border_style="dim"))
 
     session_id = _load_session_id() or str(uuid.uuid4())
     _save_session_id(session_id)

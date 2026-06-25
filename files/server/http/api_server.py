@@ -116,14 +116,30 @@ def info():
 @app.get("/sync", dependencies=[Depends(_require_token)])
 def sync():
     """Return server-authoritative config the client should apply at startup."""
+    from shared.executioner.tool_executor import manager as _mgr
+    from shared.api.qemu_config import list_profiles as _list_profiles
+
     ai_cfg_path = pathlib.Path(__file__).parent.parent / "ai" / "config.json"
     try:
         ai_cfg = json.loads(ai_cfg_path.read_text())
     except Exception:
         ai_cfg = {}
+
+    try:
+        vms = _mgr.list_vms().get("vms", [])
+    except Exception:
+        vms = []
+
+    try:
+        profiles = _list_profiles()
+    except Exception:
+        profiles = []
+
     return {
-        "shortcut_commands": ai_cfg.get("shortcut_commands", {}),
+        "shortcut_commands":   ai_cfg.get("shortcut_commands", {}),
         "allowed_remote_tools": list(_ALLOWED_TOOLS),
+        "vms":      [{"name": v.get("name"), "status": v.get("status")} for v in vms],
+        "profiles": [p.get("name") if isinstance(p, dict) else p for p in profiles],
     }
 
 
