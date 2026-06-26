@@ -268,6 +268,39 @@ PIPELINE_TESTS: List[PipelineTest] = [
     _v ("create_vm", {"name":"probe8_tpm",     "os_type":"linux","tpm":True},                                                      "tpm=True"),
     _v ("create_vm", {"name":"probe8_ovmfms",  "os_type":"windows","bios":"ovmf_ms","disk_size_gb":40},                           "bios=ovmf_ms Secure Boot"),
     _v ("create_vm", {"name":"probe8_stlsmbios","os_type":"linux","stealth":True,"manufacturer":"Dell Inc.","product_name":"Latitude 5530","serial_number":"SN12345","bios_vendor":"Dell Inc.","bios_version":"1.15.0","machine_class":"laptop"}, "full stealth SMBIOS cluster"),
+
+    # ── create_vm — SMBIOS args all 6 categories ─────────────────────────────
+    # NOTE: serial_number / bios_vendor / chassis_type are all optional so
+    #       there is no standalone _m case.  The _m below covers the realistic
+    #       AI failure: the model provides only SMBIOS fields and forgets the
+    #       required name / os_type fields entirely.
+    _m ("create_vm", {"serial_number":"SN-ONLY","bios_vendor":"Dell Inc.","chassis_type":"Notebook"},
+        "SMBIOS args only, no name or os_type — executor catches missing required fields"),
+    _jk("create_vm", {"name":"probe8_smbios_jk","os_type":"linux",
+                       "serial_number":"SN-JK-01","bios_vendor":"Dell Inc.","chassis_type":"Notebook",
+                       "zebra_extra_field":"zzz","nonexistent_smbios_key":99,"smbios_magic":True},
+        "SMBIOS args + made-up junk fields — executor silently ignores unknowns"),
+    _fk("create_vm", {"name":"probe8_smbios_fk","os_type":"linux",
+                       "serial_number":"SN-FK-01","bios_vendor":"Dell Inc.",
+                       "snapshot_name":"before-update",
+                       "source_name":"some-other-vm",
+                       "new_name":"fk-clone"},
+        "SMBIOS args + foreign keys from snapshot/clone schema — executor ignores"),
+    _c ("create_vm", {"name":"probe8_smbios_c1","os_type":"linux",
+                       "serial_number":"SN-C1",
+                       "bios_vendor":"Dell Inc.","manufacturer":"Lenovo",
+                       "product_name":"ThinkPad T14"},
+        "bios_vendor (Dell) conflicts with manufacturer brand (Lenovo) — both stored, no resolution needed"),
+    _c ("create_vm", {"name":"probe8_smbios_c2","os_type":"linux",
+                       "serial_number":"SN-C2","bios_vendor":"Dell Inc.",
+                       "machine_arch":"aarch64","kvm":True},
+        "SMBIOS args + ARM arch + kvm=True — sanitizer resolves arch/kvm conflict, SMBIOS args pass through",
+        exp_success=True),
+    _bs("create_vm", {"name":"probe8_smbios_bs","os_type":"linux",
+                       "serial_number":"SN-BS-01","chassis_type":"Notebook","bios_vendor":"Dell Inc.",
+                       "cpu_model":"cortex-a72"},
+        "SMBIOS args + ARM CPU on x86 host — sanitizer resets cpu_model, SMBIOS fields preserved"),
+
     _v ("create_vm", {"name":"probe8_ovrw",   "os_type":"linux","overwrite":True},                              "overwrite=True on fresh name — sanitizer passes, executor creates"),
     _bs("create_vm", {"name":"probe8_bmac",   "os_type":"linux","mac_address":"not-a-mac"},                    "invalid MAC — sanitizer strips, VM created without custom MAC"),
     _bs("create_vm", {"name":"probe8_bmem",   "os_type":"linux","memory_mb":999999999},                        "exceeds host RAM — sanitizer clamps"),
