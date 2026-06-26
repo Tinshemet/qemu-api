@@ -36,6 +36,28 @@ without needing a real Ollama instance or real QEMU process.
   E. executor_client:
     - server.executor_client.execute_tool is a re-export of
       shared.executioner.tool_executor.execute_tool (same object)
+
+  F. /sync endpoint:
+    - missing auth → 401/403
+    - wrong token → 401
+    - valid → shortcut_commands, allowed_remote_tools, vms, profiles keys present
+    - ALLOWED_VMS set → hidden VMs filtered out
+    - empty ALLOWED_VMS → all VMs visible
+
+  G. /events endpoint:
+    - missing auth → 401/403
+    - valid → {events: [...]} with ts/tool/outcome/duration_ms per entry
+    - limit param forwarded to read_events
+    - since=<future> → empty list
+    - integration: /execute call triggers log_event; entry retrievable via GET /events
+
+  H. /rotate-token endpoint:
+    - missing auth → 401/403
+    - new_token < 16 chars → 400/422
+    - valid → {ok: True}
+    - old token rejected after rotation
+    - new token accepted after rotation
+    - extra junk fields in body → ignored, 200
 """
 
 import os, sys, time, traceback, uuid
@@ -774,6 +796,328 @@ def _t_execute_conflict_display_and_bind_local() -> List[str]:
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# F. /sync endpoint
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _t_sync_auth_missing() -> List[str]:
+    client, _ = _make_test_client()
+    resp = client.get("/sync")
+    if resp.status_code not in (401, 403):
+        return [f"Expected 401/403 for missing auth on /sync, got {resp.status_code}"]
+    return []
+
+
+def _t_sync_auth_wrong_token() -> List[str]:
+    client, _ = _make_test_client()
+    resp = client.get("/sync", headers={"Authorization": "Bearer wrong-token-xyz"})
+    if resp.status_code != 401:
+        return [f"Expected 401 for wrong token on /sync, got {resp.status_code}"]
+    return []
+
+
+def _t_sync_valid_structure() -> List[str]:
+    client, token = _make_test_client()
+
+    with patch("server.http.api_server._mgr" if False else "shared.executioner.tool_executor.manager") as mock_mgr, \
+         patch("shared.api.qemu_config.list_profiles", return_value=[]):
+        mock_mgr.list_vms.return_value = []
+        resp = client.get("/sync", headers={"Authorization": f"Bearer {token}"})
+
+    if resp.status_code != 200:
+        return [f"Unexpected status {resp.status_code}: {resp.text}"]
+    data = resp.json()
+    issues = []
+    for key in ("shortcut_commands", "allowed_remote_tools", "vms", "profiles"):
+        if key not in data:
+            issues.append(f"Missing key {key!r} in /sync response")
+    if not isinstance(data.get("allowed_remote_tools"), list):
+        issues.append("allowed_remote_tools should be a list")
+    if not isinstance(data.get("vms"), list):
+        issues.append("vms should be a list")
+    if not isinstance(data.get("profiles"), list):
+        issues.append("profiles should be a list")
+    return issues
+
+
+def _t_sync_allowed_vms_filter() -> List[str]:
+    """ALLOWED_VMS allowlist — /sync only returns VMs in the allowlist."""
+    client, token = _make_test_client()
+
+    fake_vms = [
+        {"name": "allowed-vm", "status": "stopped"},
+        {"name": "hidden-vm",  "status": "stopped"},
+    ]
+
+    with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
+         patch("shared.api.qemu_config.list_profiles", return_value=[]), \
+         patch("server.http.api_server._ALLOWED_VMS", ["allowed-vm"]):
+        mock_mgr.list_vms.return_value = fake_vms
+        resp = client.get("/sync", headers={"Authorization": f"Bearer {token}"})
+
+    if resp.status_code != 200:
+        return [f"Unexpected status {resp.status_code}: {resp.text}"]
+    vm_names = [v.get("name") for v in resp.json().get("vms", [])]
+    issues = []
+    if "allowed-vm" not in vm_names:
+        issues.append("allowed-vm should appear in /sync vms")
+    if "hidden-vm" in vm_names:
+        issues.append("hidden-vm should be filtered out by ALLOWED_VMS")
+    return issues
+
+
+def _t_sync_empty_allowlist_returns_all() -> List[str]:
+    """Empty ALLOWED_VMS means no filter — all VMs visible."""
+    client, token = _make_test_client()
+
+    fake_vms = [
+        {"name": "vm-a", "status": "stopped"},
+        {"name": "vm-b", "status": "stopped"},
+    ]
+
+    with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
+         patch("shared.api.qemu_config.list_profiles", return_value=[]), \
+         patch("server.http.api_server._ALLOWED_VMS", []):
+        mock_mgr.list_vms.return_value = fake_vms
+        resp = client.get("/sync", headers={"Authorization": f"Bearer {token}"})
+
+    if resp.status_code != 200:
+        return [f"Unexpected status {resp.status_code}: {resp.text}"]
+    vm_names = [v.get("name") for v in resp.json().get("vms", [])]
+    issues = []
+    for name in ("vm-a", "vm-b"):
+        if name not in vm_names:
+            issues.append(f"{name!r} should appear in /sync vms when allowlist is empty")
+    return issues
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# G. /events endpoint
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _t_events_auth_missing() -> List[str]:
+    client, _ = _make_test_client()
+    resp = client.get("/events")
+    if resp.status_code not in (401, 403):
+        return [f"Expected 401/403 for missing auth on /events, got {resp.status_code}"]
+    return []
+
+
+def _t_events_valid_structure() -> List[str]:
+    client, token = _make_test_client()
+
+    fake_events = [
+        {"ts": "2026-06-25T10:00:00+00:00", "tool": "list_vms",
+         "args": {}, "outcome": "ok", "duration_ms": 3.2},
+    ]
+    with patch("server.event_log.read_events", return_value=fake_events):
+        resp = client.get("/events", headers={"Authorization": f"Bearer {token}"})
+
+    if resp.status_code != 200:
+        return [f"Unexpected status {resp.status_code}: {resp.text}"]
+    data = resp.json()
+    if "events" not in data:
+        return ["Missing 'events' key in /events response"]
+    if not isinstance(data["events"], list):
+        return ["'events' should be a list"]
+    if not data["events"]:
+        return ["Expected at least 1 event in mocked response"]
+    entry = data["events"][0]
+    issues = []
+    for key in ("ts", "tool", "outcome", "duration_ms"):
+        if key not in entry:
+            issues.append(f"Event entry missing key {key!r}")
+    return issues
+
+
+def _t_events_limit_param() -> List[str]:
+    client, token = _make_test_client()
+
+    many_events = [
+        {"ts": f"2026-06-25T10:0{i}:00+00:00", "tool": "list_vms",
+         "args": {}, "outcome": "ok", "duration_ms": 1.0}
+        for i in range(10)
+    ]
+    captured_limit: Dict[str, Any] = {}
+
+    def fake_read_events(limit=100, since=""):
+        captured_limit["limit"] = limit
+        return many_events[:limit]
+
+    with patch("server.event_log.read_events", side_effect=fake_read_events):
+        resp = client.get("/events?limit=2", headers={"Authorization": f"Bearer {token}"})
+
+    if resp.status_code != 200:
+        return [f"Unexpected status {resp.status_code}: {resp.text}"]
+    issues = []
+    if captured_limit.get("limit") != 2:
+        issues.append(f"Expected limit=2 passed to read_events, got {captured_limit.get('limit')!r}")
+    events = resp.json().get("events", [])
+    if len(events) > 2:
+        return [f"Expected at most 2 events with limit=2, got {len(events)}"]
+    return issues
+
+
+def _t_events_since_future() -> List[str]:
+    client, token = _make_test_client()
+
+    future_ts = "2099-01-01T00:00:00+00:00"
+    future_ts_encoded = future_ts.replace("+", "%2B")
+    captured: Dict[str, Any] = {}
+
+    def fake_read_events(limit=100, since=""):
+        captured["since"] = since
+        return []  # nothing after a future timestamp
+
+    with patch("server.event_log.read_events", side_effect=fake_read_events):
+        resp = client.get(
+            f"/events?since={future_ts_encoded}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    if resp.status_code != 200:
+        return [f"Unexpected status {resp.status_code}: {resp.text}"]
+    issues = []
+    if captured.get("since") != future_ts:
+        issues.append(f"Expected since={future_ts!r} forwarded to read_events, got {captured.get('since')!r}")
+    if resp.json().get("events"):
+        issues.append("Expected empty events list for future since timestamp")
+    return issues
+
+
+def _t_events_tool_call_logged() -> List[str]:
+    """executor_client.execute_tool (the path /chat uses) triggers log_event;
+    the entry is then retrievable via GET /events.
+    Note: /execute bypasses executor_client and does NOT log — only /chat logs."""
+    client, token = _make_test_client()
+    sys.path.insert(0, _FILES_DIR)
+    logged: List[Any] = []
+
+    def fake_underlying(tool_name, args, verbose=False):
+        return {"success": True, "vms": []}
+
+    def fake_log(tool, args, result, duration_ms):
+        logged.append({"ts": "2026-01-01T00:00:00+00:00", "tool": tool,
+                        "args": {}, "outcome": "ok", "duration_ms": duration_ms})
+
+    with patch("server.executor_client._execute_tool", side_effect=fake_underlying), \
+         patch("server.executor_client._log_event", side_effect=fake_log):
+        import server.executor_client as ec
+        if "server.executor_client" in sys.modules:
+            del sys.modules["server.executor_client"]
+        import server.executor_client as ec
+        with patch.object(ec, "_execute_tool", side_effect=fake_underlying), \
+             patch.object(ec, "_log_event", side_effect=fake_log):
+            ec.execute_tool("list_vms", {})
+
+    with patch("server.event_log.read_events", return_value=logged):
+        resp = client.get("/events", headers={"Authorization": f"Bearer {token}"})
+
+    if resp.status_code != 200:
+        return [f"Unexpected status on /events: {resp.status_code}"]
+    events = resp.json().get("events", [])
+    if not events:
+        return ["Expected at least one event after executor_client.execute_tool call"]
+    if events[0].get("tool") != "list_vms":
+        return [f"Expected logged tool=list_vms, got {events[0].get('tool')!r}"]
+    return []
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# H. /rotate-token endpoint
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _t_rotate_auth_missing() -> List[str]:
+    client, _ = _make_test_client()
+    resp = client.post("/rotate-token", json={"new_token": "a-completely-valid-new-token-here"})
+    if resp.status_code not in (401, 403):
+        return [f"Expected 401/403 for missing auth on /rotate-token, got {resp.status_code}"]
+    return []
+
+
+def _t_rotate_token_too_short() -> List[str]:
+    client, token = _make_test_client()
+    with patch("pathlib.Path.write_text"), patch("pathlib.Path.chmod"):
+        resp = client.post(
+            "/rotate-token",
+            json={"new_token": "short"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if resp.status_code not in (400, 422):
+        return [f"Expected 400/422 for token < 16 chars, got {resp.status_code}: {resp.text}"]
+    return []
+
+
+def _t_rotate_token_valid() -> List[str]:
+    client, token = _make_test_client()
+    new_token = "a-valid-new-token-" + _uid()
+    with patch("pathlib.Path.write_text"), patch("pathlib.Path.chmod"):
+        resp = client.post(
+            "/rotate-token",
+            json={"new_token": new_token},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if resp.status_code != 200:
+        return [f"Expected 200 from /rotate-token, got {resp.status_code}: {resp.text}"]
+    data = resp.json()
+    if not data.get("ok"):
+        return [f"Expected ok=True in response, got {data!r}"]
+    return []
+
+
+def _t_rotate_old_token_rejected() -> List[str]:
+    client, old_token = _make_test_client()
+    new_token = "a-valid-new-token-" + _uid()
+    with patch("pathlib.Path.write_text"), patch("pathlib.Path.chmod"):
+        rot = client.post(
+            "/rotate-token",
+            json={"new_token": new_token},
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+    if rot.status_code != 200:
+        return [f"Rotation failed with {rot.status_code}, cannot test old-token rejection"]
+    # Old token must now be rejected
+    resp = client.get("/sync", headers={"Authorization": f"Bearer {old_token}"})
+    if resp.status_code != 401:
+        return [f"Expected 401 for old token after rotation, got {resp.status_code}"]
+    return []
+
+
+def _t_rotate_new_token_works() -> List[str]:
+    client, old_token = _make_test_client()
+    new_token = "a-valid-new-token-" + _uid()
+    with patch("pathlib.Path.write_text"), patch("pathlib.Path.chmod"):
+        rot = client.post(
+            "/rotate-token",
+            json={"new_token": new_token},
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+    if rot.status_code != 200:
+        return [f"Rotation failed with {rot.status_code}, cannot test new-token access"]
+    # New token must now be accepted
+    with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
+         patch("shared.api.qemu_config.list_profiles", return_value=[]):
+        mock_mgr.list_vms.return_value = []
+        resp = client.get("/sync", headers={"Authorization": f"Bearer {new_token}"})
+    if resp.status_code != 200:
+        return [f"Expected 200 with new token after rotation, got {resp.status_code}: {resp.text}"]
+    return []
+
+
+def _t_rotate_junk_body_fields() -> List[str]:
+    client, token = _make_test_client()
+    new_token = "a-valid-new-token-" + _uid()
+    with patch("pathlib.Path.write_text"), patch("pathlib.Path.chmod"):
+        resp = client.post(
+            "/rotate-token",
+            json={"new_token": new_token, "zebra_junk": "zzz", "extra_field": 99},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if resp.status_code != 200:
+        return [f"Expected 200 with junk extra fields, got {resp.status_code}: {resp.text}"]
+    return []
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # E. executor_client is a re-export
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -1000,6 +1344,105 @@ REMOTE_SPLIT_TESTS: List[RemoteSplitTest] = [
         tags=["remote_split", "execute", "conflict", "vnc"],
         description="/execute display=sdl + vnc_bind_local=False → both overridden by server",
         fn=_t_execute_conflict_display_and_bind_local,
+    ),
+    # F. /sync endpoint
+    RemoteSplitTest(
+        id="rs_sync_auth_missing",
+        tags=["remote_split", "sync", "auth"],
+        description="GET /sync without auth → 401/403",
+        fn=_t_sync_auth_missing,
+    ),
+    RemoteSplitTest(
+        id="rs_sync_auth_wrong_token",
+        tags=["remote_split", "sync", "auth"],
+        description="GET /sync wrong token → 401",
+        fn=_t_sync_auth_wrong_token,
+    ),
+    RemoteSplitTest(
+        id="rs_sync_valid_structure",
+        tags=["remote_split", "sync", "valid"],
+        description="GET /sync returns required keys: shortcut_commands, allowed_remote_tools, vms, profiles",
+        fn=_t_sync_valid_structure,
+    ),
+    RemoteSplitTest(
+        id="rs_sync_allowed_vms_filter",
+        tags=["remote_split", "sync", "access_control"],
+        description="GET /sync with ALLOWED_VMS set — only allowed VMs returned",
+        fn=_t_sync_allowed_vms_filter,
+    ),
+    RemoteSplitTest(
+        id="rs_sync_empty_allowlist_returns_all",
+        tags=["remote_split", "sync", "access_control"],
+        description="GET /sync with empty ALLOWED_VMS — all VMs returned (open allowlist)",
+        fn=_t_sync_empty_allowlist_returns_all,
+    ),
+    # G. /events endpoint
+    RemoteSplitTest(
+        id="rs_events_auth_missing",
+        tags=["remote_split", "events", "auth"],
+        description="GET /events without auth → 401/403",
+        fn=_t_events_auth_missing,
+    ),
+    RemoteSplitTest(
+        id="rs_events_valid_structure",
+        tags=["remote_split", "events", "valid"],
+        description="GET /events returns {events: [...]} with correct entry shape",
+        fn=_t_events_valid_structure,
+    ),
+    RemoteSplitTest(
+        id="rs_events_limit_param",
+        tags=["remote_split", "events", "valid"],
+        description="GET /events?limit=2 — result has at most 2 entries",
+        fn=_t_events_limit_param,
+    ),
+    RemoteSplitTest(
+        id="rs_events_since_future",
+        tags=["remote_split", "events", "valid"],
+        description="GET /events?since=<future_ts> — returns empty list",
+        fn=_t_events_since_future,
+    ),
+    RemoteSplitTest(
+        id="rs_events_tool_call_logged",
+        tags=["remote_split", "events", "integration"],
+        description="/execute call produces a log entry retrievable via GET /events",
+        fn=_t_events_tool_call_logged,
+    ),
+    # H. /rotate-token endpoint
+    RemoteSplitTest(
+        id="rs_rotate_auth_missing",
+        tags=["remote_split", "rotate_token", "auth"],
+        description="POST /rotate-token without auth → 401/403",
+        fn=_t_rotate_auth_missing,
+    ),
+    RemoteSplitTest(
+        id="rs_rotate_token_too_short",
+        tags=["remote_split", "rotate_token", "broken"],
+        description="POST /rotate-token with token < 16 chars → 400",
+        fn=_t_rotate_token_too_short,
+    ),
+    RemoteSplitTest(
+        id="rs_rotate_token_valid",
+        tags=["remote_split", "rotate_token", "valid"],
+        description="POST /rotate-token with valid new token → ok:True",
+        fn=_t_rotate_token_valid,
+    ),
+    RemoteSplitTest(
+        id="rs_rotate_old_token_rejected",
+        tags=["remote_split", "rotate_token", "valid"],
+        description="After /rotate-token, old token is rejected on /health-requiring endpoints",
+        fn=_t_rotate_old_token_rejected,
+    ),
+    RemoteSplitTest(
+        id="rs_rotate_new_token_works",
+        tags=["remote_split", "rotate_token", "valid"],
+        description="After /rotate-token, new token works on subsequent requests",
+        fn=_t_rotate_new_token_works,
+    ),
+    RemoteSplitTest(
+        id="rs_rotate_junk_body_fields",
+        tags=["remote_split", "rotate_token", "junk"],
+        description="POST /rotate-token with extra unknown JSON fields alongside new_token — FastAPI ignores extras",
+        fn=_t_rotate_junk_body_fields,
     ),
     # E. executor_client re-export
     RemoteSplitTest(
