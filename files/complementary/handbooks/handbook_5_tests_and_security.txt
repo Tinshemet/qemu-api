@@ -279,6 +279,7 @@ Tests:
 LAYER 8 — PIPELINE TESTS  (tests/layer8_pipeline.py)
 ────────────────────────────────────────────────────────────────────────────────
 No Ollama. Tests the full sanitize→preflight pipeline together.
+330 tests total.
 
 Covers the 6 test categories from the Pipeline Test Design Statement:
   valid    — valid args pass through unchanged or minimally corrected
@@ -287,6 +288,15 @@ Covers the 6 test categories from the Pipeline Test Design Statement:
   conflict — conflicting args (ARM CPU + x86 VM) are caught
   foreign  — completely unrecognised args are handled gracefully
   junk     — random garbage args don't cause exceptions
+
+SMBIOS ARGS COVERAGE (serial_number / bios_vendor / chassis_type)
+  All 6 categories are covered for the SMBIOS arg cluster:
+  valid    — SMBIOS cluster, stealth SMBIOS, profile SMBIOS (3 tests)
+  missing  — SMBIOS args only with no required name/os_type — executor rejects
+  broken   — ARM cpu_model + SMBIOS: sanitizer resets cpu_model, SMBIOS passes
+  conflict — bios_vendor vs manufacturer brand; SMBIOS + ARM arch + kvm=True
+  foreign  — SMBIOS + foreign keys from clone/snapshot schema
+  junk     — SMBIOS + made-up fields (zebra_extra_field, nonexistent_smbios_key)
 
 ────────────────────────────────────────────────────────────────────────────────
 LAYER 9 — GATED PIPELINE TESTS  (tests/layer9_pipeline_gated.py)
@@ -311,55 +321,79 @@ are real.
 LAYER 11 — REMOTE SPLIT TESTS  (tests/layer11_remote_split.py)
 ────────────────────────────────────────────────────────────────────────────────
 No Ollama. Uses FastAPI TestClient (in-process HTTP, no real network).
-19 tests. Requires API_TOKEN env var.
+50 tests. Requires API_TOKEN env var.
 Speed: ~50ms per test.
 
 HOW LAYER 11 WORKS
   The test file:
   1. Clears sys.modules cache for any old api_server imports
-  2. Imports client.server.api_server → creates the FastAPI app
+  2. Imports server.http.api_server → creates the FastAPI app
   3. Creates TestClient(app) — talks to the app in-process
   4. Mocks execute_tool and _preflight_check with patch()
-     (patching the canonical paths: "client.executioner.tool_executor.execute_tool"
+     (patching the canonical paths: "shared.executioner.tool_executor.execute_tool"
       and "shared.preflight.validator._preflight_check")
   5. Each test sends HTTP requests to the TestClient and asserts the response
 
-The 19 tests cover:
+The 50 tests cover:
 
-  Authentication (3 tests)
-    Valid token → 200
-    Missing Authorization header → 401 (HTTPBearer raises it)
-    Wrong token → 401
+  A. Stateless preflight (5 tests)
+    Bad machine_type caught with stateless_only=True
+    Placeholder name caught with stateless_only=True
+    iso_path existence skipped with stateless_only=True
+    Full mode aborts for bad ISO / nonexistent VM
 
-  Tool allowlist (2 tests)
-    Tool in allowed_remote_tools → proceeds to preflight
-    Tool NOT in allowed_remote_tools → 403 Forbidden
+  B. VNC arg binding (2 tests)
+    vnc_bind_local=True → 127.0.0.1:N,password=on in QEMU cmd
+    vnc_bind_local=False → :N (no address restriction)
 
-  Preflight routing (4 tests)
-    Preflight returns "ok" → execute_tool called, result returned
-    Preflight returns "abort" → execute_tool NOT called, error in body (HTTP 200)
-    Preflight returns "ask_user" → execute_tool NOT called, clarify in body
-    Preflight returns "auto_fix" → fixed_args used for execute_tool call
-
-  Display override for launch_vm (3 tests)
-    display="sdl" → overridden to "vnc" + vnc_bind_local=True
-    display="gtk" → overridden to "vnc" + vnc_bind_local=True
-    display="vnc" → vnc_bind_local=True injected (no override needed)
-
-  VNC result enrichment in executor_client (3 tests)
-    Remote VNC result → ssh_tunnel_cmd added by executor_client
-    Remote VNC result → vnc_connect_cmd added
-    Non-VNC result → no connection string fields added
-
-  Stateless preflight split (2 tests)
-    stateless_only=True (provider side) → VM existence not checked
-    stateless_only=False (client side) → VM existence IS checked
-
-  Health endpoint (1 test)
+  C. /chat HTTP endpoint (8 tests)
     GET /health → {"status":"ok"} with no auth required
+    /chat without auth → 403
+    /chat wrong token → 401
+    /chat happy path → {session_id, text, tool_results, needs_input: null}
+    /chat session persistence → second call has prior history
+    /chat returns needs_input when signalled
+    /chat passes auto_confirm through to process_message
+    DELETE /sessions/{id} → 200
 
-  Rotate token (1 test)
-    POST /rotate-token with valid token → new token accepted
+  D. /execute HTTP endpoint (11 tests)
+    Missing/wrong auth → 401/403
+    display=sdl/gtk overridden to vnc + vnc_bind_local=True
+    display=vnc kept + vnc_bind_local=True injected
+    Preflight abort → {success: False, preflight: True}
+    Preflight auto_fix: fixed_args used, result tagged
+    Preflight ask_user → {clarify: True}
+    Missing tool_name → 422
+    Tool not in allowlist → 403
+    Junk extra fields in body → ignored, 200
+    Foreign args from another tool's schema → executor ignores
+    display=sdl + vnc_bind_local=False → both overridden by server
+
+  E. executor_client re-export (1 test)
+    server.executor_client.execute_tool is shared.executioner.tool_executor.execute_tool
+
+  F. /sync endpoint (5 tests)
+    Missing auth → 401/403
+    Wrong token → 401
+    Valid → shortcut_commands, allowed_remote_tools, vms, profiles keys present
+    ALLOWED_VMS set → hidden VMs filtered out of response
+    Empty ALLOWED_VMS → all VMs visible (open allowlist)
+
+  G. /events endpoint (5 tests)
+    Missing auth → 401/403
+    Valid → {events: [...]} with ts/tool/outcome/duration_ms per entry
+    ?limit=N forwarded to read_events, response has ≤ N entries
+    ?since=<future_ts> → empty list returned
+    Integration: executor_client.execute_tool call triggers log_event;
+      entry is retrievable via GET /events
+
+  H. /rotate-token endpoint (6 tests)
+    Missing auth → 401/403
+    new_token < 16 chars → 400
+    Valid new token → {ok: True}
+    Old token rejected on subsequent requests after rotation
+    New token accepted on subsequent requests after rotation
+    Junk extra fields in body → ignored, rotation succeeds
 
 ────────────────────────────────────────────────────────────────────────────────
 PIPELINE TEST DESIGN STATEMENT (summary)
