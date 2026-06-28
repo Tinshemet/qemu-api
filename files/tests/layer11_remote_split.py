@@ -696,13 +696,15 @@ def _t_execute_missing_tool_name() -> List[str]:
 
 
 def _t_execute_tool_not_in_allowlist() -> List[str]:
-    """missing (allowlist) — tool not in allowed_remote_tools → 403 Forbidden."""
+    """missing (allowlist) — tool not in allowed_remote_tools → 403 Forbidden.
+    Requires patching _ALLOWED_TOOLS to a non-empty set; empty means unrestricted."""
     client, token = _make_test_client()
-    resp = client.post(
-        "/execute",
-        json={"tool_name": "send_monitor_cmd", "args": {"name": "vm", "cmd": "info"}},
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    with patch("server.http.api_server._ALLOWED_TOOLS", {"list_vms"}):
+        resp = client.post(
+            "/execute",
+            json={"tool_name": "send_monitor_cmd", "args": {"name": "vm", "cmd": "info"}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
     if resp.status_code != 403:
         return [f"Expected 403 for tool not in allowlist, got {resp.status_code}"]
     return []
@@ -1122,20 +1124,20 @@ def _t_rotate_junk_body_fields() -> List[str]:
 # ════════════════════════════════════════════════════════════════════════════════
 
 def _t_executor_client_is_re_export() -> List[str]:
-    """server.executor_client.execute_tool must be the same object as
-    shared.executioner.tool_executor.execute_tool — it is a thin re-export,
-    not an HTTP dispatcher."""
+    """server.executor_client.execute_tool is a wrapper (adds logging, access control,
+    display override) that delegates to shared.executioner.tool_executor.execute_tool
+    via ec._execute_tool.  Verify the delegation is intact — ec._execute_tool must be
+    the same object as te.execute_tool."""
     sys.path.insert(0, _FILES_DIR)
-    import importlib
     for mod in ("server.executor_client", "shared.executioner.tool_executor"):
         if mod in sys.modules:
             del sys.modules[mod]
     import server.executor_client as ec
     import shared.executioner.tool_executor as te
-    if ec.execute_tool is not te.execute_tool:
+    if ec._execute_tool is not te.execute_tool:
         return [
-            "server.executor_client.execute_tool is NOT the same object as "
-            "shared.executioner.tool_executor.execute_tool — the re-export is broken"
+            "server.executor_client._execute_tool is NOT the same object as "
+            "shared.executioner.tool_executor.execute_tool — the delegation is broken"
         ]
     return []
 
