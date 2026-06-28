@@ -184,7 +184,7 @@ In remote mode the server runs on a separate machine; the client connects over H
 Current test results (134 tests):
   Layer 1  — Sanitiser:         passed all
   Layer 2  — Executor:          passed all
-  Layer 11 — Remote Split:      passed all (19 HTTP boundary tests)
+  Layer 11 — Remote Split:      passed all (50 HTTP boundary tests)
   Overall:                      134/134  (100%)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -857,10 +857,10 @@ SECTION 8 — test_api.py + tests/  (v6)
   Layer 5   Property-Based       tests/layer5_property.py       5 invariant checks, 50 iterations each
   Layer 6   Context Gate         tests/layer6_context_gate.py   Pure gate_check() unit tests
   Layer 7   Context Assistant    tests/layer7_context_assistant.py  Assistant message templates
-  Layer 8   Pipeline             tests/layer8_pipeline.py       Full sanitize→preflight pipeline
+  Layer 8   Pipeline             tests/layer8_pipeline.py       Full sanitize→preflight pipeline (330 tests)
   Layer 9   Gated Pipeline       tests/layer9_pipeline_gated.py Pipeline with context gate enabled
   Layer 10  Pipeline Full        tests/layer10_pipeline_full.py Pipeline + AI + context assistant
-  Layer 11  Remote Split         tests/layer11_remote_split.py  HTTP boundary (FastAPI TestClient)
+  Layer 11  Remote Split         tests/layer11_remote_split.py  HTTP boundary (FastAPI TestClient, 50 tests)
 
 8.2  USAGE
 ────────────
@@ -885,38 +885,59 @@ SECTION 8 — test_api.py + tests/  (v6)
 
 8.3  LAYER 11 — REMOTE SPLIT TESTS
 ─────────────────────────────────────
-  19 tests covering the provider/client HTTP boundary. No Ollama needed.
+  50 tests covering the provider/client HTTP boundary. No Ollama needed.
   Uses FastAPI TestClient (in-process HTTP, no real network).
 
-  Test categories:
-    Stateless preflight (provider side):
+  Test groups:
+
+    A. Stateless preflight:
       Valid create_vm → ok
       Missing required arg → abort
       Non-existent VM (stateless_only=True) → ok (state not checked provider-side)
       Non-existent VM (stateless_only=False) → abort (state checked client-side)
 
-    VNC arg binding:
+    B. VNC arg binding:
       vnc_bind_local=True  → -vnc 127.0.0.1:1,password=on
       vnc_bind_local=False → -vnc :1
 
-    HTTP authentication:
-      Valid token → 200
-      Missing token → 401
-      Wrong token → 401
+    C. /chat endpoint:
+      GET /health → {"status":"ok"}, no auth
+      /chat without auth → 403; wrong token → 401
+      /chat happy path → {session_id, text, tool_results, needs_input: null}
+      Session persistence, needs_input, auto_confirm, DELETE /sessions/{id}
 
-    Server-side display override:
-      sdl display → overridden to vnc + vnc_bind_local=True
-      gtk display → overridden to vnc + vnc_bind_local=True
-      vnc display → vnc_bind_local=True injected
+    D. /execute endpoint:
+      Auth missing/wrong → 401/403; tool not in allowlist → 403
+      display=sdl/gtk → overridden to vnc + vnc_bind_local=True
+      display=vnc → vnc_bind_local=True injected
+      Preflight auto_fix / abort / ask_user routing
+      Junk extra fields ignored; foreign args from other schema ignored
+      display=sdl + explicit vnc_bind_local=False → both overridden
 
-    Preflight routing:
-      Preflight auto_fix → correction applied before execute_tool call
-      Abort result → returned as structured error (HTTP 200, error in body)
-      ask_user result → returned as clarify response (HTTP 200)
+    E. executor_client re-export:
+      server.executor_client.execute_tool is the same object as
+      shared.executioner.tool_executor.execute_tool
 
-    Executor client connection strings:
-      Remote mode → result includes ssh_tunnel_cmd, vnc_connect_cmd, vnc_note
-      Non-VNC remote → no connection string fields
+    F. /sync endpoint:
+      Missing/wrong auth → 401/403
+      Valid → shortcut_commands, allowed_remote_tools, vms, profiles present
+      ALLOWED_VMS set → hidden VMs filtered out
+      Empty ALLOWED_VMS → all VMs visible
+
+    G. /events endpoint:
+      Missing auth → 401/403
+      Valid → {events: [{ts, tool, outcome, duration_ms}, ...]}
+      ?limit=N forwarded, response has ≤ N entries
+      ?since=<future_ts> → empty list
+      Integration: executor_client.execute_tool triggers log_event;
+        entry retrievable via GET /events
+
+    H. /rotate-token endpoint:
+      Missing auth → 401/403
+      new_token < 16 chars → 400
+      Valid rotation → {ok: True}
+      Old token rejected after rotation; new token accepted
+      Junk extra fields in body → ignored, rotation succeeds
 
 8.4  LAYER 3 — RANDOMISED PROMPTS
 ────────────────────────────────────
