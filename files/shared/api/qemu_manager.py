@@ -17,7 +17,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-_CFG                  = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+with open(os.path.join(os.path.dirname(__file__), "config.json")) as _f:
+    _CFG = json.load(_f)
 _TIMEOUTS             = _CFG["timeouts"]
 _BUFFERS              = _CFG["buffers"]
 _MACOS_OVMF           = _CFG["ovmf_macos_vars_paths"]

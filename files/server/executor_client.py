@@ -14,7 +14,8 @@ import json
 import os
 import time
 
-_CFG              = json.load(open(os.path.join(os.path.dirname(__file__), "connection_config.json")))
+with open(os.path.join(os.path.dirname(__file__), "connection_config.json")) as _f:
+    _CFG = json.load(_f)
 API_URL           = os.environ.get("API_URL",   _CFG.get("url",   "local"))
 _TOKEN            = os.environ.get("API_TOKEN", _CFG.get("token", ""))
 _TIMEOUT          = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))

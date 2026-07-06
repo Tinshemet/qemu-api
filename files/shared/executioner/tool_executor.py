@@ -12,7 +12,8 @@ import re
 import sys
 from typing import Any, Dict
 
-_CFG                 = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+with open(os.path.join(os.path.dirname(__file__), "config.json")) as _f:
+    _CFG = json.load(_f)
 _VM_DEFS             = _CFG["create_vm_defaults"]
 _TOOL_DEFS           = _CFG["tool_defaults"]
 _VALID_MACHINE_TYPES = set(_CFG["valid_machine_types"])

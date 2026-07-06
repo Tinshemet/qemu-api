@@ -17,7 +17,8 @@ try:
 except ImportError:
     def get_all_profiles(): return {}                                         # type: ignore[misc]
 
-_CFG                = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+with open(os.path.join(os.path.dirname(__file__), "config.json")) as _f:
+    _CFG = json.load(_f)
 _BOUNDS             = _CFG["bounds"]
 _OPTIONAL_REMOVABLE = set(_CFG["optional_removable"])
 _ISO_OS_KEYWORDS    = _CFG["iso_os_keywords"]
@@ -195,6 +196,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     Sanitise all args before dispatch.
     Silently corrects what it can, removes what it can't fix.
     """
+    args = dict(args)  # don't mutate the caller's dict
     # Type coercion
     int_fields  = {"cpu_cores", "cpu_threads", "memory_mb", "disk_size_gb",
                    "new_size_gb", "disk_index", "cpu_percent", "lines", "vnc_port", "spice_port"}

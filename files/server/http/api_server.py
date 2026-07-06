@@ -23,16 +23,19 @@ import uuid
 from fastapi import FastAPI, HTTPException, Depends, Body, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Dict, Iterator, List, Optional
 
 # ── Config ────────────────────────────────────────────────────────────────────
 _CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
-_CFG      = json.load(open(_CFG_PATH))
+with open(_CFG_PATH) as _f:
+    _CFG = json.load(_f)
 _ALLOWED_TOOLS:    set  = set(_CFG.get("allowed_remote_tools", []))
 # Empty list = all allowed; non-empty = allowlist
 _ALLOWED_VMS:      list = _CFG.get("client_allowed_vms",      [])
 _ALLOWED_PROFILES: list = _CFG.get("client_allowed_profiles", [])
+_MAX_MESSAGE_LEN: int   = _CFG.get("max_message_length", 32_768)
+_MAX_SESSIONS:    int   = _CFG.get("max_sessions", 1_000)
 
 
 def _filter_allowed(names: list, allowlist: list) -> list:
@@ -93,7 +96,7 @@ class ExecuteRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message:      str
+    message:      str           = Field(..., max_length=_MAX_MESSAGE_LEN)
     session_id:   Optional[str] = None
     auto_confirm: bool          = False
     verbose:      bool          = False
@@ -119,7 +122,12 @@ def _evict_expired_sessions() -> None:
 def _get_session(sid: str) -> Dict[str, Any]:
     import time as _time
     if sid not in _sessions:
-        return {"messages": [], "pending_tool": None, "critical_step2": False, "last_active": _time.time()}
+        _evict_expired_sessions()
+        if len(_sessions) >= _MAX_SESSIONS:
+            # Drop the oldest session to stay under the cap.
+            oldest = min(_sessions, key=lambda k: _sessions[k].get("last_active", 0))
+            _sessions.pop(oldest, None)
+        _sessions[sid] = {"messages": [], "pending_tool": None, "critical_step2": False, "last_active": _time.time()}
     _sessions[sid]["last_active"] = _time.time()
     return _sessions[sid]
 

@@ -21,7 +21,8 @@ from .qemu_config import (
     AUDIO_PRESETS, BIOS_OPTIONS, CPU_PRESETS, GPU_PRESETS, MachineConfig, NetworkConfig, OVMF,
 )
 
-_CFG      = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+with open(os.path.join(os.path.dirname(__file__), "config.json")) as _f:
+    _CFG = json.load(_f)
 _PORTS    = _CFG["ports"]
 _TIMEOUTS = _CFG["timeouts"]
 
