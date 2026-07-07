@@ -1,5 +1,7 @@
 # qemu-api
 
+**Release: [1.0-stable](https://github.com/Tinshemet/qemu-api/releases/tag/1.0-stable)**
+
 AI-driven QEMU/KVM virtual machine manager with an Ollama chat loop, remote split architecture, stealth/SMBIOS spoofing, TPM, Secure Boot, and an 11-layer automated test suite.
 
 ---
@@ -210,7 +212,13 @@ files/
 ├── shared/                          Used by both server and client
 │   ├── api/
 │   │   ├── qemu_config.py           Config dataclasses, hardware profiles, OVMF detection
-│   │   ├── qemu_manager.py          VM lifecycle engine: create, launch, monitor, QMP
+│   │   ├── qemu_manager.py          QemuManager: composes the mixin modules below
+│   │   ├── _vm_constants.py         Shared constants (paths, defaults) for all mixins
+│   │   ├── _vm_lifecycle.py         create_vm, delete_vm, clone_vm, ISO auto-detect
+│   │   ├── _vm_operations.py        launch_vm, stop_vm, resize_disk, update_config
+│   │   ├── _vm_stealth.py           Stealth launch, guest setup script generation
+│   │   ├── _vm_monitoring.py        vm_status, list_vms, monitor_vm, fingerprint
+│   │   ├── _vm_runtime.py           QMP socket, send_monitor_cmd, VM watcher loop
 │   │   ├── qemu_arg_builder.py      Builds the QEMU command-line argument list
 │   │   ├── qmp_client.py            QMP socket client
 │   │   ├── network_manager.py       Isolated network (bridge) management
@@ -253,7 +261,7 @@ files/
     └── handbooks/           Deep-dive reference (dictionary, workflow, files, config, tests)
 ```
 
-**Test results: 134/134 (100%)**
+**Test results: 259/259 (100%)**
 
 ---
 
@@ -1139,7 +1147,7 @@ export OLLAMA_MODEL=llama3.1      # permanent
 
 ## Test Suite
 
-11 layers, 134 tests total (100% passing).
+11 layers, 259 tests total (100% passing).
 
 ```bash
 python3 test_api.py                          # all layers (5 random profiles)
