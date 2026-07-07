@@ -1,54 +1,127 @@
 """
-admin_tui.py — Real-time server admin TUI
+admin_tui.py — Real-time admin TUI for qemu-api
 
 Fullscreen dashboard: VM table, event feed, command prompt.
-Run on the server: qemu-api-admin
+Connects to the orchestrator over HTTP — run from any machine that can reach it.
+Configure in admin/connection_config.json.
 """
 
 import sys
 import os
-
-# Prevent files/server/http/ from shadowing stdlib http
-_here = os.path.dirname(os.path.abspath(__file__))
-if _here in sys.path:
-    sys.path.remove(_here)
-
 import curses
 import subprocess
 import threading
 import time
+import json as _json
+
+# ── config ────────────────────────────────────────────────────────────────────
+
+_here = os.path.dirname(os.path.abspath(__file__))
 
 
-# ── state ─────────────────────────────────────────────────────────────────────
+def _load_json(path: str) -> dict:
+    try:
+        return _json.load(open(path))
+    except Exception:
+        return {}
+
+
+_CONN_CFG  = _load_json(os.path.join(_here, "connection_config.json"))
+_ADMIN_CFG = _load_json(os.path.join(_here, "admin_config.json"))
+
+_ORCH_URL     = os.environ.get("SERVER_URL",  _CONN_CFG.get("orchestrator_url", "http://localhost:8080"))
+_REFRESH      = _ADMIN_CFG.get("refresh_rate_s",       1.0)
+_DEFAULT_PORT = _ADMIN_CFG.get("default_port",         8080)
+_LOG_PATH     = _ADMIN_CFG.get("log_path",             "/tmp/qemu-api-server.log")
+_EVENTS_LIMIT = _ADMIN_CFG.get("events_display_limit", 200)
+
+
+def _token() -> str:
+    t = os.environ.get("API_TOKEN") or _CONN_CFG.get("token", "")
+    if t:
+        return t
+    try:
+        with open(os.path.expanduser("~/.qemu-api.token")) as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+# ── HTTP helpers ──────────────────────────────────────────────────────────────
+
+def _post(path: str, body: dict) -> dict:
+    import requests
+    try:
+        r = requests.post(
+            f"{_ORCH_URL}{path}",
+            json=body,
+            headers={"Authorization": f"Bearer {_token()}"},
+            timeout=5,
+        )
+        return r.json() if r.ok else {"success": False, "error": r.text[:120]}
+    except Exception as e:
+        return {"success": False, "error": str(e)[:80]}
+
+
+def _get(path: str, params: dict = None) -> dict:
+    import requests
+    try:
+        r = requests.get(
+            f"{_ORCH_URL}{path}",
+            params=params or {},
+            headers={"Authorization": f"Bearer {_token()}"},
+            timeout=5,
+        )
+        return r.json() if r.ok else {}
+    except Exception:
+        return {}
+
+
+def _exec(tool_name: str, args: dict = None) -> dict:
+    return _post("/execute", {"tool_name": tool_name, "args": args or {}})
+
+
+def _get_events(limit: int = 200) -> list:
+    return _get("/events", {"limit": limit}).get("events", [])
+
+
+# ── health check (cached 2s) ──────────────────────────────────────────────────
+
+_health_cache: tuple = (0.0, False)
+
+
+def _server_online() -> bool:
+    global _health_cache
+    now = time.monotonic()
+    if now - _health_cache[0] < 2.0:
+        return _health_cache[1]
+    import requests
+    try:
+        result = requests.get(f"{_ORCH_URL}/health", timeout=2).ok
+    except Exception:
+        result = False
+    _health_cache = (now, result)
+    return result
+
+
+# ── local process helpers (only useful when admin runs on orchestrator machine) ─
+
+def _local_pid() -> int | None:
+    try:
+        out = subprocess.check_output(["pgrep", "-f", "api_server"], text=True).strip()
+        pids = [int(p) for p in out.splitlines() if p.strip()]
+        return pids[0] if pids else None
+    except Exception:
+        return None
+
+
+# ── curses state ──────────────────────────────────────────────────────────────
 
 _cmd_buf   = ""
 _cmd_msg   = ""
 _quit      = threading.Event()
 _lock      = threading.Lock()
-_help_mode = False          # when True, draw() shows help overlay instead
-
-# ── server PID (cached, refreshed every 2 s) ──────────────────────────────────
-
-_pid_cache: tuple = (0.0, None)   # (timestamp, pid|None)
-
-def _server_pid() -> int | None:
-    global _pid_cache
-    now = time.monotonic()
-    if now - _pid_cache[0] < 2.0:
-        return _pid_cache[1]
-    try:
-        out = subprocess.check_output(
-            ["pgrep", "-f", "api_server"], text=True
-        ).strip()
-        pids = [int(p) for p in out.splitlines() if p.strip()]
-        pid  = pids[0] if pids else None
-    except Exception:
-        pid = None
-    _pid_cache = (now, pid)
-    return pid
-
-
-# ── curses colour pairs ───────────────────────────────────────────────────────
+_help_mode = False
 
 C_NORMAL = 0
 C_HEADER = 1
@@ -58,23 +131,7 @@ C_RED    = 4
 C_DIM    = 5
 C_YELLOW = 6
 
-
-_ADMIN_CFG_PATH    = os.path.join(_here, "admin_config.json")
 _CUSTOM_COLOR_SLOT = 16
-
-import json as _json
-
-def _load_admin_cfg() -> dict:
-    try:
-        return _json.load(open(_ADMIN_CFG_PATH))
-    except Exception:
-        return {}
-
-_ADMIN_CFG          = _load_admin_cfg()
-_REFRESH            = _ADMIN_CFG.get("refresh_rate_s",      1.0)
-_DEFAULT_PORT       = _ADMIN_CFG.get("default_port",        8080)
-_LOG_PATH           = _ADMIN_CFG.get("log_path",            "/tmp/qemu-api-server.log")
-_EVENTS_LIMIT       = _ADMIN_CFG.get("events_display_limit", 200)
 
 
 def _hex_to_curses(hex_color: str) -> tuple:
@@ -114,8 +171,8 @@ def _hline(stdscr, row, w, label=""):
         if label:
             left  = max(0, (w - len(label) - 2) // 2)
             right = max(0, w - left - len(label) - 2)
-            stdscr.addstr(row, 0,    "─" * left,            _cp(C_DIM))
-            stdscr.addstr(row, left, f" {label} ",           _cp(C_CYAN) | curses.A_BOLD)
+            stdscr.addstr(row, 0,    "─" * left,                   _cp(C_DIM))
+            stdscr.addstr(row, left, f" {label} ",                  _cp(C_CYAN) | curses.A_BOLD)
             stdscr.addstr(row, left + len(label) + 2, "─" * right, _cp(C_DIM))
         else:
             stdscr.addstr(row, 0, "─" * (w - 1), _cp(C_DIM))
@@ -133,17 +190,15 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
         stdscr.refresh()
         return
 
-    # ── header ────────────────────────────────────────────────────────────────
     uptime  = f"{int(uptime_s//3600):02d}:{int((uptime_s%3600)//60):02d}:{int(uptime_s%60):02d}"
-    pid     = _server_pid()
-    pid_str = f"pid={pid}" if pid else "server=stopped"
-    hdr     = f"  qemu-api admin   uptime {uptime}   vms {len(vms)}   events {len(events)}   {pid_str}  "
+    online  = _server_online()
+    srv_str = f"online @ {_ORCH_URL}" if online else f"unreachable @ {_ORCH_URL}"
+    hdr     = f"  qemu-api admin   uptime {uptime}   vms {len(vms)}   events {len(events)}   {srv_str}  "
     try:
         stdscr.addstr(0, 0, hdr.ljust(w - 1), _cp(C_HEADER) | curses.A_BOLD)
     except curses.error:
         pass
 
-    # ── VM section ────────────────────────────────────────────────────────────
     body_h  = h - 4 - 6
     max_vms = min(len(vms), max(1, body_h // 3))
     max_evs = max(1, body_h - max_vms)
@@ -174,14 +229,13 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
         ram    = f"{v.get('memory_mb', 0) // 1024}GB"
         cpu    = str(v.get("cpu_cores", ""))
         try:
-            stdscr.addstr(row, 2, f"{name:<24} ", _cp(C_NORMAL))
-            stdscr.addstr(row, 27, f"{dot}{status:<14}", color)
+            stdscr.addstr(row, 2,  f"{name:<24} ",              _cp(C_NORMAL))
+            stdscr.addstr(row, 27, f"{dot}{status:<14}",        color)
             stdscr.addstr(row, 43, f"{cpu:>4}  {ram:>5}  {os_s}", _cp(C_NORMAL))
         except curses.error:
             pass
         row += 1
 
-    # ── events section ────────────────────────────────────────────────────────
     _hline(stdscr, row, w, "Recent Events"); row += 1
 
     cols_ev = f"  {'TIME':<20} {'TOOL':<24} {'TARGET':<15} {'RESULT':<28} {'MS':>6}"
@@ -199,25 +253,24 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     for e in events[-max_evs:]:
         if row >= h - 3:
             break
-        ts      = e.get("ts", "")[:19].replace("T", " ")
-        outcome = e.get("outcome", "")
-        args    = e.get("args", {})
-        target  = (args.get("name") or args.get("profile") or "")[:14]
-        ms      = str(int(e.get("duration_ms", 0)))
-        tool    = e.get("tool", "")[:23]
+        ts        = e.get("ts", "")[:19].replace("T", " ")
+        outcome   = e.get("outcome", "")
+        args      = e.get("args", {})
+        target    = (args.get("name") or args.get("profile") or "")[:14]
+        ms        = str(int(e.get("duration_ms", 0)))
+        tool      = e.get("tool", "")[:23]
         outcome_s = outcome[:27]
-        res_color = (_cp(C_GREEN) if outcome == "ok"
-                     else _cp(C_YELLOW) if outcome in ("already_running",)
+        res_color = (_cp(C_GREEN)  if outcome == "ok"
+                     else _cp(C_YELLOW) if outcome == "already_running"
                      else _cp(C_RED))
         try:
-            stdscr.addstr(row, 2, f"{ts:<20} {tool:<24} {target:<15} ", _cp(C_NORMAL))
-            stdscr.addstr(row, 64, f"{outcome_s:<28}", res_color)
-            stdscr.addstr(row, 93, f"{ms:>6}", _cp(C_DIM))
+            stdscr.addstr(row, 2,  f"{ts:<20} {tool:<24} {target:<15} ", _cp(C_NORMAL))
+            stdscr.addstr(row, 64, f"{outcome_s:<28}",                    res_color)
+            stdscr.addstr(row, 93, f"{ms:>6}",                            _cp(C_DIM))
         except curses.error:
             pass
         row += 1
 
-    # ── command line ──────────────────────────────────────────────────────────
     _hline(stdscr, h - 3, w)
     with _lock:
         prompt = f" > {_cmd_buf}"
@@ -230,7 +283,7 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     except curses.error:
         pass
     try:
-        _hint = "  stop/kill/launch/list/stopall <vm>   start-server  status  clearlog  shutdown  help  q=quit"
+        _hint = "  stop/kill/launch/list/stopall <vm>   start-server  shutdown  status  help  q=quit"
         stdscr.addstr(h - 1, 0, _hint[:w-1], _cp(C_DIM))
     except curses.error:
         pass
@@ -239,33 +292,29 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
 
 
 def _draw_help(stdscr, h, w):
-    """Draw help overlay over the current screen."""
     SECTIONS = [
         ("VM Commands", [
-            ("launch <vm>",    "Start a VM"),
-            ("stop <vm>",      "Graceful stop (SIGTERM)"),
-            ("kill <vm>",      "Force-kill (SIGKILL)"),
-            ("stopall",        "Stop all running VMs"),
-            ("list",           "Print VM names in status line"),
+            ("launch <vm>",  "Start a VM"),
+            ("stop <vm>",    "Graceful stop (SIGTERM)"),
+            ("kill <vm>",    "Force-kill (SIGKILL)"),
+            ("stopall",      "Stop all running VMs"),
+            ("list",         "Print VM names in status line"),
         ]),
-        ("Server Commands", [
-            ("start-server",   "Start the qemu-api HTTP API server"),
-            ("shutdown",       "Send SIGTERM to the API server"),
-            ("kill-server",    "Send SIGKILL to the API server"),
-            ("status",         "Show server PID and VM counts"),
-        ]),
-        ("Log Commands", [
-            ("clearlog",       "Wipe the event log"),
+        ("Server Commands (local only)", [
+            ("start-server", "Start the orchestrator on this machine"),
+            ("shutdown",     "SIGTERM the orchestrator on this machine"),
+            ("kill-server",  "SIGKILL the orchestrator on this machine"),
+            ("status",       "Show orchestrator reachability + VM counts"),
         ]),
         ("Navigation", [
-            ("help",           "Show this overlay  (any key to close)"),
-            ("q / Esc",        "Quit the admin TUI"),
+            ("help",         "Show this overlay  (any key to close)"),
+            ("q / Esc",      "Quit the admin TUI"),
         ]),
     ]
 
     total_rows = sum(1 + len(cmds) for _, cmds in SECTIONS) + len(SECTIONS) + 3
     box_h = min(total_rows + 2, h - 4)
-    box_w = min(60, w - 4)
+    box_w = min(64, w - 4)
     y     = max(0, (h - box_h) // 2)
     x     = max(0, (w - box_w) // 2)
 
@@ -293,83 +342,60 @@ def _draw_help(stdscr, h, w):
         pass
 
 
-# ── keyboard ──────────────────────────────────────────────────────────────────
-
-import io
-import contextlib
-
-
-@contextlib.contextmanager
-def _quiet():
-    """Suppress all stdout/stderr so manager's Rich output doesn't corrupt curses."""
-    buf = io.StringIO()
-    old_out, old_err = sys.stdout, sys.stderr
-    sys.stdout = buf
-    sys.stderr = buf
-    try:
-        yield
-    finally:
-        sys.stdout = old_out
-        sys.stderr = old_err
-
+# ── command dispatch ──────────────────────────────────────────────────────────
 
 def _dispatch(cmd: str):
     if not cmd:
         return
     import signal as _signal
-    from shared.executioner.tool_executor import manager
     parts = cmd.split()
     verb  = parts[0].lower()
     name  = parts[1] if len(parts) > 1 else ""
-    new_msg      = ""
+    new_msg       = ""
     new_help_mode = False
+
     try:
         if verb in ("stop", "kill") and name:
-            with _quiet():
-                r = manager.stop_vm(name, force=(verb == "kill"))
+            r = _exec("stop_vm", {"name": name, "force": (verb == "kill")})
             new_msg = r.get("message") or r.get("error", "done")
 
         elif verb in ("start", "launch") and name:
-            with _quiet():
-                r = manager.launch_vm(name)
+            r = _exec("launch_vm", {"name": name})
             new_msg = r.get("message") or r.get("error", "done")
 
         elif verb == "list":
-            with _quiet():
-                raw = manager.list_vms()
-            vms  = raw if isinstance(raw, list) else raw.get("vms", [])
+            r   = _exec("list_vms")
+            vms = r.get("vms", [])
             new_msg = "  ".join(v.get("name", "") for v in vms) or "(none)"
 
         elif verb == "stopall":
-            with _quiet():
-                raw = manager.list_vms()
-            vms  = raw if isinstance(raw, list) else raw.get("vms", [])
+            r   = _exec("list_vms")
+            vms = r.get("vms", [])
             stopped = []
             for v in vms:
                 if v.get("status") == "running":
-                    with _quiet():
-                        r = manager.stop_vm(v["name"])
-                    if not r.get("error"):
+                    sr = _exec("stop_vm", {"name": v["name"]})
+                    if not sr.get("error"):
                         stopped.append(v["name"])
             new_msg = f"stopped: {', '.join(stopped)}" if stopped else "no running VMs"
 
-        elif verb in ("start-server",):
-            pid = _server_pid()
+        elif verb == "start-server":
+            pid = _local_pid()
             if pid:
-                new_msg = f"already running (pid {pid})"
+                new_msg = f"already running locally (pid {pid})"
             else:
                 files_dir = os.path.dirname(_here)
                 env = os.environ.copy()
                 env["PYTHONPATH"] = files_dir
                 try:
-                    with open(os.path.expanduser("~/.qemu-api.token")) as _f:
-                        env["API_TOKEN"] = _f.read().strip()
+                    with open(os.path.expanduser("~/.qemu-api.token")) as f:
+                        env["API_TOKEN"] = f.read().strip()
                 except Exception:
                     pass
                 with open(_LOG_PATH, "w") as log_fh:
                     proc = subprocess.Popen(
                         [sys.executable, "-m", "uvicorn",
-                         "server.http.api_server:app",
+                         "orchestrator.http.api_server:app",
                          "--host", "0.0.0.0", "--port", str(_DEFAULT_PORT),
                          "--log-level", "warning"],
                         cwd=files_dir, env=env,
@@ -378,40 +404,34 @@ def _dispatch(cmd: str):
                         stderr=subprocess.STDOUT,
                     )
                 time.sleep(0.5)
-                if _server_pid():
+                if _local_pid():
                     new_msg = f"server started (pid {proc.pid})  logs: {_LOG_PATH}"
                 else:
                     new_msg = f"may have failed — check {_LOG_PATH}"
 
         elif verb in ("shutdown", "shutdown-server"):
-            pid = _server_pid()
+            pid = _local_pid()
             if pid:
                 os.kill(pid, _signal.SIGTERM)
                 new_msg = f"SIGTERM → pid {pid}"
             else:
-                new_msg = "server not found"
+                new_msg = "orchestrator not found on this machine"
 
         elif verb == "kill-server":
-            pid = _server_pid()
+            pid = _local_pid()
             if pid:
                 os.kill(pid, _signal.SIGKILL)
                 new_msg = f"SIGKILL → pid {pid}"
             else:
-                new_msg = "server not found"
-
-        elif verb == "clearlog":
-            from orchestrator.event_log import _LOG_FILE
-            with open(_LOG_FILE, "w"):
-                pass
-            new_msg = "event log cleared"
+                new_msg = "orchestrator not found on this machine"
 
         elif verb == "status":
-            pid = _server_pid()
-            with _quiet():
-                raw = manager.list_vms()
-            vms = raw if isinstance(raw, list) else raw.get("vms", [])
+            online  = _server_online()
+            r       = _exec("list_vms") if online else {}
+            vms     = r.get("vms", [])
             running = sum(1 for v in vms if v.get("status") == "running")
-            new_msg = f"server pid={pid or '?'}  vms={len(vms)}  running={running}"
+            status  = "online" if online else "unreachable"
+            new_msg = f"orchestrator={status}  vms={len(vms)}  running={running}"
 
         elif verb == "help":
             new_help_mode = True
@@ -428,6 +448,8 @@ def _dispatch(cmd: str):
         _help_mode = new_help_mode or _help_mode
 
 
+# ── keyboard ──────────────────────────────────────────────────────────────────
+
 def _handle_input(stdscr):
     global _cmd_buf, _cmd_msg, _help_mode
     while not _quit.is_set():
@@ -439,7 +461,7 @@ def _handle_input(stdscr):
 
         with _lock:
             if _help_mode:
-                _help_mode = False        # any key dismisses help
+                _help_mode = False
             elif ch in (3, "\x03", 27, "\x1b"):
                 _quit.set()
             elif ch == "q" and not _cmd_buf:
@@ -456,13 +478,10 @@ def _handle_input(stdscr):
                 _cmd_msg = ""
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
+# ── main loop ─────────────────────────────────────────────────────────────────
 
 def _run(stdscr):
-    from orchestrator.event_log import read_events
-    from shared.executioner.tool_executor import manager
-
-    cfg       = _load_admin_cfg()
+    cfg       = _load_json(os.path.join(_here, "admin_config.json"))
     color_hex = cfg.get("text_color", "#aaaaaa")
     font_size = int(cfg.get("font_size", 13))
 
@@ -487,12 +506,11 @@ def _run(stdscr):
         now = time.monotonic()
         if now - last_fetch >= _REFRESH:
             try:
-                with _quiet():
-                    raw = manager.list_vms()
-                vms = raw if isinstance(raw, list) else raw.get("vms", [])
+                raw = _exec("list_vms")
+                vms = raw.get("vms", [])
             except Exception:
                 vms = []
-            events     = read_events(limit=_EVENTS_LIMIT)
+            events     = _get_events(limit=_EVENTS_LIMIT)
             last_fetch = now
 
         _draw(stdscr, vms, events, now - start)
