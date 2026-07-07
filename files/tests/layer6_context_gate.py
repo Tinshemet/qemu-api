@@ -13,11 +13,11 @@ from dataclasses import dataclass, field
 from .shared import TestResult
 
 # Load config the same way context_gate.py does
-_CONFIG_PATH = pathlib.Path(__file__).parents[1] / "shared" / "sanitizer" / "context_gate_config.json"
+_CONFIG_PATH = pathlib.Path(__file__).parents[1] / "orchestrator" / "sanitizer" / "context_gate_config.json"
 with _CONFIG_PATH.open() as _f:
     _GATE_CONFIG: Dict[str, List] = json.load(_f)
 
-from shared.sanitizer.context_gate import gate_check
+from orchestrator.sanitizer.context_gate import gate_check
 
 
 # ─────────────────────────────────────────────

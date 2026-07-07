@@ -100,7 +100,7 @@ def _make_test_client():
     sys.path.insert(0, _FILES_DIR)
     if "server.http.api_server" in sys.modules:
         del sys.modules["server.http.api_server"]
-    from server.http.api_server import app
+    from orchestrator.http.api_server import app
     from fastapi.testclient import TestClient
     return TestClient(app, raise_server_exceptions=False), token
 
@@ -126,7 +126,7 @@ def _fake_process_message(text="OK", tool_results=None, needs_input=None):
 
 def _t_stateless_catches_bad_machine_type() -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.preflight.validator import _preflight_check
+    from orchestrator.preflight.validator import _preflight_check
     pf = _preflight_check(
         "create_vm",
         {"name": f"rs-mt-{_uid()}", "machine_type": "dell_g15_5520", "os_type": "linux"},
@@ -139,7 +139,7 @@ def _t_stateless_catches_bad_machine_type() -> List[str]:
 
 def _t_stateless_catches_placeholder_name() -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.preflight.validator import _preflight_check
+    from orchestrator.preflight.validator import _preflight_check
     pf = _preflight_check(
         "create_vm",
         {"name": "windows-vm", "os_type": "windows"},
@@ -152,7 +152,7 @@ def _t_stateless_catches_placeholder_name() -> List[str]:
 
 def _t_stateless_skips_iso_check() -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.preflight.validator import _preflight_check
+    from orchestrator.preflight.validator import _preflight_check
     pf = _preflight_check(
         "create_vm",
         {"name": f"rs-iso-{_uid()}", "os_type": "linux", "iso_path": "/nonexistent/fake.iso"},
@@ -165,7 +165,7 @@ def _t_stateless_skips_iso_check() -> List[str]:
 
 def _t_full_aborts_on_bad_iso() -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.preflight.validator import _preflight_check
+    from orchestrator.preflight.validator import _preflight_check
     mock_mgr = MagicMock()
     mock_mgr.scan_isos.return_value = []
     pf = _preflight_check(
@@ -181,7 +181,7 @@ def _t_full_aborts_on_bad_iso() -> List[str]:
 
 def _t_stateless_skips_launch_vm_check() -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.preflight.validator import _preflight_check
+    from orchestrator.preflight.validator import _preflight_check
     pf = _preflight_check(
         "launch_vm",
         {"name": f"nonexistent-vm-{_uid()}"},
@@ -194,7 +194,7 @@ def _t_stateless_skips_launch_vm_check() -> List[str]:
 
 def _t_full_aborts_launch_vm_nonexistent() -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.preflight.validator import _preflight_check
+    from orchestrator.preflight.validator import _preflight_check
     mock_mgr = MagicMock()
     mock_mgr.list_vms.return_value = []
     pf = _preflight_check(
@@ -213,8 +213,8 @@ def _t_full_aborts_launch_vm_nonexistent() -> List[str]:
 
 def _build_vnc_args(vnc_bind_local: bool) -> List[str]:
     sys.path.insert(0, _FILES_DIR)
-    from shared.api.qemu_config import MachineConfig
-    from shared.api.qemu_arg_builder import QemuArgBuilder
+    from executor.api.qemu_config import MachineConfig
+    from executor.api.qemu_arg_builder import QemuArgBuilder
     cfg                = MachineConfig()
     cfg.name           = f"vnc-test-{_uid()}"
     cfg.display        = "vnc"
@@ -534,7 +534,7 @@ def _t_execute_overrides_sdl_to_vnc() -> List[str]:
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={"action": "ok"}):
+         patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
             json={"tool_name": "launch_vm", "args": {"name": "test-vm", "display": "sdl"}},
@@ -560,7 +560,7 @@ def _t_execute_overrides_gtk_to_vnc() -> List[str]:
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={"action": "ok"}):
+         patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
             json={"tool_name": "launch_vm", "args": {"name": "test-vm", "display": "gtk"}},
@@ -583,7 +583,7 @@ def _t_execute_passthrough_vnc_injects_bind_local() -> List[str]:
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={"action": "ok"}):
+         patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
             json={"tool_name": "launch_vm", "args": {"name": "test-vm", "display": "vnc"}},
@@ -602,7 +602,7 @@ def _t_execute_passthrough_vnc_injects_bind_local() -> List[str]:
 
 def _t_execute_preflight_abort() -> List[str]:
     client, token = _make_test_client()
-    with patch("shared.preflight.validator._preflight_check", return_value={
+    with patch("orchestrator.preflight.validator._preflight_check", return_value={
         "action": "abort", "reason": "Test abort reason", "correction": "hint",
     }):
         resp = client.post(
@@ -634,7 +634,7 @@ def _t_execute_preflight_auto_fix() -> List[str]:
 
     fixed = {"name": f"rs-fixed-{_uid()}", "machine_type": "q35", "os_type": "linux"}
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={
+         patch("orchestrator.preflight.validator._preflight_check", return_value={
              "action": "auto_fix", "reason": "machine_type was a profile name",
              "correction": "corrected to q35", "fixed_args": fixed,
          }):
@@ -659,7 +659,7 @@ def _t_execute_preflight_auto_fix() -> List[str]:
 
 def _t_execute_preflight_ask_user() -> List[str]:
     client, token = _make_test_client()
-    with patch("shared.preflight.validator._preflight_check", return_value={
+    with patch("orchestrator.preflight.validator._preflight_check", return_value={
         "action": "ask_user", "reason": "Need confirmation",
         "question": "Are you sure?", "fix_field": "os_type", "options": ["yes", "no"],
     }):
@@ -718,7 +718,7 @@ def _t_execute_junk_extra_fields() -> List[str]:
         return {"success": True, "vms": []}
 
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={"action": "ok"}):
+         patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
             json={
@@ -754,7 +754,7 @@ def _t_execute_foreign_args() -> List[str]:
         "keep_old":   True,           # foreign: belongs to snapshot tool
     }
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={"action": "ok"}):
+         patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
             json={"tool_name": "create_vm", "args": foreign_args},
@@ -779,7 +779,7 @@ def _t_execute_conflict_display_and_bind_local() -> List[str]:
         return {"success": True, "name": "test-vm", "pid": 1, "display": "vnc"}
 
     with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
-         patch("shared.preflight.validator._preflight_check", return_value={"action": "ok"}):
+         patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
             json={"tool_name": "launch_vm",
@@ -821,7 +821,7 @@ def _t_sync_valid_structure() -> List[str]:
     client, token = _make_test_client()
 
     with patch("server.http.api_server._mgr" if False else "shared.executioner.tool_executor.manager") as mock_mgr, \
-         patch("shared.api.qemu_config.list_profiles", return_value=[]):
+         patch("executor.api.qemu_config.list_profiles", return_value=[]):
         mock_mgr.list_vms.return_value = []
         resp = client.get("/sync", headers={"Authorization": f"Bearer {token}"})
 
@@ -851,7 +851,7 @@ def _t_sync_allowed_vms_filter() -> List[str]:
     ]
 
     with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
-         patch("shared.api.qemu_config.list_profiles", return_value=[]), \
+         patch("executor.api.qemu_config.list_profiles", return_value=[]), \
          patch("server.http.api_server._ALLOWED_VMS", ["allowed-vm"]):
         mock_mgr.list_vms.return_value = fake_vms
         resp = client.get("/sync", headers={"Authorization": f"Bearer {token}"})
@@ -877,7 +877,7 @@ def _t_sync_empty_allowlist_returns_all() -> List[str]:
     ]
 
     with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
-         patch("shared.api.qemu_config.list_profiles", return_value=[]), \
+         patch("executor.api.qemu_config.list_profiles", return_value=[]), \
          patch("server.http.api_server._ALLOWED_VMS", []):
         mock_mgr.list_vms.return_value = fake_vms
         resp = client.get("/sync", headers={"Authorization": f"Bearer {token}"})
@@ -1003,10 +1003,10 @@ def _t_events_tool_call_logged() -> List[str]:
 
     with patch("server.executor_client._execute_tool", side_effect=fake_underlying), \
          patch("server.executor_client._log_event", side_effect=fake_log):
-        import server.executor_client as ec
+        import orchestrator.executor_client as ec
         if "server.executor_client" in sys.modules:
             del sys.modules["server.executor_client"]
-        import server.executor_client as ec
+        import orchestrator.executor_client as ec
         with patch.object(ec, "_execute_tool", side_effect=fake_underlying), \
              patch.object(ec, "_log_event", side_effect=fake_log):
             ec.execute_tool("list_vms", {})
@@ -1097,7 +1097,7 @@ def _t_rotate_new_token_works() -> List[str]:
         return [f"Rotation failed with {rot.status_code}, cannot test new-token access"]
     # New token must now be accepted
     with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
-         patch("shared.api.qemu_config.list_profiles", return_value=[]):
+         patch("executor.api.qemu_config.list_profiles", return_value=[]):
         mock_mgr.list_vms.return_value = []
         resp = client.get("/sync", headers={"Authorization": f"Bearer {new_token}"})
     if resp.status_code != 200:
@@ -1132,7 +1132,7 @@ def _t_executor_client_is_re_export() -> List[str]:
     for mod in ("server.executor_client", "shared.executioner.tool_executor"):
         if mod in sys.modules:
             del sys.modules[mod]
-    import server.executor_client as ec
+    import orchestrator.executor_client as ec
     import shared.executioner.tool_executor as te
     if ec._execute_tool is not te.execute_tool:
         return [

@@ -157,7 +157,7 @@ def health() -> Dict[str, Any]:
 def info() -> Dict[str, Any]:
     """Return server-side runtime info for the client banner."""
     from orchestrator.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL
-    import shared.api.qemu_config as _qc
+    import executor.api.qemu_config as _qc
     return {
         "ollama_model":   OLLAMA_MODEL,
         "ollama_url":     OLLAMA_URL,
@@ -177,7 +177,7 @@ def get_events(limit: int = 100, since: str = "") -> Dict[str, Any]:
 def sync() -> Dict[str, Any]:
     """Return server-authoritative config the client should apply at startup."""
     from shared.executioner.tool_executor import manager as _mgr
-    import shared.api.qemu_config as _qc  # shim re-exports from executor; mock.patch target
+    import executor.api.qemu_config as _qc
 
     ai_cfg_path = pathlib.Path(__file__).parent.parent / "ai" / "config.json"
     try:
@@ -389,7 +389,7 @@ def rotate_token(new_token: str = Body(..., embed=True)) -> Dict[str, Any]:
 def execute(req: ExecuteRequest) -> Any:
     """Dispatch a tool call to tool_executor and return its result (or raise HTTP 4xx on access/preflight failure)."""
     from shared.executioner.tool_executor import execute_tool, manager
-    import shared.preflight.validator as _pf  # shim re-exports from orchestrator; mock.patch target
+    import orchestrator.preflight.validator as _pf
 
     # ── Tool allowlist ────────────────────────────────────────────────────────
     if _ALLOWED_TOOLS and req.tool_name not in _ALLOWED_TOOLS:
