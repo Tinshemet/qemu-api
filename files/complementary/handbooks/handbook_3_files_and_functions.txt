@@ -644,33 +644,39 @@ TOOL HANDLERS (all inside execute_tool() dispatch)
     All call _clear_revert() (irreversible — no safe undo).
 
 ────────────────────────────────────────────────────────────────────────────────
-shared/api/qemu_manager.py
+shared/api/qemu_manager.py  (thin class — logic lives in mixins below)
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
-  The actual VM engine. All QEMU/KVM operations happen here. Owns
-  ~/.qemu_vms/ directory. Manages process lifecycle (start, stop, monitor).
+  The public QemuManager class. Inherits all VM logic from five mixin files.
+  Owns ~/.qemu_vms/ directory and the process/state dictionaries. Delegates
+  network operations to IsolatedNetManager.
 
-KEY METHODS (all on QemuManager instance)
+STRUCTURE
+  QemuManager(
+      _VmStealthMixin,      # guest_setup generation
+      _VmOperationsMixin,   # disk ops, snapshots, config, logs
+      _VmMonitoringMixin,   # list_vms, vm_status, monitor_vm/all, scan_isos
+      _VmRuntimeMixin,      # create_vm, launch_vm, clone_vm, delete_vm, open_*
+      _VmLifecycleMixin,    # stop_vm, stop_all, QMP helpers, _start_tpm
+  )
 
-  list_vms()
-    Scans ~/.qemu_vms/ for directories with config.json.
-    For each: reads config, checks PID liveness, reads disk size.
-    Returns list[dict] with name, status, os_type, memory_mb, cpu_cores,
-    disk_size_gb, vm_dir.
+  State held on the concrete instance:
+    self._state      — VMState (persistent JSON on disk)
+    self._procs      — {name: Popen} for running VMs
+    self._setup_srvs — {name: (thread, httpd)} for stealth HTTP servers
+    self.iso_nets    — IsolatedNetManager instance
 
-  create_vm(cfg: MachineConfig)
-    Creates vm_dir, runs qemu-img create, copies OVMF_VARS.fd, writes config.json.
-    If stealth: calls generate_guest_setup(), _write_smbios_chassis_bin().
-    Returns {"success":True/False, "name":..., "vm_dir":...}
+NETWORK PASS-THROUGHS (delegate to self.iso_nets)
+  create_network(net_name), delete_network(net_name),
+  list_networks(), add_vm_to_network(net_name, vm_name)
 
-  launch_vm(name, display=None, dry_run=False)
-    Loads config, builds QEMU args via qemu_arg_builder.
-    If tpm: starts swtpm.
-    If stealth and first launch: starts HTTP server thread.
-    Popen() the QEMU command, writes PID.
-    Connects to QMP socket.
-    If VNC: sets and expires password via QMP.
-    Returns {"success":True/False, "pid":..., "display":..., "vnc_port":..., "vnc_password":...}
+────────────────────────────────────────────────────────────────────────────────
+shared/api/_vm_lifecycle.py  (_VmLifecycleMixin)
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  stop_vm / stop_all, QMP socket helpers, swtpm launcher.
+
+KEY METHODS
 
   stop_vm(name, force=False)
     Reads PID from .state.json. Sends SIGTERM (graceful) or SIGKILL (force).
@@ -680,57 +686,36 @@ KEY METHODS (all on QemuManager instance)
   stop_all()
     Calls stop_vm() for every running VM.
 
-  vm_status(name)
-    Reads config and PID, checks process liveness.
-    Returns dict with running state, uptime, resource usage.
+  _start_tpm(name)
+    Starts swtpm socket daemon. Creates tpm/ dir. Waits for tpm.sock.
 
-  monitor_vm(name)
-    Reads /proc/<pid>/ for CPU%, memory RSS, and IO stats.
-    Returns dict suitable for _render_monitor().
+────────────────────────────────────────────────────────────────────────────────
+shared/api/_vm_runtime.py  (_VmRuntimeMixin)
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  VM creation, launch, clone, delete, and display/shell attachment.
 
-  monitor_all()
-    Calls monitor_vm() for every VM, returns dict keyed by name.
+KEY METHODS
 
-  show_config(name)
-    Reads and returns ~/.qemu_vms/<name>/config.json as dict.
+  create_vm(cfg: MachineConfig)
+    Creates vm_dir, runs qemu-img create, copies OVMF_VARS.fd, writes config.json.
+    If stealth: calls generate_guest_setup(), _write_smbios_chassis_bin().
+    Returns {"success":True/False, "name":..., "vm_dir":...}
 
-  update_config(name, updates: dict)
-    Reads config.json, merges updates, writes back.
-    Returns {"success":True, "config":...}
-
-  print_command(name)
-    Builds QEMU arg list via qemu_arg_builder and returns it as a string.
-
-  resize_disk(name, disk_index, new_size_gb)
-    Checks VM is stopped. Runs qemu-img resize disk0.qcow2 <size>G.
-    Returns {"success":True/False}
-
-  scan_isos()
-    Scans common locations (~/, ~/Desktop, ~/Downloads, /media, /mnt)
-    for *.iso files. Returns sorted list of paths.
+  launch_vm(name, display=None, dry_run=False)
+    Loads config, builds QEMU args via qemu_arg_builder.
+    If tpm: starts swtpm. If stealth and first launch: starts HTTP server thread.
+    Popen() the QEMU command, writes PID. Connects to QMP socket.
+    If VNC: sets and expires password via QMP.
+    Returns {"success":True/False, "pid":..., "display":..., "vnc_port":..., "vnc_password":...}
 
   clone_vm(source_name, new_name)
-    Copies vm_dir to new name. Runs qemu-img convert to create independent disk.
+    Copies vm_dir to new name. Runs qemu-img convert for independent disk.
     Updates name in config.json.
 
   delete_vm(name, delete_disks=True)
     Stops VM if running. Removes vm_dir (and disk if delete_disks=True).
     Updates .state.json.
-
-  snapshot_create(name, snap_name)
-    Runs qemu-img snapshot -c {snap_name} disk0.qcow2 (VM must be stopped).
-
-  snapshot_list(name)
-    Runs qemu-img snapshot -l disk0.qcow2. Parses output.
-
-  snapshot_restore(name, snap_name)
-    Runs qemu-img snapshot -a {snap_name} disk0.qcow2 (VM must be stopped).
-
-  snapshot_delete(name, snap_name)
-    Runs qemu-img snapshot -d {snap_name} disk0.qcow2.
-
-  get_vm_logs(name, lines=50)
-    Reads last N lines of launch.log.
 
   open_display(name)
     Launches virt-viewer or vncviewer pointing at the VM.
@@ -738,36 +723,92 @@ KEY METHODS (all on QemuManager instance)
   open_shell(name)
     Opens socat connection to serial.sock for serial console access.
 
+────────────────────────────────────────────────────────────────────────────────
+shared/api/_vm_monitoring.py  (_VmMonitoringMixin)
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  VM listing, status, resource monitoring, and ISO scanning.
+
+KEY METHODS
+
+  list_vms()
+    Scans ~/.qemu_vms/ for directories with config.json.
+    Returns list[dict] with name, status, os_type, memory_mb, cpu_cores,
+    disk_size_gb, vm_dir.
+
+  vm_status(name)
+    Reads config and PID, checks process liveness.
+    Returns dict with running state, uptime, resource usage.
+
+  monitor_vm(name)
+    Reads /proc/<pid>/ for CPU%, memory RSS, and IO stats.
+
+  monitor_all()
+    Calls monitor_vm() for every VM, returns dict keyed by name.
+
+  scan_isos()
+    Scans common locations for *.iso files. Returns sorted list of paths.
+
+────────────────────────────────────────────────────────────────────────────────
+shared/api/_vm_operations.py  (_VmOperationsMixin)
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Disk operations, snapshots, config read/write, logs, and monitor commands.
+
+KEY METHODS
+
+  resize_disk(name, disk_index, new_size_gb)
+    Checks VM is stopped. Runs qemu-img resize. Returns {"success":True/False}
+
+  snapshot_create/list/restore/delete(name, snap_name)
+    Wrap qemu-img snapshot subcommands. VM must be stopped for create/restore/delete.
+
+  show_config(name)
+    Reads and returns ~/.qemu_vms/<name>/config.json as dict.
+
+  update_config(name, updates: dict)
+    Reads config.json, merges updates (field allowlist enforced), writes back.
+    Returns {"success":True, "config":...}
+
+  print_command(name)
+    Builds QEMU arg list via qemu_arg_builder and returns it as a string.
+
+  send_monitor_cmd(name, cmd)
+    Connects to monitor.sock, sends a raw QEMU human monitor command (allowlist
+    enforced). Returns the response text.
+
+  check_disk(name)
+    Runs qemu-img check on the primary disk. Returns the report string.
+
+  get_vm_logs(name, lines=50)
+    Reads last N lines of launch.log.
+
   set_resource_limits(name, cpu_percent, memory_mb)
     Uses systemd-run or cgset to apply cgroup limits to the QEMU process.
 
-  create_network(net_name)
-    Creates an isolated bridge network using ip and iptables commands.
-    Saves to ~/.qemu_vms/_networks/networks.json.
+────────────────────────────────────────────────────────────────────────────────
+shared/api/_vm_stealth.py  (_VmStealthMixin)
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Generate guest-side setup scripts and track completion sentinel files.
 
-  delete_network(net_name)
-    Tears down the bridge and removes from networks.json.
-
-  list_networks()
-    Returns all networks from networks.json.
-
-  add_vm_to_network(net_name, vm_name)
-    Attaches the VM's TAP interface to the network bridge.
-
-  send_monitor_cmd(name, cmd)
-    Connects to monitor.sock and sends a raw QEMU human monitor command.
-    Returns the response text.
+KEY METHODS
 
   generate_guest_setup(name)
-    Reads config.json, generates guest_setup.sh (Linux) or guest_setup.ps1
+    Reads config.json; writes guest_setup.sh (Linux) or guest_setup.ps1
     (Windows) with appropriate content for the OS. Writes to vm_dir.
 
-  _write_smbios_chassis_bin(name, chassis_type_byte)
-    Writes a raw binary SMBIOS type-3 structure with the chassis_type_byte set.
-    Saves to vm_dir/smbios_chassis.bin.
+  mark_stealth_done(name)
+    Writes the stealth-done sentinel file so launch_vm skips the HTTP server.
 
-  _start_tpm(name)
-    Starts swtpm socket daemon. Creates tpm/ dir. Waits for tpm.sock to appear.
+────────────────────────────────────────────────────────────────────────────────
+shared/api/_vm_constants.py
+────────────────────────────────────────────────────────────────────────────────
+PURPOSE
+  Central constants module shared by all mixin files to avoid circular imports.
+  Loaded once from config.json; exposes _TIMEOUTS, _BUFFERS, _VALID_MACHINE_TYPES,
+  _MONITOR_ALLOWED_CMDS, _UPDATE_ALLOWED_FIELDS, _LOG_ERROR_PATTERNS,
+  _LINUX_DISTROS, _LOG_DEFAULT_LINES, VM_BASE_DIR.
 
 ────────────────────────────────────────────────────────────────────────────────
 shared/api/qemu_arg_builder.py

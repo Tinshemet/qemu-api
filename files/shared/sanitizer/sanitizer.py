@@ -55,10 +55,22 @@ _ARM_MACHINE_ARCHS:   tuple = tuple(_CFG["arm_machine_archs"])
 
 # ── Path fixer ─────────────────────────────────────────────────────────────────
 
-# Rejects placeholder text, corrects wrong Linux usernames in paths, converts Windows paths to Linux.
-# In: str → Out: str
 def _fix_path(p: str) -> str:
-    """Fix hallucinated paths — wrong username, relative paths, placeholder text."""
+    """Normalise a potentially hallucinated file path to a real local path.
+
+    Rejects literal placeholder patterns, corrects wrong Linux/macOS usernames,
+    and converts Windows-style ``C:\\`` paths to the real home directory.
+
+    Args:
+        p: Raw path string from the AI or user input.
+
+    Returns:
+        Corrected path string, or ``""`` if the input is a known placeholder.
+
+    Example::
+        >>> _fix_path("/home/someuser/Downloads/ubuntu.iso")
+        "/home/tinshemet/Downloads/ubuntu.iso"
+    """
     if not p or not isinstance(p, str):
         return p
     # Reject literal placeholder patterns before any path manipulation
@@ -77,9 +89,22 @@ def _fix_path(p: str) -> str:
 
 # ── VM name resolver ───────────────────────────────────────────────────────────
 
-# Resolves a vague VM reference (number, partial name, OS name) to a real VM name.
-# In: List[dict] vms, str ref → Out: str | None
 def _resolve_vm_name(vms: List[Dict], ref: str) -> Optional[str]:
+    """Resolve a vague VM reference to a real VM name.
+
+    Accepts: exact name, 1-based index, partial name substring, or OS name.
+
+    Args:
+        vms: List of VM dicts (each with at least a ``"name"`` key).
+        ref: The user/AI-supplied VM reference string.
+
+    Returns:
+        The matched VM name, ``"all"`` (pass-through), or ``None`` if unresolved.
+
+    Example::
+        >>> _resolve_vm_name([{"name": "my-linux", "os": "ubuntu"}], "1")
+        "my-linux"
+    """
     if not ref or not ref.strip():
         return None
     if ref == "all":
@@ -100,17 +125,25 @@ def _resolve_vm_name(vms: List[Dict], ref: str) -> Optional[str]:
 
 # ── ISO resolver ───────────────────────────────────────────────────────────────
 
-# Resolves a hallucinated or vague ISO path to a real file via exact match → username fix → keyword scoring → first ISO fallback.
-# In: str iso_hint → Out: str | None
 def _resolve_iso(iso_hint: str) -> Optional[str]:
-    """
-    Resolve an ISO path from a vague hint or hallucinated path.
-    Strategy:
-      1. Exact path — use directly
-      2. Fix wrong username in path
-      3. Fuzzy keyword scoring across all search dirs
-      4. OS-keyword scan
-      5. Last resort — first ISO found in Desktop/Images
+    """Resolve a hallucinated or vague ISO path to a real local file.
+
+    Resolution order:
+    1. Exact path — use directly if it exists.
+    2. Wrong-username fix — substitute real home directory.
+    3. Fuzzy keyword scoring across all search directories.
+    4. OS-keyword expansion (e.g. ``"ubuntu"`` → ``["ubuntu", "linux", ...]``).
+    5. First ISO found anywhere in the search path (last resort).
+
+    Args:
+        iso_hint: Raw ISO path or distro name supplied by the AI.
+
+    Returns:
+        Resolved absolute path, or the original hint if nothing was found.
+
+    Example::
+        >>> _resolve_iso("ubuntu")
+        "/home/tinshemet/Downloads/ubuntu-24.04-desktop-amd64.iso"
     """
     if not iso_hint:
         return None
@@ -189,12 +222,24 @@ def _resolve_iso(iso_hint: str) -> Optional[str]:
 
 # ── Main sanitiser ─────────────────────────────────────────────────────────────
 
-# Coerces types, validates enums, caps resource values, cleans paths, rejects bad MACs/bridges, and removes empty optional fields.
-# In: str tool_name, dict args → Out: dict
 def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Sanitise all args before dispatch.
-    Silently corrects what it can, removes what it can't fix.
+    """Sanitise all tool arguments before dispatch.
+
+    Silently corrects what it can; drops what it cannot fix. Specifically:
+    type-coercion, enum validation, resource bounds capping, path fixing,
+    MAC/bridge rejection, and removal of empty optional fields.
+
+    Args:
+        tool_name: Name of the tool being called (currently unused but
+                   reserved for per-tool overrides).
+        args:      Raw argument dict from the AI or CLI.
+
+    Returns:
+        A new sanitised dict (the caller's dict is never mutated).
+
+    Example::
+        >>> _sanitise_args("create_vm", {"memory_mb": "4096mb", "os_type": "Ubuntu"})
+        {"memory_mb": 4096, "os_type": "linux", ...}
     """
     args = dict(args)  # don't mutate the caller's dict
     # Type coercion

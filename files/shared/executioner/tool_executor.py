@@ -60,18 +60,34 @@ _REVERT_AWARE_TOOLS = {
 
 
 def _set_revert(tool: str, args: dict, description: str) -> None:
+    """Record an inverse action so the next 'revert' call can undo the current tool."""
     global _last_revert_action
     _last_revert_action = {"tool": tool, "args": args, "description": description}
 
 
 def _clear_revert() -> None:
+    """Clear any pending revert action (called before irreversible operations)."""
     global _last_revert_action
     _last_revert_action = {}
 
 
-# Sanitizes args, resolves VM names, dispatches to the manager or config layer, and triggers Rich rendering.
-# In: str tool_name, dict args, bool verbose → Out: Any result
 def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, skip_gate: bool = False) -> Any:
+    """Sanitise args, resolve VM names, dispatch to the manager, and trigger Rich rendering.
+
+    Args:
+        tool_name: Name of the tool to execute (e.g. ``"create_vm"``).
+        args:      Raw argument dict from the AI or CLI caller.
+        verbose:   When True, suppress Rich console output (caller handles display).
+        skip_gate: Skip the context-gate check (used when re-entering after clarification).
+
+    Returns:
+        The tool's result — usually ``{"success": bool, ...}``, or a
+        ``{"clarify": True, "question": str, ...}`` dict for multi-step operations.
+
+    Example::
+        >>> execute_tool("list_vms", {})
+        [{"name": "my-linux", "status": "stopped", ...}]
+    """
     _raw_os_type = args.get("os_type", "")  # capture before alias conversion
     args = _sanitise_args(tool_name, args)
 
@@ -346,7 +362,10 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         is_windows  = "windows" in cfg.os_type.lower() or "windows" in cfg.os_name.lower()
         disk_bus    = args.get("disk_bus", "sata" if is_windows else _VM_DEFS.get("disk_bus", "virtio"))
         disk_model  = args.get("disk_model", "")
-        cfg.disks   = [DiskConfig(path=disk_path, size_gb=disk_size, format=disk_format, bus=disk_bus, disk_model=disk_model)]
+        cfg.disks   = [DiskConfig(
+            path=disk_path, size_gb=disk_size, format=disk_format,
+            bus=disk_bus, disk_model=disk_model,
+        )]
 
         net = NetworkConfig(
             mode=args.get("network_mode", _VM_DEFS["network_mode"]),
@@ -378,7 +397,10 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
                 if _arch_ok:
                     cfg.iso_path = resolved
                     if not verbose:
-                        console.print(f"  [cyan]↳ Auto-found ISO for '{_distro_hint}': {os.path.basename(resolved)}[/cyan]")
+                        console.print(
+                            f"  [cyan]↳ Auto-found ISO for '{_distro_hint}': "
+                            f"{os.path.basename(resolved)}[/cyan]"
+                        )
 
         if args.get("iso_path"):
             cfg.iso_path = _resolve_iso(args["iso_path"])
@@ -395,7 +417,10 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
                 console.print(f"[green]✓ VM '{result['name']}' created at {result['vm_dir']}[/green]")
                 if cfg.stealth:
                     manager.generate_guest_setup(name)
-                    console.print(f"[dim]  Stealth guest setup script ready — will prompt automatically on first launch.[/dim]")
+                    console.print(
+                        "[dim]  Stealth guest setup script ready"
+                        " — will prompt automatically on first launch.[/dim]"
+                    )
             else:
                 console.print(f"[red]✗ create_vm failed: {result.get('error', 'unknown error')}[/red]")
         if result.get("success"):

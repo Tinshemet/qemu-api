@@ -46,6 +46,7 @@ def _filter_allowed(names: list, allowlist: list) -> list:
 
 
 def _check_vm_allowed(vm_name: str):
+    """Raise HTTP 403 if the VM is not in the client allowlist."""
     if _ALLOWED_VMS and vm_name not in _ALLOWED_VMS:
         raise HTTPException(status_code=403, detail=f"VM '{vm_name}' is not accessible to clients.")
 
@@ -54,6 +55,7 @@ def _check_vm_allowed(vm_name: str):
 _TOKEN_FILE = pathlib.Path.home() / ".qemu-api.token"
 
 def _load_token() -> str:
+    """Load the API token from the environment variable or the token file."""
     t = os.environ.get("API_TOKEN", "").strip()
     if t:
         return t
@@ -81,6 +83,7 @@ def _require_token(
     request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_auth),
 ):
+    """FastAPI dependency: allow localhost freely; require valid Bearer token otherwise."""
     if request.client and request.client.host in _LOCALHOST:
         return  # localhost always trusted
     if not _TOKEN:
@@ -120,6 +123,7 @@ def _evict_expired_sessions() -> None:
 
 
 def _get_session(sid: str) -> Dict[str, Any]:
+    """Return (and touch) the session for *sid*, creating it with eviction if missing."""
     import time as _time
     if sid not in _sessions:
         _evict_expired_sessions()
@@ -370,6 +374,7 @@ def rotate_token(new_token: str = Body(..., embed=True)):
 
 @app.post("/execute", dependencies=[Depends(_require_token)])
 def execute(req: ExecuteRequest):
+    """Dispatch a tool call to tool_executor and return its result (or raise HTTP 4xx on access/preflight failure)."""
     from shared.executioner.tool_executor import execute_tool, manager
     from shared.preflight.validator       import _preflight_check
 
@@ -456,6 +461,7 @@ _CHUNK = 4 * 1024 * 1024  # 4 MB stream chunks
 
 
 def _disk_path(vm_name: str) -> pathlib.Path:
+    """Return the path to the first qcow2 disk for *vm_name*, raising HTTP 404 if absent."""
     vm_dir = pathlib.Path.home() / ".qemu_vms" / vm_name
     if not vm_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"VM '{vm_name}' not found.")
