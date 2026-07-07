@@ -243,6 +243,82 @@
     "memory_ratio":    0.8,
     "min_disk_free_gb": 20
   },
+  "local_only_displays": ["sdl", "gtk"],
+  "min_token_length": 16,
+  "qemu_user_net_gateway": "10.0.2.2",
+  "io_chunk_bytes": 4194304,
+  "vnc_viewer_candidates": ["vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"],
+  "smbios_chassis_type_map": {
+    "notebook": 9, "laptop": 9, "portable": 8,
+    "desktop": 3, "server": 17, "tower": 7, "tablet": 30
+  },
+  "cdrom_model": "HL-DT-ST DVDRAM GU90N",
+  "audio_socket_globs": {
+    "pulse_unix": "/run/user/*/pulse/native",
+    "pulse_tmp":  "pulse-*/native",
+    "pipewire":   "/run/user/*/pipewire-0"
+  },
+  "stealth": {
+    "webgl_renderer": "Intel(R) Iris(R) Xe Graphics",
+    "webgl_vendor":   "Intel"
+  },
+  "os_cpu_features": {
+    "windows": [
+      "hv_relaxed", "hv_spinlocks=0x1fff", "hv_vapic",
+      "hv_time", "hv_vendor_id=GenuineIntel",
+      "hv_synic", "hv_stimer", "hv_vpindex"
+    ],
+    "macos": ["-hypervisor", "+invtsc", "vendor=GenuineIntel"]
+  },
+  "vendor_oui_map": {
+    "intel":    ["00:1B:21","10:02:B5","18:66:DA","28:D2:44","2C:44:FD","3C:FD:FE","40:A3:6B","48:51:B7","54:BF:64","60:57:18","70:85:C2","74:D0:2B","78:2B:CB","8C:8D:28","90:E2:BA","A0:36:9F","B0:83:FE","C8:5B:76","E4:B9:7A","F0:1F:AF"],
+    "hp":       ["00:1A:2B","00:17:A4","00:1C:C4","1C:1B:0D","38:EA:A7","3C:D9:2B","98:4B:E1","98:E7:F4","C4:34:6B","D0:BF:9C"],
+    "hewlett":  ["00:1A:2B","00:17:A4","00:1C:C4","1C:1B:0D","38:EA:A7","3C:D9:2B","98:4B:E1","98:E7:F4","C4:34:6B","D0:BF:9C"],
+    "dell":     ["00:14:22","00:15:C5","00:1A:A0","00:21:70","14:18:77","18:03:73","18:60:24","34:17:EB","44:A8:42","B8:AC:6F","F8:DB:88","F8:BC:12","00:22:19"],
+    "lenovo":   ["00:23:AE","04:7D:7B","28:D2:44","40:74:E0","54:EE:75","70:5A:0F","88:70:8C","98:FA:9B","C8:D3:FF","E8:6A:64"],
+    "thinkpad": ["00:23:AE","04:7D:7B","54:EE:75","88:70:8C","98:FA:9B","C8:D3:FF","E8:6A:64"],
+    "asus":     ["00:26:18","04:42:1A","10:BF:48","2C:FD:A1","70:8B:CD","BC:EE:7B","C8:60:00","E0:3F:49","F8:32:E4"],
+    "acer":     ["00:1E:68","40:B0:34","A4:C3:F0","E4:D5:3D","74:29:AF","6C:88:14","00:27:10"],
+    "toshiba":  ["00:00:39","00:1C:7E","98:4F:EE","D0:DF:9A","00:0C:F1","00:1C:BE","98:FD:B4"],
+    "samsung":  ["00:12:FB","00:15:B9","00:1A:8A","00:26:37","50:85:69","8C:71:F8","CC:07:AB","F4:42:8F","00:21:D1"],
+    "apple":    ["00:1C:B3","00:25:BC","28:CF:E9","3C:07:54","68:5B:35","A4:83:E7","AC:BC:32","F0:18:98","8C:85:90","D4:61:9D"],
+    "sony":     ["00:01:4A","00:13:A9","00:1D:BA","00:24:BE","30:17:C8","58:48:22","A8:26:D9"],
+    "vaio":     ["00:01:4A","00:13:A9","00:1D:BA","00:24:BE","58:48:22"],
+    "msi":      ["00:D8:61","A4:C3:F0","C0:25:A5","00:26:6C","7C:8B:CA"],
+    "micro-star":["00:D8:61","C0:25:A5","00:26:6C","7C:8B:CA"],
+    "gigabyte": ["00:1A:4B","1C:AF:F7","C8:9C:DC","50:46:5D","68:1D:EF"],
+    "giga-byte":["00:1A:4B","1C:AF:F7","C8:9C:DC","50:46:5D","68:1D:EF"],
+    "fujitsu":  ["00:26:FB","28:09:86","38:90:A5","90:1B:0E","00:00:49"],
+    "panasonic":["00:00:DA","00:0B:BF","00:14:C2","00:80:45","18:E7:F4"],
+    "toughbook":["00:00:DA","00:0B:BF","00:14:C2","18:E7:F4"],
+    "lg":       ["00:1E:75","00:24:E8","00:26:E2","C8:08:73","CC:FA:00"],
+    "huawei":   ["00:18:82","00:46:4B","28:6E:D4","40:4D:8E","54:89:98","70:72:3C","AC:E2:D3","C4:07:2F"],
+    "microsoft":["00:03:FF","28:18:78","7C:ED:8D","00:15:5D","60:45:BD"],
+    "surface":  ["00:03:FF","28:18:78","7C:ED:8D"],
+    "razer":    ["00:1D:0F","7C:83:34","D0:73:D5","1C:75:08"],
+    "nec":      ["00:00:4C","00:0B:38","00:22:97","A4:1F:72"],
+    "clevo":    ["00:23:8B","00:26:2D","54:04:A6"],
+    "sager":    ["00:23:8B","00:26:2D","54:04:A6"],
+    "realtek":  ["00:E0:4C","00:13:46","4C:79:6E","D0:50:99","E0:CB:4E"],
+    "broadcom": ["00:10:18","00:16:CF","00:90:4C","BC:30:5B","00:1A:73"],
+    "qualcomm": ["00:02:A5","00:03:7F","00:1D:E0","00:23:14","00:26:58","4C:BC:A5","5C:93:A2"],
+    "atheros":  ["00:03:7F","00:1D:E0","00:23:14","00:26:58","4C:BC:A5"],
+    "xiaomi":   ["00:9E:C8","28:6C:07","34:CE:00","64:09:80","F4:8B:32"],
+    "honor":    ["00:1E:42","04:25:C5","28:D1:27","5C:C3:07"],
+    "medion":   ["00:0C:6E","44:87:FC","C0:25:A5"],
+    "packard bell":["40:B0:34","00:1E:68","A4:C3:F0"],
+    "gateway":  ["00:1B:9E","00:24:54","00:25:64"]
+  },
+  "iso_os_keywords": {
+    "windows": ["windows", "win11", "win10", "win"],
+    "linux":   ["linux", "ubuntu", "debian", "fedora", "mint", "arch",
+                "opensuse", "manjaro", "pop", "elementary", "zorin",
+                "kali", "parrot", "tails", "centos", "rocky", "alma"],
+    "macos":   ["macos", "mac", "osx", "darwin", "ventura", "sonoma",
+                "monterey", "sequoia"]
+  },
+  "iso_arm_markers": ["arm64", "aarch64", "_arm_", "-arm-", "arm_v"],
+  "iso_x86_markers": ["amd64", "x86_64", "x64", "i386", "i686", "64bit", "64-bit"],
   "hardware_profiles": {
     "dell_g15_5520": {
       "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": true,

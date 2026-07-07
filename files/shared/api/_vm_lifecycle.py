@@ -3,6 +3,7 @@ _vm_lifecycle.py — VM Lifecycle Mixin (create / clone / delete / scan).
 
 Provides _VmLifecycleMixin which is composed into QemuManager.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -12,6 +13,11 @@ from typing import Any, Dict, List
 from ._vm_constants import _MACOS_OVMF, _WIN_OVMF, VM_BASE_DIR
 from .qemu_config import DiskConfig, MachineConfig, NetworkConfig, OVMF, apply_os_hints
 from .qemu_arg_builder import SPICE_PORT_START, VNC_PORT_START, next_free_port, build_iso_search_dirs
+
+_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_ISO_OS_KEYWORDS  = _CFG.get("iso_os_keywords", {})
+_ISO_ARM_MARKERS  = tuple(_CFG.get("iso_arm_markers", []))
+_ISO_X86_MARKERS  = tuple(_CFG.get("iso_x86_markers", []))
 
 
 class _VmLifecycleMixin:
@@ -310,24 +316,13 @@ class _VmLifecycleMixin:
             List of ISO dicts (from ``scan_isos()``) extended with
             ``"match_score": int``. Higher score → better match.
         """
-        _OS_KEYWORDS: Dict[str, List[str]] = {
-            "windows": ["windows", "win11", "win10", "win"],
-            "linux":   ["linux", "ubuntu", "debian", "fedora", "mint", "arch",
-                        "opensuse", "manjaro", "pop", "elementary", "zorin",
-                        "kali", "parrot", "tails", "centos", "rocky", "alma"],
-            "macos":   ["macos", "mac", "osx", "darwin", "ventura", "sonoma",
-                        "monterey", "sequoia"],
-        }
-        _ARM_MARKERS = ("arm64", "aarch64", "_arm_", "-arm-", "arm_v")
-        _X86_MARKERS = ("amd64", "x86_64", "x64", "i386", "i686", "64bit", "64-bit")
-
         os_type_l = (os_type or "").lower()
         os_name_l = (os_name or "").lower()
         vm_is_x86 = machine_arch == "x86_64"
         vm_is_arm = machine_arch in ("aarch64", "arm")
 
         generic_keywords: List[str] = []
-        for key, kws in _OS_KEYWORDS.items():
+        for key, kws in _ISO_OS_KEYWORDS.items():
             if key in os_type_l or key in os_name_l:
                 generic_keywords.extend(kws)
 
@@ -337,9 +332,9 @@ class _VmLifecycleMixin:
         results: List[Dict[str, Any]] = []
         for iso in self.scan_isos():
             fname = iso["name"].lower()
-            if vm_is_x86 and any(m in fname for m in _ARM_MARKERS):
+            if vm_is_x86 and any(m in fname for m in _ISO_ARM_MARKERS):
                 continue
-            if vm_is_arm and any(m in fname for m in _X86_MARKERS):
+            if vm_is_arm and any(m in fname for m in _ISO_X86_MARKERS):
                 continue
             specific_score = sum(10 for w in specific_words if w in fname)
             generic_score  = sum(1  for kw in generic_keywords

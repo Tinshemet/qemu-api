@@ -19,8 +19,6 @@ import threading
 import time
 
 
-_REFRESH = 1.0
-
 # ── state ─────────────────────────────────────────────────────────────────────
 
 _cmd_buf   = ""
@@ -61,16 +59,22 @@ C_DIM    = 5
 C_YELLOW = 6
 
 
-_ADMIN_CFG_PATH      = os.path.join(_here, "admin_config.json")
-_CUSTOM_COLOR_SLOT   = 16
+_ADMIN_CFG_PATH    = os.path.join(_here, "admin_config.json")
+_CUSTOM_COLOR_SLOT = 16
 
+import json as _json
 
 def _load_admin_cfg() -> dict:
     try:
-        import json as _json
         return _json.load(open(_ADMIN_CFG_PATH))
     except Exception:
         return {}
+
+_ADMIN_CFG          = _load_admin_cfg()
+_REFRESH            = _ADMIN_CFG.get("refresh_rate_s",      1.0)
+_DEFAULT_PORT       = _ADMIN_CFG.get("default_port",        8080)
+_LOG_PATH           = _ADMIN_CFG.get("log_path",            "/tmp/qemu-api-server.log")
+_EVENTS_LIMIT       = _ADMIN_CFG.get("events_display_limit", 200)
 
 
 def _hex_to_curses(hex_color: str) -> tuple:
@@ -226,9 +230,8 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     except curses.error:
         pass
     try:
-        stdscr.addstr(h - 1, 0,
-                      "  stop/kill/launch/list/stopall <vm>   start-server  status  clearlog  shutdown  help  q=quit"[:w-1],
-                      _cp(C_DIM))
+        _hint = "  stop/kill/launch/list/stopall <vm>   start-server  status  clearlog  shutdown  help  q=quit"
+        stdscr.addstr(h - 1, 0, _hint[:w-1], _cp(C_DIM))
     except curses.error:
         pass
 
@@ -363,12 +366,11 @@ def _dispatch(cmd: str):
                         env["API_TOKEN"] = _f.read().strip()
                 except Exception:
                     pass
-                log_path = "/tmp/qemu-api-server.log"
-                with open(log_path, "w") as log_fh:
+                with open(_LOG_PATH, "w") as log_fh:
                     proc = subprocess.Popen(
                         [sys.executable, "-m", "uvicorn",
                          "server.http.api_server:app",
-                         "--host", "0.0.0.0", "--port", "8080",
+                         "--host", "0.0.0.0", "--port", str(_DEFAULT_PORT),
                          "--log-level", "warning"],
                         cwd=files_dir, env=env,
                         start_new_session=True,
@@ -377,9 +379,9 @@ def _dispatch(cmd: str):
                     )
                 time.sleep(0.5)
                 if _server_pid():
-                    new_msg = f"server started (pid {proc.pid})  logs: {log_path}"
+                    new_msg = f"server started (pid {proc.pid})  logs: {_LOG_PATH}"
                 else:
-                    new_msg = f"may have failed — check {log_path}"
+                    new_msg = f"may have failed — check {_LOG_PATH}"
 
         elif verb in ("shutdown", "shutdown-server"):
             pid = _server_pid()
@@ -490,7 +492,7 @@ def _run(stdscr):
                 vms = raw if isinstance(raw, list) else raw.get("vms", [])
             except Exception:
                 vms = []
-            events     = read_events(limit=200)
+            events     = read_events(limit=_EVENTS_LIMIT)
             last_fetch = now
 
         _draw(stdscr, vms, events, now - start)

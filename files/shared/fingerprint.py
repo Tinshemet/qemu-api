@@ -24,6 +24,8 @@ except FileNotFoundError:
 _VM_BIOS_VENDORS   = set(_FP.get("vm_bios_vendors",   ["seabios", "ovmf", "tianocore", "edk ii", "bochs"]))
 _VM_CHASSIS_TYPES  = set(_FP.get("vm_chassis_types",   ["other", "unspecified", ""]))
 _QEMU_OUI_PREFIXES = set(_FP.get("qemu_oui_prefixes",  ["52:54:00", "00:1a:4a"]))
+_VM_MANUFACTURERS  = set(_FP.get("vm_manufacturers",   ["qemu", "bochs", "vmware", "virtualbox", "xen"]))
+_VM_NIC_MODELS     = set(_FP.get("vm_nic_models",      ["virtio-net-pci", "virtio-net", "vmxnet3"]))
 _SCORE_GOOD        = _FP.get("score_good", 80)
 _SCORE_WARN        = _FP.get("score_warn", 50)
 
@@ -33,8 +35,8 @@ except ImportError:
     MachineConfig = None  # type: ignore[assignment,misc]
 
 
-# Simulates what inxi -M -N -C -D -A -G would report from inside the guest, scoring each field and printing a recommendation panel.
-# In: str VM name → Out: nothing (console output)
+# Simulates what inxi -M -N -C -D -A -G would report from inside the guest,
+# scoring each field and printing a recommendation panel.
 def tf_report(name: str, summary: bool = False) -> dict:
     if MachineConfig is None:
         return {"success": False, "error": "fingerprint not available in provider-only mode"}
@@ -53,7 +55,7 @@ def tf_report(name: str, summary: bool = False) -> dict:
         checks.append({"section": "inxi -M", "field": "System manufacturer",
                         "value": "(not set)", "status": "fail",
                         "detail": "QEMU default 'QEMU' string exposed — immediately detectable"})
-    elif mfr.lower() in ("qemu", "bochs", "vmware", "virtualbox", "xen"):
+    elif mfr.lower() in _VM_MANUFACTURERS:
         checks.append({"section": "inxi -M", "field": "System manufacturer",
                         "value": mfr, "status": "fail",
                         "detail": f"'{mfr}' is a known hypervisor string"})
@@ -142,7 +144,6 @@ def tf_report(name: str, summary: bool = False) -> dict:
                             "value": oui.upper(), "status": "ok",
                             "detail": "OUI not in known QEMU range"})
 
-    _VM_NIC_MODELS = {"virtio-net-pci", "virtio-net", "vmxnet3"}
     nic_model = ""
     if cfg.networks:
         nic_model = (cfg.networks[0].model or "").strip()
@@ -190,7 +191,8 @@ def tf_report(name: str, summary: bool = False) -> dict:
     if disk_bus == "virtio":
         checks.append({"section": "inxi -D", "field": "Disk interface",
                         "value": "virtio-blk (vda/vdb)", "status": "warn",
-                        "detail": "virtio-blk device names (vda, vdb) are a strong VM indicator; use sata, nvme, or scsi"})
+                        "detail": ("virtio-blk device names (vda, vdb) are a strong VM"
+                                   " indicator; use sata, nvme, or scsi")})
     else:
         checks.append({"section": "inxi -D", "field": "Disk interface",
                         "value": disk_bus, "status": "ok",
@@ -203,7 +205,8 @@ def tf_report(name: str, summary: bool = False) -> dict:
     elif disk_bus == "virtio":
         checks.append({"section": "inxi -D", "field": "Disk model string",
                         "value": disk_model, "status": "warn",
-                        "detail": f"Model set to '{disk_model}' but virtio-blk does not expose model to guest — switch bus to sata/nvme/scsi"})
+                        "detail": (f"Model set to '{disk_model}' but virtio-blk does not"
+                                   " expose model to guest — switch bus to sata/nvme/scsi")})
     else:
         checks.append({"section": "inxi -D", "field": "Disk model string",
                         "value": disk_model, "status": "ok",
@@ -247,7 +250,8 @@ def tf_report(name: str, summary: bool = False) -> dict:
     if getattr(cfg, "hardened", False):
         checks.append({"section": "host security", "field": "QEMU seccomp sandbox",
                         "value": "enabled", "status": "ok",
-                        "detail": "QEMU process is seccomp-sandboxed — guest code execution in QEMU cannot make dangerous syscalls"})
+                        "detail": ("QEMU process is seccomp-sandboxed — guest code execution"
+                                   " in QEMU cannot make dangerous syscalls")})
         checks.append({"section": "host security", "field": "Hypervisor CPUID bit",
                         "value": "hidden (-hypervisor, kvm=off)", "status": "ok",
                         "detail": "Guest cannot detect KVM via CPUID; KVM acceleration still active for performance"})
@@ -260,7 +264,8 @@ def tf_report(name: str, summary: bool = False) -> dict:
     else:
         checks.append({"section": "host security", "field": "Hardened mode",
                         "value": "off", "status": "warn",
-                        "detail": "hardened=True adds seccomp sandbox, hides hypervisor CPUID, disables SMM, and adds speculation mitigations"})
+                        "detail": ("hardened=True adds seccomp sandbox, hides hypervisor"
+                                   " CPUID, disables SMM, and adds speculation mitigations")})
 
     # ── Score ─────────────────────────────────────────────────────────────────
     n_ok   = sum(1 for c in checks if c["status"] == "ok")

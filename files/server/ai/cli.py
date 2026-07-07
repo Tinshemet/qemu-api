@@ -19,7 +19,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 try:
-    from shared.api.qemu_config import _MC, OVMF, check_profile_compatibility, check_system_capabilities, get_all_profiles, list_profiles
+    from shared.api.qemu_config import (  # noqa: E402
+        _MC, OVMF, check_profile_compatibility,
+        check_system_capabilities, get_all_profiles, list_profiles,
+    )
 except ImportError:
     _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
     OVMF = {"available": False, "code": "", "vars": ""}
@@ -27,7 +30,10 @@ except ImportError:
     def get_all_profiles(): return {}                                         # type: ignore[misc]
     def check_profile_compatibility(*a, **kw): return {"compatible": True, "issues": [], "warnings": []}  # type: ignore[misc]
     def check_system_capabilities(): return {}                                # type: ignore[misc]
-from .session      import AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session, save_session, set_auto_clear, set_loop_max, get_loop_max
+from .session import (
+    AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session,
+    save_session, set_auto_clear, set_loop_max, get_loop_max,
+)
 from shared.display import (
     console,
     print_banner, render_compat, render_monitor, render_profiles,
@@ -56,8 +62,31 @@ _CONFIRM_YN     = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
 _CONFIRM_NAME   = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
 _RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
 
+_SHARED_API_CFG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "shared", "api", "config.json",
+)
+_SHARED_API_CFG  = json.load(open(_SHARED_API_CFG_PATH))
+_QEMU_HOST_IP    = _SHARED_API_CFG.get("qemu_user_net_gateway", "10.0.2.2")
+_IO_CHUNK        = _SHARED_API_CFG.get("io_chunk_bytes", 4 * 1024 * 1024)
+
+
 def _is_critical(tool_name: str, args: dict) -> bool:
-    """True when the operation requires double confirmation (irreversible + data loss)."""
+    """Return True when the operation requires double confirmation.
+
+    Args:
+        tool_name: Name of the tool being called.
+        args:      Tool arguments (reserved for future per-arg checks).
+
+    Returns:
+        ``True`` only for irreversible, data-destroying operations.
+
+    Example::
+
+        _is_critical("delete_vm",  {"name": "myvm"})  # → True
+        _is_critical("launch_vm",  {"name": "myvm"})  # → False
+        _is_critical("stop_vm",    {"name": "myvm"})  # → False
+    """
     return tool_name == "delete_vm"
 
 
@@ -92,7 +121,11 @@ def _build_vm_spec_rows(args: dict) -> list:
     disk_gb      = args.get("disk_size_gb") or _VM_DEFS["disk_size_gb"]
     _DISK_BUS_VALUES = {"sata", "nvme", "scsi", "ide", "virtio"}
     _raw_fmt     = args.get("disk_format") or ""
-    disk_bus_preview = args.get("disk_bus") or (_raw_fmt if _raw_fmt.lower() in _DISK_BUS_VALUES else "") or _VM_DEFS.get("disk_bus", "virtio")
+    disk_bus_preview = (
+        args.get("disk_bus")
+        or (_raw_fmt if _raw_fmt.lower() in _DISK_BUS_VALUES else "")
+        or _VM_DEFS.get("disk_bus", "virtio")
+    )
     disk_fmt     = disk_bus_preview
     net_mode     = args.get("network_mode") or _VM_DEFS["network_mode"]
     iso_path     = args.get("iso_path") or ""
@@ -1490,8 +1523,7 @@ def cli_direct(args: List[str], verbose: bool = False):
         srv = http.server.HTTPServer(('0.0.0.0', port), _Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-        host_ip = "10.0.2.2"  # QEMU user-networking default gateway = host
-        url     = f"http://{host_ip}:{port}/{script_file}"
+        url     = f"http://{_QEMU_HOST_IP}:{port}/{script_file}"
 
         console.print(Panel(
             f"[bold]Script:[/bold] {script_path}\n\n"
@@ -1589,7 +1621,7 @@ def cli_direct(args: List[str], verbose: bool = False):
                 mode = "ab" if resume_from else "wb"
                 downloaded = resume_from
                 with open(out_path, mode) as f:
-                    for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                    for chunk in r.iter_content(chunk_size=_IO_CHUNK):
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
@@ -1605,7 +1637,7 @@ def cli_direct(args: List[str], verbose: bool = False):
         console.print("[dim]Verifying checksum...[/dim]")
         h = _hl.sha256()
         with open(out_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
+            for chunk in iter(lambda: f.read(_IO_CHUNK), b""):
                 h.update(chunk)
         actual_sha = h.hexdigest()
         if actual_sha != expected_sha:

@@ -30,9 +30,24 @@ _REQUIRED: Dict[str, List[Tuple[str, str, List[str]]]] = {
 
 
 def gate_check(tool_name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Returns a clarify dict listing ALL missing required arguments at once,
-    or None if all required arguments are present and the tool may proceed.
+    """Return a clarify dict listing ALL missing required arguments, or None.
+
+    Args:
+        tool_name: Tool being invoked (e.g. ``"create_vm"``).
+        args:      Argument dict as provided by the caller.
+
+    Returns:
+        ``None`` if all required fields are present and the tool may proceed.
+        Otherwise a ``{"success": False, "clarify": True, "missing": [...]}``
+        dict listing every absent required field at once.
+
+    Example::
+
+        gate_check("create_vm", {"name": "myvm", "os_type": "linux"})
+        # → None  (all required fields present)
+        gate_check("create_vm", {})
+        # → {"success": False, "clarify": True,
+        #    "missing": [{"field": "name", ...}, {"field": "os_type", ...}]}
     """
     required_fields = _REQUIRED.get(tool_name)
     if not required_fields:

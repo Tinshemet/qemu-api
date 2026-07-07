@@ -29,7 +29,20 @@ _TIMEOUTS = _CFG["timeouts"]
 # ── QEMU Version Detection ─────────────────────────────────────────────────────
 
 def _parse_qemu_version(binary: str = "qemu-system-x86_64") -> Tuple[int, int, int]:
-    """Return (major, minor, patch). Returns (0, 0, 0) if detection fails."""
+    """Return the QEMU version as ``(major, minor, patch)``.
+
+    Args:
+        binary: QEMU binary to query (default ``qemu-system-x86_64``).
+
+    Returns:
+        Version tuple, or ``(0, 0, 0)`` if detection fails.
+
+    Example::
+
+        _parse_qemu_version()         # → (8, 2, 1)  on a typical Ubuntu 24.04
+        _parse_qemu_version("qemu-system-aarch64")  # → (8, 2, 1)
+        _parse_qemu_version("missing-binary")       # → (0, 0, 0)
+    """
     try:
         r = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=_TIMEOUTS["qemu_version"])
         m = re.search(r"version (\d+)[.](\d+)[.](\d+)", r.stdout)
@@ -87,7 +100,20 @@ PORT_RANGE       = _PORTS["port_range"]
 
 
 def _port_free(port: int) -> bool:
-    """Return True if the given localhost TCP port is not currently in use."""
+    """Check whether a localhost TCP port is available.
+
+    Args:
+        port: Port number to probe.
+
+    Returns:
+        ``True`` if nothing is listening on 127.0.0.1:port; ``False`` if
+        the port is bound.
+
+    Example::
+
+        _port_free(5900)  # → True if no VNC server is running
+        _port_free(22)    # → False on a typical Linux machine (sshd)
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.3)
         return s.connect_ex(("127.0.0.1", port)) != 0
@@ -173,7 +199,7 @@ def build_iso_search_dirs() -> List[str]:
 # ── QEMU Argument Builder ──────────────────────────────────────────────────────
 
 class QemuArgBuilder:
-    def __init__(self, config: MachineConfig):
+    def __init__(self, config: MachineConfig) -> None:
         """Store the config and precompute ARM/raspi detection flags."""
         self.cfg      = config
         self.vm_dir   = config.get_vm_dir()
@@ -229,7 +255,7 @@ class QemuArgBuilder:
         self.args += extra
         return [a for a in self.args if a]
 
-    def _base(self):
+    def _base(self) -> None:
         """Append -name and (when enabled) -enable-kvm; force kvm=False for ARM."""
         self.args += ["-name", f"{self.cfg.name},process={self.cfg.name}"]
         # -enable-kvm enables KVM; accel=kvm is set in _machine() — do NOT add -accel kvm here
@@ -238,7 +264,7 @@ class QemuArgBuilder:
         if self.is_arm:
             self.cfg.kvm = False  # KVM never works for ARM guests on x86 host
 
-    def _harden(self):
+    def _harden(self) -> None:
         """Apply CPU masking, sandbox, and network hardening; mutates self.cfg in place."""
         # Hide hypervisor CPUID bit and KVM paravirt leaves — keeps KVM perf,
         # removes the flag that tells the guest it's inside a hypervisor.
@@ -268,7 +294,7 @@ class QemuArgBuilder:
             "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
         ]
 
-    def _machine(self):
+    def _machine(self) -> None:
         """Append -machine (with KVM/IOMMU/OEM overrides) and -rtc."""
         machine_str = self.cfg.machine_type
         extras = []
@@ -297,7 +323,7 @@ class QemuArgBuilder:
                 rtc_base = _CFG["machine_config_defaults"]["rtc_base_fallback"]
             self.args += ["-rtc", f"base={rtc_base},driftfix=slew"]
 
-    def _cpu(self):
+    def _cpu(self) -> None:
         """Append -cpu (with feature flags) and -smp topology."""
         cpu_str  = CPU_PRESETS.get(self.cfg.cpu_model, self.cfg.cpu_model)
         cpu_name = cpu_str.replace("-cpu ", "").split(",")[0]
@@ -314,7 +340,7 @@ class QemuArgBuilder:
             f"maxcpus={self.cfg.cpu_cores * self.cfg.cpu_threads * self.cfg.cpu_sockets}",
         ]
 
-    def _memory(self):
+    def _memory(self) -> None:
         """Append -m, optional hugepages path, and the virtio balloon device."""
         self.args += ["-m", str(self.cfg.memory_mb)]
         if self.cfg.hugepages and not self.is_arm:
@@ -322,7 +348,7 @@ class QemuArgBuilder:
         if self.cfg.balloon and not self.is_raspi:
             self.args += ["-device", "virtio-balloon-pci"]
 
-    def _firmware(self):
+    def _firmware(self) -> None:
         """Append OVMF code + vars pflash drives (x86 only; no-op on ARM)."""
         if self.is_arm:
             return
@@ -344,10 +370,7 @@ class QemuArgBuilder:
     # Adds -smbios type=0 (BIOS), type=1 (system), type=3 (chassis); skipped on ARM.
     # In: nothing → Out: appends to self.args
     def _chassis_type_byte(self) -> int:
-        mapping = {
-            "notebook": 9, "laptop": 9, "portable": 8,
-            "desktop": 3, "server": 17, "tower": 7, "tablet": 30,
-        }
+        mapping = _CFG["smbios_chassis_type_map"]
         guess = mapping.get((self.cfg.smbios_type or "").lower(), 0)
         if not guess:
             guess = mapping.get((self.cfg.machine_class or "").lower(), 3)
@@ -395,7 +418,7 @@ class QemuArgBuilder:
         """
         return value.replace(",", "")
 
-    def _smbios(self):
+    def _smbios(self) -> None:
         if self.is_arm:
             return
         if self.cfg.manufacturer or self.cfg.product_name:
@@ -434,7 +457,7 @@ class QemuArgBuilder:
         elif self.cfg.manufacturer:
             self.args += ["-smbios", f"type=3,manufacturer={self.cfg.manufacturer}"]
 
-    def _disks(self):
+    def _disks(self) -> None:
         """Append disk drives (SD for raspi; virtio/NVMe/SCSI/IDE for x86) and the ISO cdrom."""
         if self.is_raspi:
             # raspi3b ONLY accepts SD card interface
@@ -454,7 +477,7 @@ class QemuArgBuilder:
         if self.cfg.iso_path:
             self.args += [
                 "-drive",  f"file={self.cfg.iso_path},if=none,id=cdrom0,readonly=on,media=cdrom",
-                "-device", "ide-cd,drive=cdrom0,bootindex=1,model=HL-DT-ST DVDRAM GU90N",
+                "-device", f"ide-cd,drive=cdrom0,bootindex=1,model={_CFG['cdrom_model']}",
             ]
             if not self.cfg.uefi:
                 # Legacy BIOS only — UEFI uses bootindex and ignores -boot order
@@ -463,7 +486,7 @@ class QemuArgBuilder:
             if not self.cfg.uefi:
                 self.args += ["-boot", "order=c,menu=on"]
 
-    def _network(self):
+    def _network(self) -> None:
         """Append network args from each NetworkConfig, falling back to default user-NAT."""
         if not self.cfg.networks:
             net = NetworkConfig(manufacturer_hint=self.cfg.manufacturer)
@@ -485,7 +508,7 @@ class QemuArgBuilder:
         except Exception:
             return False
 
-    def _display(self):
+    def _display(self) -> None:
         """Append display args (SDL/GTK/SPICE/VNC/-nographic); downgrade GPU if GL is unavailable."""
         if self.is_raspi:
             self.args += ["-nographic"]  # raspi3b has NO video output in QEMU
@@ -546,7 +569,7 @@ class QemuArgBuilder:
                 # vgamem_mb removed in QEMU 7+ — don't pass it
                 self.args += ["-device", gpu_device]
 
-    def _audio(self):
+    def _audio(self) -> None:
         """Detect the platform audio server and append the matching -audiodev + -device."""
         if self.is_raspi:
             return
@@ -556,11 +579,12 @@ class QemuArgBuilder:
 
         if sys.platform == "linux":
             _tmp = tempfile.gettempdir()
+            _ag = _CFG.get("audio_socket_globs", {})
             pa_running = bool(
-                _glob.glob("/run/user/*/pulse/native") or
+                _glob.glob(_ag.get("pulse_unix", "/run/user/*/pulse/native")) or
                 _glob.glob(os.path.join(_tmp, "pulse-*", "native"))
             )
-            pw_running = bool(_glob.glob("/run/user/*/pipewire-0"))
+            pw_running = bool(_glob.glob(_ag.get("pipewire", "/run/user/*/pipewire-0")))
             if pa_running:
                 audiodev = "pa,id=audio0"
             elif pw_running:
@@ -578,24 +602,24 @@ class QemuArgBuilder:
         if self.cfg.audio in ("hda", "ich9"):
             self.args += ["-device", "hda-duplex,audiodev=audio0"]
 
-    def _usb(self):
+    def _usb(self) -> None:
         """Append the NEC xHCI controller, USB keyboard, and tablet/mouse device."""
         # nec-usb-xhci: NEC uPD720200 USB 3.0 (PCI 1033:0194) — real chip PCI IDs.
         # qemu-xhci uses 1b36 (Red Hat/QEMU) which inxi detects as virtual.
         self.args += ["-device", "nec-usb-xhci,id=usb", "-device", "usb-kbd"]
         self.args += ["-device", "usb-tablet" if self.cfg.tablet else "usb-mouse"]
 
-    def _battery(self):
+    def _battery(self) -> None:
         """No-op placeholder — ACPI battery tables are not yet implemented for QEMU."""
         pass
 
-    def _kernel_direct(self):
+    def _kernel_direct(self) -> None:
         """Append -kernel/-initrd/-append when direct kernel boot paths are configured."""
         if self.cfg.kernel_path:    self.args += ["-kernel", self.cfg.kernel_path]
         if self.cfg.initrd_path:    self.args += ["-initrd", self.cfg.initrd_path]
         if self.cfg.kernel_cmdline: self.args += ["-append", self.cfg.kernel_cmdline]
 
-    def _qmp(self):
+    def _qmp(self) -> None:
         """Append QMP chardev/mon args; Unix socket on Linux/macOS, TCP on Windows."""
         if sys.platform == "win32":
             port = self.cfg.qmp_tcp_port or _next_free_port(
@@ -615,7 +639,7 @@ class QemuArgBuilder:
                 "-mon",     "chardev=qmp,mode=control,pretty=off",
             ]
 
-    def _monitor(self):
+    def _monitor(self) -> None:
         """Append human-monitor chardev/mon args; Unix socket on Linux/macOS, TCP on Windows."""
         if sys.platform == "win32":
             port = self.cfg.monitor_tcp_port or _next_free_port(
@@ -635,7 +659,7 @@ class QemuArgBuilder:
                 "-mon",     "chardev=mon,mode=readline",
             ]
 
-    def _serial(self):
+    def _serial(self) -> None:
         """Append a serial console (Unix socket on Linux/macOS, TCP telnet on Windows)."""
         if sys.platform == "win32":
             port = self.cfg.serial_tcp_port or _next_free_port(
@@ -647,7 +671,7 @@ class QemuArgBuilder:
             sock = os.path.join(self.vm_dir, "serial.sock")
             self.args += ["-serial", f"unix:{sock},server,nowait"]
 
-    def _tpm(self):
+    def _tpm(self) -> None:
         """Append TPM chardev, tpmdev emulator, and tpm-tis device."""
         tpm_sock = os.path.join(self.cfg.get_vm_dir(), "tpm.sock")
         self.args += [
@@ -656,7 +680,7 @@ class QemuArgBuilder:
             "-device",  "tpm-tis,tpmdev=tpm0",
         ]
 
-    def _misc(self):
+    def _misc(self) -> None:
         """Append virtio-rng (non-hardened), -no-reboot (ISO boot), and -no-user-config."""
         if not self.cfg.hardened:
             self.args += ["-device", "virtio-rng-pci"]

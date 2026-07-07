@@ -22,6 +22,16 @@ import requests
 
 _CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 _CFG       = json.load(open(_CFG_PATH))
+_UI_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CLI_config.json")
+_UI_CFG      = json.load(open(_UI_CFG_PATH)) if os.path.exists(_UI_CFG_PATH) else {}
+
+_WRAP_WIDTH         = _UI_CFG.get("wrap_width",              120)
+_AUTOSTART_POLLS    = _UI_CFG.get("autostart_poll_count",     20)
+_AUTOSTART_INTERVAL = _UI_CFG.get("autostart_poll_interval_s", 0.5)
+_ISO_DISTRO_KEYWORDS = [
+    (pair[0], pair[1]) for pair in _UI_CFG.get("iso_distro_keywords", [])
+]
+
 SERVER_URL = os.environ.get("SERVER_URL",   _CFG.get("server_url", "http://localhost:8080"))
 _TOKEN     = os.environ.get("API_TOKEN",    _CFG.get("token",      ""))
 _TIMEOUT   = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))
@@ -65,7 +75,21 @@ _CUSTOM_COLOR_SLOT = 16   # first free slot above the standard 8+8
 
 
 def _hex_to_curses(hex_color: str) -> tuple:
-    """Parse #RRGGBB → (r, g, b) scaled to 0-1000 for curses.init_color()."""
+    """Parse a ``#RRGGBB`` hex string to (r, g, b) scaled 0-1000 for curses.
+
+    Args:
+        hex_color: Hex color string, with or without leading ``#``.
+
+    Returns:
+        ``(r, g, b)`` each in the range [0, 1000] as required by
+        ``curses.init_color()``. Returns ``(667, 667, 667)`` on bad input.
+
+    Example::
+
+        _hex_to_curses("#7355a3")  # → (451, 333, 639)
+        _hex_to_curses("#ffffff")  # → (1000, 1000, 1000)
+        _hex_to_curses("bad")      # → (667, 667, 667)
+    """
     h = hex_color.lstrip("#")
     if len(h) != 6:
         return (667, 667, 667)   # fallback ~gray
@@ -231,29 +255,23 @@ def _try_open_vnc(port: int):
 
 # ── Tool result rendering ─────────────────────────────────────────────────────
 
-_ISO_DISTRO_KEYWORDS = [
-    ("kali",       "kali"),
-    ("ubuntu",     "ubuntu"),
-    ("debian",     "debian"),
-    ("fedora",     "fedora"),
-    ("mint",       "mint"),
-    ("manjaro",    "manjaro"),
-    ("opensuse",   "opensuse"),
-    ("centos",     "centos"),
-    ("rocky",      "rocky"),
-    ("alma",       "almalinux"),
-    ("arch",       "arch"),
-    ("nixos",      "nixos"),
-    ("win10",      "windows"),
-    ("win11",      "windows"),
-    ("windows",    "windows"),
-    ("macos",      "macos"),
-    ("darwin",     "macos"),
-]
-
 
 def _iso_distro_hint(iso_name: str) -> str:
-    """Return the distro name implied by the ISO filename, or '' if unknown."""
+    """Return the distro name implied by the ISO filename.
+
+    Args:
+        iso_name: ISO filename or path (only the basename is examined).
+
+    Returns:
+        Lowercase distro name (e.g. ``"ubuntu"``, ``"windows"``), or
+        ``''`` if no keyword matched.
+
+    Example::
+
+        _iso_distro_hint("ubuntu-22.04-desktop-amd64.iso")  # → "ubuntu"
+        _iso_distro_hint("Win11_23H2_English_x64.iso")       # → "windows"
+        _iso_distro_hint("unknown.iso")                       # → ""
+    """
     s = iso_name.lower()
     for keyword, distro in _ISO_DISTRO_KEYWORDS:
         if keyword in s:
@@ -462,7 +480,7 @@ def _autostart_server(stdscr) -> bool:
     except Exception:
         pass
 
-    log_path = "/tmp/qemu-api-server.log"
+    _log_path = _UI_CFG.get("log_path", "/tmp/qemu-api-server.log")
     import subprocess as _sp
     _sp.Popen(
         [sys.executable, "-m", "uvicorn",
@@ -471,12 +489,12 @@ def _autostart_server(stdscr) -> bool:
          "--log-level", "warning"],
         cwd=_files_dir, env=env,
         start_new_session=True,
-        stdout=open(log_path, "w"),
+        stdout=open(_log_path, "w"),
         stderr=_sp.STDOUT,
     )
 
-    for _ in range(20):
-        time.sleep(0.5)
+    for _ in range(_AUTOSTART_POLLS):
+        time.sleep(_AUTOSTART_INTERVAL)
         _draw(stdscr, "")
         if _server_reachable():
             return True
@@ -534,7 +552,7 @@ def _process_response(result: dict, verbose: bool = False):
     text = result.get("text", "").strip()
     if text:
         _add(f" AI:", _cp(C_CYAN) | curses.A_BOLD)
-        for line in textwrap.wrap(text, 120) or [""]:
+        for line in textwrap.wrap(text, _WRAP_WIDTH) or [""]:
             _add(f"    {line}", _cp(C_CYAN))
 
     ni = result.get("needs_input")
@@ -709,7 +727,11 @@ def _run(stdscr, verbose: bool = False, color_hex: str = "#aaaaaa", font_size: i
         )
         _add(f"  VMs:  {vm_summary}", _cp(C_DIM))
     if _REMOTE_PROFILES:
-        _add(f"  Profiles:  {',  '.join(str(p) if not isinstance(p, dict) else p.get('name','') for p in _REMOTE_PROFILES[:8])}", _cp(C_DIM))
+        _pnames = ',  '.join(
+            str(p) if not isinstance(p, dict) else p.get('name', '')
+            for p in _REMOTE_PROFILES[:8]
+        )
+        _add(f"  Profiles:  {_pnames}", _cp(C_DIM))
     _add("", 0)
     _add('  Type a message or ask the AI anything. Type "help" for shortcuts.', _cp(C_DIM))
     _add("", 0)

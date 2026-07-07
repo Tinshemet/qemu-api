@@ -17,7 +17,6 @@ import hashlib
 import json
 import os
 import pathlib
-import sys
 import uuid
 
 from fastapi import FastAPI, HTTPException, Depends, Body, Request
@@ -30,12 +29,20 @@ from typing import Any, Dict, Iterator, List, Optional
 _CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 with open(_CFG_PATH) as _f:
     _CFG = json.load(_f)
-_ALLOWED_TOOLS:    set  = set(_CFG.get("allowed_remote_tools", []))
+_SHARED_CFG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "shared", "api", "config.json",
+)
+with open(_SHARED_CFG_PATH) as _sf:
+    _SHARED_CFG = json.load(_sf)
+_ALLOWED_TOOLS:       set  = set(_CFG.get("allowed_remote_tools", []))
+_LOCAL_ONLY_DISPLAYS: set  = set(_SHARED_CFG.get("local_only_displays", ["sdl", "gtk"]))
+_MIN_TOKEN_LEN:       int  = _SHARED_CFG.get("min_token_length", 16)
 # Empty list = all allowed; non-empty = allowlist
-_ALLOWED_VMS:      list = _CFG.get("client_allowed_vms",      [])
-_ALLOWED_PROFILES: list = _CFG.get("client_allowed_profiles", [])
-_MAX_MESSAGE_LEN: int   = _CFG.get("max_message_length", 32_768)
-_MAX_SESSIONS:    int   = _CFG.get("max_sessions", 1_000)
+_ALLOWED_VMS:         list = _CFG.get("client_allowed_vms",      [])
+_ALLOWED_PROFILES:    list = _CFG.get("client_allowed_profiles", [])
+_MAX_MESSAGE_LEN:     int  = _CFG.get("max_message_length", 32_768)
+_MAX_SESSIONS:        int  = _CFG.get("max_sessions", 1_000)
 
 
 def _filter_allowed(names: list, allowlist: list) -> list:
@@ -45,7 +52,7 @@ def _filter_allowed(names: list, allowlist: list) -> list:
     return [n for n in names if n in allowlist]
 
 
-def _check_vm_allowed(vm_name: str):
+def _check_vm_allowed(vm_name: str) -> None:
     """Raise HTTP 403 if the VM is not in the client allowlist."""
     if _ALLOWED_VMS and vm_name not in _ALLOWED_VMS:
         raise HTTPException(status_code=403, detail=f"VM '{vm_name}' is not accessible to clients.")
@@ -82,7 +89,7 @@ _LOCALHOST = {"127.0.0.1", "::1", "localhost"}
 def _require_token(
     request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_auth),
-):
+) -> None:
     """FastAPI dependency: allow localhost freely; require valid Bearer token otherwise."""
     if request.client and request.client.host in _LOCALHOST:
         return  # localhost always trusted
@@ -139,12 +146,12 @@ def _get_session(sid: str) -> Dict[str, Any]:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, Any]:
     return {"status": "ok"}
 
 
 @app.get("/info", dependencies=[Depends(_require_token)])
-def info():
+def info() -> Dict[str, Any]:
     """Return server-side runtime info for the client banner."""
     from server.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL
     from shared.api.qemu_config  import OVMF
@@ -157,14 +164,14 @@ def info():
 
 
 @app.get("/events", dependencies=[Depends(_require_token)])
-def get_events(limit: int = 100, since: str = ""):
+def get_events(limit: int = 100, since: str = "") -> Dict[str, Any]:
     """Return recent server events (tool calls, outcomes, durations)."""
     from server.event_log import read_events
     return {"events": read_events(limit=limit, since=since)}
 
 
 @app.get("/sync", dependencies=[Depends(_require_token)])
-def sync():
+def sync() -> Dict[str, Any]:
     """Return server-authoritative config the client should apply at startup."""
     from shared.executioner.tool_executor import manager as _mgr
     from shared.api.qemu_config import list_profiles as _list_profiles
@@ -199,7 +206,7 @@ def sync():
 
 
 @app.post("/chat", dependencies=[Depends(_require_token)])
-def chat(req: ChatRequest):
+def chat(req: ChatRequest) -> Dict[str, Any]:
     """
     Process one AI chat turn server-side and return the response.
 
@@ -347,24 +354,27 @@ def chat(req: ChatRequest):
 
 
 @app.get("/sessions", dependencies=[Depends(_require_token)])
-def list_sessions():
+def list_sessions() -> Dict[str, Any]:
     """List active session IDs (debug/admin)."""
     return {"sessions": list(_sessions.keys())}
 
 
 @app.delete("/sessions/{session_id}", dependencies=[Depends(_require_token)])
-def clear_session(session_id: str):
+def clear_session(session_id: str) -> Dict[str, Any]:
     """Delete a session's conversation history."""
     _sessions.pop(session_id, None)
     return {"ok": True, "session_id": session_id}
 
 
 @app.post("/rotate-token", dependencies=[Depends(_require_token)])
-def rotate_token(new_token: str = Body(..., embed=True)):
+def rotate_token(new_token: str = Body(..., embed=True)) -> Dict[str, Any]:
     """Replace the in-memory token and persist it to ~/.qemu-api.token."""
     global _TOKEN
-    if len(new_token) < 16:
-        raise HTTPException(status_code=400, detail="New token must be at least 16 characters.")
+    if len(new_token) < _MIN_TOKEN_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"New token must be at least {_MIN_TOKEN_LEN} characters.",
+        )
     _TOKEN = new_token
     os.environ["API_TOKEN"] = new_token
     _TOKEN_FILE.write_text(new_token)
@@ -373,7 +383,7 @@ def rotate_token(new_token: str = Body(..., embed=True)):
 
 
 @app.post("/execute", dependencies=[Depends(_require_token)])
-def execute(req: ExecuteRequest):
+def execute(req: ExecuteRequest) -> Any:
     """Dispatch a tool call to tool_executor and return its result (or raise HTTP 4xx on access/preflight failure)."""
     from shared.executioner.tool_executor import execute_tool, manager
     from shared.preflight.validator       import _preflight_check
@@ -433,10 +443,9 @@ def execute(req: ExecuteRequest):
         }
 
     # ── Remote display override ───────────────────────────────────────────────
-    _LOCAL_ONLY = {"sdl", "gtk"}
     if req.tool_name == "launch_vm":
         args = dict(args)
-        if args.get("display", "sdl") in _LOCAL_ONLY or "display" not in args:
+        if args.get("display", "sdl") in _LOCAL_ONLY_DISPLAYS or "display" not in args:
             args["display"] = "vnc"
         args["vnc_bind_local"] = True
 

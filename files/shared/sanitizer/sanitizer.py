@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 try:
     from shared.api.qemu_config import get_all_profiles
 except ImportError:
-    def get_all_profiles(): return {}                                         # type: ignore[misc]
+    def get_all_profiles() -> Dict[str, Any]: return {}                       # type: ignore[misc]
 
 with open(os.path.join(os.path.dirname(__file__), "config.json")) as _f:
     _CFG = json.load(_f)
@@ -51,6 +51,15 @@ _DEFAULT_BRIDGE:      str   = _CFG["default_bridge"]
 _ARM_CPU_MODELS:      set   = set(_CFG["arm_cpu_models"])
 _ARM_MACHINE_TYPES:   tuple = tuple(_CFG["arm_machine_types"])
 _ARM_MACHINE_ARCHS:   tuple = tuple(_CFG["arm_machine_archs"])
+
+_VALID_DISK_BUS:   set   = set(_CFG["valid_disk_bus"])
+_INT_FIELDS:       set   = set(_CFG["int_fields"])
+_BOOL_FIELDS:      set   = set(_CFG["bool_fields"])
+_PATH_FIELDS:      tuple = tuple(_CFG["path_fields"])
+_PORT_FIELDS:      tuple = tuple(_CFG["port_fields"])
+_SNAP_NAME_FIELDS: tuple = tuple(_CFG["snap_name_fields"])
+_TEXT_FIELDS:      tuple = tuple(_CFG["text_fields"])
+_ISO_STOPWORDS:    set   = set(_CFG["iso_stopwords"])
 
 
 # ── Path fixer ─────────────────────────────────────────────────────────────────
@@ -186,13 +195,8 @@ def _resolve_iso(iso_hint: str) -> Optional[str]:
         return iso_hint
 
     # Step 3: keyword scoring
-    stopwords = {
-        "iso", "the", "from", "file", "image", "images", "img",
-        "folder", "desktop", "home", "user", "and", "my", "v2",
-        "v1", "x64", "x86", "arm", "arm64", "amd64", "bit",
-    }
     raw_words = re.split(r"[\s/\\-_.]+", iso_hint.lower())
-    keywords  = [w for w in raw_words if len(w) > 2 and w not in stopwords]
+    keywords  = [w for w in raw_words if len(w) > 2 and w not in _ISO_STOPWORDS]
 
     hint_lower = iso_hint.lower()
     for key, variants in _ISO_OS_KEYWORDS.items():
@@ -243,11 +247,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """
     args = dict(args)  # don't mutate the caller's dict
     # Type coercion
-    int_fields  = {"cpu_cores", "cpu_threads", "memory_mb", "disk_size_gb",
-                   "new_size_gb", "disk_index", "cpu_percent", "lines", "vnc_port", "spice_port"}
-    bool_fields = {"kvm", "uefi", "battery", "hugepages", "force", "delete_disks", "dry_run", "balloon"}
-
-    for f in int_fields:
+    for f in _INT_FIELDS:
         if f in args and args[f] is not None:
             try:
                 args[f] = int(str(args[f]).replace("GB","").replace("gb","")
@@ -255,7 +255,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 args.pop(f, None)
 
-    for f in bool_fields:
+    for f in _BOOL_FIELDS:
         if f in args and isinstance(args[f], str):
             args[f] = args[f].lower() in ("true", "yes", "1", "on")
 
@@ -288,8 +288,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     # Enum field validation
     # Rescue bus names mis-sent as disk_format before enum validation strips them.
-    _DISK_BUS_VALUES = {"sata", "nvme", "scsi", "ide", "virtio"}
-    if args.get("disk_format", "").lower() in _DISK_BUS_VALUES:
+    if args.get("disk_format", "").lower() in _VALID_DISK_BUS:
         args.setdefault("disk_bus", args["disk_format"])
         del args["disk_format"]
 
@@ -310,7 +309,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             args[field] = val if val in valid_set else _ENUM_DEFAULTS[field]
 
     # Path fields
-    for path_field in ("iso_path", "kernel_path", "initrd_path"):
+    for path_field in _PATH_FIELDS:
         if path_field in args and args[path_field]:
             args[path_field] = _fix_path(str(args[path_field]))
 
@@ -366,7 +365,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         args["disk_size_gb"] = max(_BOUNDS["disk_min_gb"], min(int(args["disk_size_gb"]), _BOUNDS["disk_max_gb"]))
 
     # Port numbers: valid range
-    for port_field in ("vnc_port", "spice_port"):
+    for port_field in _PORT_FIELDS:
         if port_field in args and args[port_field]:
             p = int(args[port_field])
             if not (_BOUNDS["port_min"] <= p <= _BOUNDS["port_max"]):
@@ -383,7 +382,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             ]
 
     # Snapshot / network names: alphanumeric only
-    for field in ("snap_name", "snapshot_name"):
+    for field in _SNAP_NAME_FIELDS:
         if field in args and args[field]:
             args[field] = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(args[field]))
     if "net_name" in args and args["net_name"]:
@@ -392,7 +391,7 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         args["profile_name"] = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(args["profile_name"]).lower())
 
     # Text fields: strip path-like content
-    for text_field in ("os_name", "description", "hostname"):
+    for text_field in _TEXT_FIELDS:
         if text_field in args and args[text_field]:
             val = str(args[text_field])
             if "/" in val or chr(92) in val or "`" in val or "$(" in val:

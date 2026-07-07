@@ -16,14 +16,23 @@ import time
 
 with open(os.path.join(os.path.dirname(__file__), "connection_config.json")) as _f:
     _CFG = json.load(_f)
+_SHARED_CFG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "shared", "api", "config.json"
+)
+with open(_SHARED_CFG_PATH) as _sf:
+    _SHARED_CFG = json.load(_sf)
 API_URL           = os.environ.get("API_URL",   _CFG.get("url",   "local"))
 _TOKEN            = os.environ.get("API_TOKEN", _CFG.get("token", ""))
 _TIMEOUT          = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))
 _CA_CERT          = os.environ.get("API_CA_CERT", _CFG.get("ca_cert") or None)
-_VERIFY           = False if os.environ.get("API_VERIFY_SSL", "1") == "0" else (_CA_CERT or _CFG.get("verify_ssl", True))
-_ALLOWED_VMS:      list = _CFG.get("client_allowed_vms",      [])
-_ALLOWED_PROFILES: list = _CFG.get("client_allowed_profiles", [])
-_ALLOWED_TOOLS:    set  = set(_CFG.get("allowed_remote_tools", []))
+_VERIFY           = (
+    False if os.environ.get("API_VERIFY_SSL", "1") == "0"
+    else (_CA_CERT or _CFG.get("verify_ssl", True))
+)
+_ALLOWED_VMS:         list = _CFG.get("client_allowed_vms",      [])
+_ALLOWED_PROFILES:    list = _CFG.get("client_allowed_profiles", [])
+_ALLOWED_TOOLS:       set  = set(_CFG.get("allowed_remote_tools", []))
+_LOCAL_ONLY_DISPLAYS: set  = set(_SHARED_CFG.get("local_only_displays", ["sdl", "gtk"]))
 
 _VM_TOOLS = {"launch_vm", "stop_vm", "delete_vm", "clone_vm", "resize_disk",
              "vm_status", "create_snapshot", "restore_snapshot", "delete_snapshot",
@@ -33,12 +42,27 @@ from shared.executioner.tool_executor import execute_tool as _execute_tool  # no
 from server.event_log import log_event as _log_event                        # noqa: E402
 
 
-_LOCAL_ONLY_DISPLAYS = {"sdl", "gtk"}
 
 
 def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
     """Wrapper around shared execute_tool that overrides local-only displays
-    and enforces client tool/VM/profile access control."""
+    and enforces client tool/VM/profile access control.
+
+    Args:
+        tool_name: Name of the tool to call (e.g. ``"launch_vm"``).
+        args:      Tool arguments dict.
+        verbose:   Pass through to the underlying executor.
+
+    Returns:
+        Tool result dict, always containing ``"success": bool``.
+
+    Example::
+
+        execute_tool("list_vms", {})
+        # → {"success": True, "vms": [...]}
+        execute_tool("launch_vm", {"name": "myvm"})
+        # → display overridden to "vnc"; {"success": True, ...}
+    """
     # Enforce tool allowlist (covers both /execute and /chat paths)
     if _ALLOWED_TOOLS and tool_name not in _ALLOWED_TOOLS:
         return {"success": False, "error": f"Tool '{tool_name}' is not available."}

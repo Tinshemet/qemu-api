@@ -20,6 +20,12 @@ _VALID_MACHINE_TYPES = set(_CFG["valid_machine_types"])
 _ARM_CPU_PREFIXES    = tuple(_CFG["arm_cpu_prefixes"])
 _GENERIC_OS_NAMES    = set(_CFG["generic_os_names"])
 
+_PF_CFG_PATH         = os.path.join(os.path.dirname(__file__), "..", "preflight", "config.json")
+with open(_PF_CFG_PATH) as _pf:
+    _PF_CFG = json.load(_pf)
+_ISO_ARM_KEYWORDS    = tuple(_PF_CFG.get("arm_iso_keywords", ["arm64", "aarch64", "arm_"]))
+_ISO_X86_KEYWORDS    = tuple(_PF_CFG.get("x86_iso_keywords", ["amd64", "x86_64", "x64", "i386", "i686"]))
+
 from shared.api.qemu_config import (
     MachineConfig, DiskConfig, NetworkConfig,
     OVMF, apply_profile, check_profile_compatibility,
@@ -321,7 +327,7 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         iso_hint = args.get("iso_path", "")
         if iso_hint:
             iso_lower = os.path.basename(iso_hint).lower()
-            if any(k in iso_lower for k in ("arm64", "aarch64", "_arm_", "arm_v")):
+            if any(k in iso_lower for k in _ISO_ARM_KEYWORDS):
                 cfg.machine_arch  = "aarch64"
                 cfg.qemu_binary   = "qemu-system-aarch64"
                 cfg.kvm           = False
@@ -336,8 +342,8 @@ def execute_tool(tool_name: str, args: Dict[str, Any], verbose: bool = False, sk
         iso_hint = args.get("iso_path", "")
         if iso_hint:
             iso_lower  = os.path.basename(iso_hint).lower()
-            is_iso_arm = any(k in iso_lower for k in ("arm64", "aarch64", "arm_", "_arm"))
-            is_iso_x86 = any(k in iso_lower for k in ("amd64", "x86_64", "x64", "i386", "i686"))
+            is_iso_arm = any(k in iso_lower for k in _ISO_ARM_KEYWORDS)
+            is_iso_x86 = any(k in iso_lower for k in _ISO_X86_KEYWORDS)
             if is_iso_arm and cfg.machine_arch == "x86_64":
                 return {
                     "success": False,

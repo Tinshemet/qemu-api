@@ -44,9 +44,18 @@ def _find_first(paths: List[str]) -> Optional[str]:
 # Searches all known distro locations for OVMF firmware files.
 # In: nothing → Out: dict with keys code, vars, ms_code, ms_vars, available
 def detect_ovmf() -> Dict[str, Optional[str]]:
-    """
-    Auto-detect OVMF firmware paths on this system.
-    Returns a dict with keys: code, vars, ms_code, ms_vars, available
+    """Auto-detect OVMF firmware paths on this system.
+
+    Returns:
+        Dict with keys ``code``, ``vars``, ``ms_code``, ``ms_vars``,
+        and ``available`` (True only when both code and vars are found).
+
+    Example::
+
+        detect_ovmf()
+        # → {"code": "/usr/share/OVMF/OVMF_CODE.fd",
+        #    "vars": "/usr/share/OVMF/OVMF_VARS.fd",
+        #    "ms_code": None, "ms_vars": None, "available": True}
     """
     code    = _find_first(_OVMF_SEARCH_PATHS)
     vars_   = _find_first(_OVMF_VARS_SEARCH_PATHS)
@@ -243,65 +252,8 @@ class NetworkConfig:
             self.mac = self._fix_mac(self.mac)
 
     # OUIs keyed by normalized manufacturer keyword — used to pick a vendor-consistent MAC.
-    _VENDOR_OUI_MAP = {
-        "intel":    ["00:1B:21", "10:02:B5", "18:66:DA", "28:D2:44", "2C:44:FD",
-                     "3C:FD:FE", "40:A3:6B", "48:51:B7", "54:BF:64", "60:57:18",
-                     "70:85:C2", "74:D0:2B", "78:2B:CB", "8C:8D:28", "90:E2:BA",
-                     "A0:36:9F", "B0:83:FE", "C8:5B:76", "E4:B9:7A", "F0:1F:AF"],
-        "hp":       ["00:1A:2B", "00:17:A4", "00:1C:C4", "1C:1B:0D", "38:EA:A7",
-                     "3C:D9:2B", "98:4B:E1", "98:E7:F4", "C4:34:6B", "D0:BF:9C"],
-        "hewlett":  ["00:1A:2B", "00:17:A4", "00:1C:C4", "1C:1B:0D", "38:EA:A7",
-                     "3C:D9:2B", "98:4B:E1", "98:E7:F4", "C4:34:6B", "D0:BF:9C"],
-        "dell":     ["00:14:22", "00:15:C5", "00:1A:A0", "00:21:70", "14:18:77",
-                     "18:03:73", "18:60:24", "34:17:EB", "44:A8:42", "B8:AC:6F",
-                     "F8:DB:88", "F8:BC:12", "00:22:19"],
-        "lenovo":   ["00:23:AE", "04:7D:7B", "28:D2:44", "40:74:E0", "54:EE:75",
-                     "70:5A:0F", "88:70:8C", "98:FA:9B", "C8:D3:FF", "E8:6A:64"],
-        "thinkpad": ["00:23:AE", "04:7D:7B", "54:EE:75", "88:70:8C", "98:FA:9B",
-                     "C8:D3:FF", "E8:6A:64"],
-        "asus":     ["00:26:18", "04:42:1A", "10:BF:48", "2C:FD:A1", "70:8B:CD",
-                     "BC:EE:7B", "C8:60:00", "E0:3F:49", "F8:32:E4"],
-        "acer":     ["00:1E:68", "40:B0:34", "A4:C3:F0", "E4:D5:3D", "74:29:AF",
-                     "6C:88:14", "00:27:10"],
-        "toshiba":  ["00:00:39", "00:1C:7E", "98:4F:EE", "D0:DF:9A", "00:0C:F1",
-                     "00:1C:BE", "98:FD:B4"],
-        "samsung":  ["00:12:FB", "00:15:B9", "00:1A:8A", "00:26:37", "50:85:69",
-                     "8C:71:F8", "CC:07:AB", "F4:42:8F", "00:21:D1"],
-        "apple":    ["00:1C:B3", "00:25:BC", "28:CF:E9", "3C:07:54", "68:5B:35",
-                     "A4:83:E7", "AC:BC:32", "F0:18:98", "8C:85:90", "D4:61:9D"],
-        "sony":     ["00:01:4A", "00:13:A9", "00:1D:BA", "00:24:BE", "30:17:C8",
-                     "58:48:22", "A8:26:D9"],
-        "vaio":     ["00:01:4A", "00:13:A9", "00:1D:BA", "00:24:BE", "58:48:22"],
-        "msi":      ["00:D8:61", "A4:C3:F0", "C0:25:A5", "00:26:6C", "7C:8B:CA"],
-        "micro-star": ["00:D8:61", "C0:25:A5", "00:26:6C", "7C:8B:CA"],
-        "gigabyte": ["00:1A:4B", "1C:AF:F7", "C8:9C:DC", "50:46:5D", "68:1D:EF"],
-        "giga-byte": ["00:1A:4B", "1C:AF:F7", "C8:9C:DC", "50:46:5D", "68:1D:EF"],
-        "fujitsu":  ["00:26:FB", "28:09:86", "38:90:A5", "90:1B:0E", "00:00:49"],
-        "panasonic": ["00:00:DA", "00:0B:BF", "00:14:C2", "00:80:45", "18:E7:F4"],
-        "toughbook": ["00:00:DA", "00:0B:BF", "00:14:C2", "18:E7:F4"],
-        "lg":       ["00:1E:75", "00:24:E8", "00:26:E2", "C8:08:73", "CC:FA:00"],
-        "huawei":   ["00:18:82", "00:46:4B", "28:6E:D4", "40:4D:8E", "54:89:98",
-                     "70:72:3C", "AC:E2:D3", "C4:07:2F"],
-        "microsoft": ["00:03:FF", "28:18:78", "7C:ED:8D", "00:15:5D", "60:45:BD"],
-        "surface":  ["00:03:FF", "28:18:78", "7C:ED:8D"],
-        "razer":    ["00:1D:0F", "7C:83:34", "D0:73:D5", "1C:75:08"],
-        "nec":      ["00:00:4C", "00:0B:38", "00:22:97", "A4:1F:72"],
-        "clevo":    ["00:23:8B", "00:26:2D", "54:04:A6"],
-        "sager":    ["00:23:8B", "00:26:2D", "54:04:A6"],
-        "realtek":  ["00:E0:4C", "00:13:46", "4C:79:6E", "D0:50:99", "E0:CB:4E"],
-        "broadcom": ["00:10:18", "00:16:CF", "00:90:4C", "BC:30:5B", "00:1A:73"],
-        "qualcomm": ["00:02:A5", "00:03:7F", "00:1D:E0", "00:23:14", "00:26:58",
-                     "4C:BC:A5", "5C:93:A2"],
-        "atheros":  ["00:03:7F", "00:1D:E0", "00:23:14", "00:26:58", "4C:BC:A5"],
-        "xiaomi":   ["00:9E:C8", "28:6C:07", "34:CE:00", "64:09:80", "F4:8B:32"],
-        "honor":    ["00:1E:42", "04:25:C5", "28:D1:27", "5C:C3:07"],
-        "medion":   ["00:0C:6E", "44:87:FC", "C0:25:A5"],
-        "packard bell": ["40:B0:34", "00:1E:68", "A4:C3:F0"],
-        "gateway":  ["00:1B:9E", "00:24:54", "00:25:64"],
-    }
-
-    # All OUIs flattened — used when no manufacturer hint matches.
-    _ALL_OUIS = [oui for ouis in _VENDOR_OUI_MAP.values() for oui in ouis]
+    _VENDOR_OUI_MAP = _CFG["vendor_oui_map"]
+    _ALL_OUIS       = [oui for ouis in _CFG["vendor_oui_map"].values() for oui in ouis]
 
     # Generates a MAC using a vendor-matched OUI when possible, otherwise any real OUI.
     # In: nothing → Out: sets self.mac
@@ -320,7 +272,22 @@ class NetworkConfig:
     # In: str → Out: str
     @staticmethod
     def _fix_mac(mac: str) -> str:
-        """Validate MAC — if invalid, generate a fresh one."""
+        """Validate MAC; return it unchanged if valid, else generate a new one.
+
+        Args:
+            mac: MAC address string to validate.
+
+        Returns:
+            The input MAC if it matches ``XX:XX:XX:XX:XX:XX``, otherwise a
+            freshly generated random MAC.
+
+        Example::
+
+            NetworkConfig._fix_mac("AA:BB:CC:DD:EE:FF")
+            # → "AA:BB:CC:DD:EE:FF"
+            NetworkConfig._fix_mac("not-a-mac")
+            # → "52:54:00:xx:xx:xx"  (random)
+        """
         import re
         mac = mac.strip()
         if re.match(r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$", mac):
@@ -562,7 +529,18 @@ HARDWARE_PROFILES: Dict[str, Dict[str, Any]] = _CFG["hardware_profiles"]
 # Merges built-in HARDWARE_PROFILES with any saved custom profiles.
 # In: nothing → Out: dict
 def get_all_profiles() -> Dict[str, Dict[str, Any]]:
-    """Return built-in + custom profiles merged."""
+    """Return built-in + custom profiles merged into a single dict.
+
+    Returns:
+        Mapping of profile name → profile data dict. Custom profiles from
+        disk override built-in profiles with the same name.
+
+    Example::
+
+        profiles = get_all_profiles()
+        profiles.keys()
+        # → dict_keys(["dell_g15_5520", "lenovo_thinkpad_x1", ..., "my_custom"])
+    """
     all_profiles = dict(HARDWARE_PROFILES)
     all_profiles.update(_load_custom_profiles())
     return all_profiles
@@ -633,7 +611,10 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
     arch = profile.get("machine_arch", "x86_64")
     if arch == "aarch64" and not caps["qemu_arm_installed"]:
         issues.append("qemu-system-aarch64 not installed. Run: sudo apt install qemu-system-arm")
-        alternatives.append("raspberry_pi_4 requires qemu-system-aarch64. Install it or use a minimal x86 Linux VM instead.")
+        alternatives.append(
+            "raspberry_pi_4 requires qemu-system-aarch64."
+            " Install it or use a minimal x86 Linux VM instead."
+        )
 
     if arch == "aarch64" and caps["host_arch"] == "x86_64":
         warnings.append(
@@ -696,12 +677,9 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
 # In: MachineConfig → Out: MachineConfig
 def apply_os_hints(config: MachineConfig) -> MachineConfig:
     os_type = config.os_type.lower()
+    _os_cpu = _CFG.get("os_cpu_features", {})
     if "windows" in os_type or os_type == "windows":
-        config.cpu_features += [
-            "hv_relaxed", "hv_spinlocks=0x1fff", "hv_vapic",
-            "hv_time", "hv_vendor_id=GenuineIntel",
-            "hv_synic", "hv_stimer", "hv_vpindex",
-        ]
+        config.cpu_features += _os_cpu.get("windows", [])
         config.hpet = False
         if config.rtc_clock == _MC["rtc_clock"]:
             config.rtc_clock = "localtime"
@@ -709,6 +687,6 @@ def apply_os_hints(config: MachineConfig) -> MachineConfig:
     elif "linux" in os_type:
         config.kvm_pv_features = True
     elif "macos" in os_type:
-        config.cpu_features += ["-hypervisor", "+invtsc", "vendor=GenuineIntel"]
+        config.cpu_features += _os_cpu.get("macos", [])
         config.machine_type = "q35"
     return config

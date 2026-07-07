@@ -275,7 +275,10 @@ def render_vm_specs(rows: List[tuple]):
 
 # Prints the startup banner with model, Ollama URL, OVMF status, and verbose mode.
 # In: bool verbose, str ollama_url, str ollama_model, bool ovmf_available, str ovmf_code → Out: nothing (console output)
-def print_banner(verbose: bool, ollama_url: str, ollama_model: str, ovmf_available: bool, ovmf_code: str, api_url: str = "local"):
+def print_banner(
+    verbose: bool, ollama_url: str, ollama_model: str,
+    ovmf_available: bool, ovmf_code: str, api_url: str = "local",
+):
     ovmf_line = (
         f"[success]OVMF ✓[/success]  {ovmf_code}"
         if ovmf_available

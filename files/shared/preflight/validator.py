@@ -46,7 +46,7 @@ _QEMU_CPUS_CACHE:     Optional[set] = None
 
 # Toggles the global flag that disables product verification via DuckDuckGo.
 # In: bool → Out: nothing
-def set_custom_mode(enabled: bool):
+def set_custom_mode(enabled: bool) -> None:
     global _CUSTOM_MODE
     _CUSTOM_MODE = enabled
 
@@ -56,7 +56,21 @@ def set_custom_mode(enabled: bool):
 # Fetches JSON from a URL with an MD5 session cache and timeout; returns None on failure.
 # In: str url, dict? headers → Out: dict | None
 def _net_get(url: str, headers: Dict = None) -> Optional[Dict]:
-    """Fetch JSON from a URL with session caching and timeout. Returns None on failure."""
+    """Fetch JSON from a URL with session caching and timeout.
+
+    Args:
+        url:     URL to fetch; must return JSON.
+        headers: Optional extra headers (User-Agent added automatically).
+
+    Returns:
+        Parsed JSON dict, or ``None`` if the request failed or networking
+        is disabled.
+
+    Example::
+
+        _net_get("https://api.example.com/data")
+        # → {"key": "value"} on success, None on failure
+    """
     if not _NET_ENABLED:
         return None
     cache_key = hashlib.md5(url.encode()).hexdigest()
@@ -76,7 +90,20 @@ def _net_get(url: str, headers: Dict = None) -> Optional[Dict]:
 # Checks if a URL exists via HEAD request; returns False on failure.
 # In: str url → Out: bool
 def _net_head(url: str) -> bool:
-    """Check if a URL exists via HEAD request. Returns False on failure."""
+    """Check if a URL exists via HEAD request.
+
+    Args:
+        url: URL to probe with HTTP HEAD.
+
+    Returns:
+        ``True`` if the server returned a 2xx response; ``False`` on any
+        error or when networking is disabled.
+
+    Example::
+
+        _net_head("https://example.com/file.iso")
+        # → True if the file exists, False if 404 or unreachable
+    """
     if not _NET_ENABLED:
         return False
     try:
@@ -131,8 +158,15 @@ def _get_qemu_cpu_models(binary: str = "qemu-system-x86_64") -> set:
 
 # ── CPU architecture classification ───────────────────────────────────────────
 
-_ARM_CPU_PREFIXES = tuple(_CFG["arm_cpu_prefixes"])
-_X86_CPU_NAMES    = set(_CFG["x86_cpu_names"])
+_ARM_CPU_PREFIXES       = tuple(_CFG["arm_cpu_prefixes"])
+_X86_CPU_NAMES          = set(_CFG["x86_cpu_names"])
+_QEMU_CPU_MODELS        = set(_CFG["qemu_cpu_models"])
+_LAPTOP_TYPE_KEYWORDS   = tuple(_CFG["laptop_type_keywords"])
+_PREFLIGHT_TOOLS        = set(_CFG["preflight_tools"])
+_PREFLIGHT_HW_FIELDS    = set(_CFG["preflight_hw_fields"])
+_DESTRUCTIVE_MON_CMDS   = _CFG["destructive_monitor_cmds"]
+_BAD_ISO_PATH_PATTERNS  = _CFG["bad_iso_path_patterns"]
+_STEALTH_PRODUCT_HINTS  = [tuple(h) for h in _CFG["stealth_product_hints"]]
 
 
 # Returns True if the CPU name matches known ARM prefixes.
@@ -347,84 +381,24 @@ def _validate_profile_for_host(profile_name: str, profile_data: Optional[Dict[st
 
 # ── Pre-flight gate ────────────────────────────────────────────────────────────
 
-# Gate run before destructive tools: validates name, ISO, machine type, Windows requirements, disk size, and profile compatibility.
-# In: str tool_name, dict args, QemuManager, bool verbose → Out: dict with action (ok/auto_fix/ask_user/abort)
-_QEMU_CPU_MODELS = {"qemu64", "qemu32", "kvm64", "kvm32", "max", "base", "host-phys-bits-limit"}
-
-# keyword (lowercase, checked via 'in') → (manufacturer, bios_vendor, smbios_type or None)
-# smbios_type=None means we can't infer chassis from the product name alone.
-_STEALTH_PRODUCT_HINTS: List[tuple] = [
-    # Dell
-    ("latitude",    "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
-    ("inspiron",    "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
-    ("xps",         "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
-    ("precision",   "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
-    ("vostro",      "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
-    ("alienware",   "Dell Inc.",                   "Dell Inc.",                   "Notebook"),
-    ("optiplex",    "Dell Inc.",                   "Dell Inc.",                   "Desktop"),
-    ("poweredge",   "Dell Inc.",                   "Dell Inc.",                   "Server"),
-    # Lenovo
-    ("thinkpad",    "Lenovo",                      "Lenovo",                      "Notebook"),
-    ("ideapad",     "Lenovo",                      "Lenovo",                      "Notebook"),
-    ("yoga",        "Lenovo",                      "Lenovo",                      "Notebook"),
-    ("legion",      "Lenovo",                      "Lenovo",                      "Notebook"),
-    ("thinkcentre", "Lenovo",                      "Lenovo",                      "Desktop"),
-    ("thinkstation","Lenovo",                      "Lenovo",                      "Desktop"),
-    # HP
-    ("elitebook",   "HP",                          "HP",                          "Notebook"),
-    ("probook",     "HP",                          "HP",                          "Notebook"),
-    ("pavilion",    "HP",                          "HP",                          "Notebook"),
-    ("spectre",     "HP",                          "HP",                          "Notebook"),
-    ("envy",        "HP",                          "HP",                          "Notebook"),
-    ("zbook",       "HP",                          "HP",                          "Notebook"),
-    ("omen",        "HP",                          "HP",                          "Notebook"),
-    ("elitedesk",   "HP",                          "HP",                          "Desktop"),
-    ("prodesk",     "HP",                          "HP",                          "Desktop"),
-    # Apple
-    ("macbook",     "Apple Inc.",                  "Apple Inc.",                  "Notebook"),
-    ("imac",        "Apple Inc.",                  "Apple Inc.",                  "Desktop"),
-    ("mac mini",    "Apple Inc.",                  "Apple Inc.",                  "Desktop"),
-    ("mac pro",     "Apple Inc.",                  "Apple Inc.",                  "Tower"),
-    # Microsoft
-    ("surface",     "Microsoft Corporation",       "Microsoft Corporation",       "Notebook"),
-    # ASUS
-    ("zephyrus",    "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
-    ("vivobook",    "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
-    ("zenbook",     "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
-    ("rog ",        "ASUSTeK Computer Inc.",       "American Megatrends Inc.",    "Notebook"),
-    # Acer
-    ("aspire",      "Acer",                        "Acer",                        "Notebook"),
-    ("swift",       "Acer",                        "Acer",                        "Notebook"),
-    ("nitro",       "Acer",                        "Acer",                        "Notebook"),
-    ("predator",    "Acer",                        "Acer",                        "Notebook"),
-    # Samsung
-    ("galaxy book", "Samsung Electronics Co., Ltd.", "Samsung Electronics Co., Ltd.", "Notebook"),
-    # Huawei
-    ("matebook",    "HUAWEI",                      "HUAWEI",                      "Notebook"),
-    # LG
-    ("gram",        "LG Electronics",              "LG Electronics",              "Notebook"),
-    # Toshiba
-    ("portege",     "TOSHIBA",                     "TOSHIBA",                     "Notebook"),
-    ("satellite",   "TOSHIBA",                     "TOSHIBA",                     "Notebook"),
-    ("tecra",       "TOSHIBA",                     "TOSHIBA",                     "Notebook"),
-    # Fujitsu
-    ("lifebook",    "Fujitsu",                     "Fujitsu",                     "Notebook"),
-    ("celsius",     "Fujitsu",                     "Fujitsu",                     "Desktop"),
-    # Sony
-    ("vaio",        "Sony Corporation",            "Sony Corporation",            "Notebook"),
-    # Razer
-    ("razer blade", "Razer",                       "Razer",                       "Notebook"),
-    # MSI
-    ("msi ",        "Micro-Star International Co., Ltd.", "American Megatrends Inc.", "Notebook"),
-    # Gigabyte
-    ("aorus",       "GIGABYTE",                    "American Megatrends Inc.",    "Notebook"),
-    # Panasonic
-    ("toughbook",   "Panasonic",                   "Panasonic",                   "Notebook"),
-]
-
 
 def _stealth_infer_from_product(product_name: str) -> Dict[str, str]:
-    """Return inferred {manufacturer, bios_vendor, smbios_type} from product_name keywords."""
+    """Infer ``{manufacturer, bios_vendor, smbios_type}`` from a product name.
+
+    Args:
+        product_name: Product string (e.g. ``"ThinkPad X1"``).
+
+    Returns:
+        Dict with inferred SMBIOS fields, or empty dict if no hint matched.
+
+    Example::
+
+        _stealth_infer_from_product("ThinkPad X1 Carbon")
+        # → {"manufacturer": "Lenovo", "bios_vendor": "Lenovo",
+        #    "smbios_type": "Notebook"}
+        _stealth_infer_from_product("unknown box")
+        # → {}
+    """
     pn = product_name.lower()
     for keyword, mfr, bios_vendor, smbios_type in _STEALTH_PRODUCT_HINTS:
         if keyword in pn:
@@ -482,7 +456,6 @@ def _validate_stealth_args(args: Dict[str, Any]) -> List[Dict]:
     # That is fine for a desktop profile, but a laptop fingerprint requires type=9 (Notebook).
     smbios_type   = str(args.get("smbios_type", "")).lower()
     machine_class = str(args.get("machine_class", "desktop")).lower()
-    _LAPTOP_KW    = ("notebook", "laptop", "portable")
     if not smbios_type:
         if inferred.get("smbios_type"):
             issues.append({
@@ -493,7 +466,7 @@ def _validate_stealth_args(args: Dict[str, Any]) -> List[Dict]:
                 "fix_value": inferred["smbios_type"],
                 "auto_fix":  True,
             })
-        elif any(k in machine_class for k in _LAPTOP_KW):
+        elif any(k in machine_class for k in _LAPTOP_TYPE_KEYWORDS):
             issues.append({
                 "severity":  "warning",
                 "message":   "stealth VM has laptop machine_class but no smbios_type — chassis defaults to Desktop (type=3) not Laptop (type=9); inxi may call check_vm()",
@@ -600,6 +573,35 @@ def _validate_stealth_args(args: Dict[str, Any]) -> List[Dict]:
     return issues
 
 
+def _triage(issues: List[Dict]) -> tuple:
+    """Split an issue list into (blockers, auto_fixes, warnings).
+
+    Args:
+        issues: List of issue dicts, each with ``"severity"`` and optionally
+                ``"auto_fix"`` keys.
+
+    Returns:
+        ``(blockers, auto_fixes, warnings)`` — three lists partitioned by
+        severity and whether the issue can be fixed automatically.
+
+    Example::
+
+        blockers, fixes, warns = _triage([
+            {"severity": "error",   "message": "no KVM"},
+            {"severity": "warning", "auto_fix": True, "message": "low RAM"},
+            {"severity": "warning", "message": "no OVMF"},
+        ])
+        # blockers → [{"severity": "error", ...}]
+        # fixes    → [{"severity": "warning", "auto_fix": True, ...}]
+        # warns    → [{"severity": "warning", "message": "no OVMF"}]
+    """
+    return (
+        [i for i in issues if i["severity"] == "error"],
+        [i for i in issues if i.get("auto_fix") and i["severity"] != "error"],
+        [i for i in issues if i["severity"] == "warning" and not i.get("auto_fix")],
+    )
+
+
 def _preflight_check(
     tool_name:     str,
     args:          Dict[str, Any],
@@ -621,11 +623,7 @@ def _preflight_check(
     """
     ok = {"action": "ok"}
 
-    if tool_name not in (
-        "create_vm", "create_profile", "launch_vm", "delete_vm", "resize_disk",
-        "clone_vm", "snapshot_restore", "snapshot_delete",
-        "set_resource_limits", "send_monitor_cmd",
-    ):
+    if tool_name not in _PREFLIGHT_TOOLS:
         return ok
 
     if tool_name == "create_vm":
@@ -651,8 +649,7 @@ def _preflight_check(
 
         if iso_path and not stateless_only:
             bad_path = any([
-                "/home/user/" in iso_path, "/path/to/" in iso_path,
-                "scan_isos" in iso_path, "<" in iso_path,
+                any(p in iso_path for p in _BAD_ISO_PATH_PATTERNS),
                 not os.path.exists(os.path.expanduser(re.sub(r"^/home/[^/]+/", REAL_HOME+"/", iso_path))),
             ])
             if bad_path:
@@ -697,10 +694,8 @@ def _preflight_check(
                 }
 
         if args.get("stealth"):
-            stealth_issues = _validate_stealth_args(args)
-            auto_fixes = [i for i in stealth_issues if i.get("auto_fix")]
-            blockers   = [i for i in stealth_issues if i["severity"] == "error"]
-            warnings   = [i for i in stealth_issues if i["severity"] == "warning"]
+            stealth_issues            = _validate_stealth_args(args)
+            blockers, auto_fixes, warnings = _triage(stealth_issues)
 
             # Apply auto-fixes first (inferred from product_name)
             if auto_fixes:
@@ -735,9 +730,7 @@ def _preflight_check(
         if not stateless_only:
             internet_issues = _validate_with_internet(args, verbose=verbose)
             if internet_issues:
-                blockers   = [i for i in internet_issues if i["severity"] == "error"]
-                auto_fixes = [i for i in internet_issues if i.get("auto_fix") and i["severity"] != "error"]
-                warnings   = [i for i in internet_issues if i["severity"] == "warning" and not i.get("auto_fix")]
+                blockers, auto_fixes, warnings = _triage(internet_issues)
                 if blockers:
                     return {"action":"ask_user","reason":" | ".join(i["message"] for i in blockers),"question":"Pre-flight found issues with this VM config. Proceed anyway or fix first?","fix_field":None,"options":["Proceed anyway","Cancel and fix"],"correction":" | ".join(i["fix"] for i in blockers if i.get("fix")),"issues":internet_issues}
                 if auto_fixes:
@@ -752,9 +745,7 @@ def _preflight_check(
             if profile_name:
                 profile_issues = _validate_profile_for_host(profile_name)
                 if profile_issues:
-                    blockers   = [i for i in profile_issues if i["severity"] == "error"]
-                    warnings   = [i for i in profile_issues if i["severity"] == "warning"]
-                    auto_fixes = [i for i in profile_issues if i.get("auto_fix")]
+                    blockers, auto_fixes, warnings = _triage(profile_issues)
                     if blockers:
                         return {"action":"ask_user","reason":f"Profile '{profile_name}' has compatibility issues: {' | '.join(i['message'] for i in blockers)}","question":f"Profile '{profile_name}' may not work on this system. Proceed anyway or cancel?","fix_field":None,"options":["Proceed anyway","Cancel","Use minimal profile instead"],"correction":" | ".join(i["fix"] for i in blockers if i.get("fix")),"issues":profile_issues}
                     if auto_fixes:
@@ -769,10 +760,7 @@ def _preflight_check(
         profile_name  = str(args.get("profile_name", "")).strip()
         profile_data  = {k: v for k, v in args.items() if k not in ("profile_name", "force")}
 
-        _HW_FIELDS = {"cpu_model", "machine_type", "memory_mb", "cpu_cores", "cpu_threads",
-                      "machine_arch", "machine_class", "disk_size_gb", "display", "gpu",
-                      "audio", "kvm", "uefi", "hugepages", "manufacturer", "product_name"}
-        if not any(f in profile_data for f in _HW_FIELDS):
+        if not any(f in profile_data for f in _PREFLIGHT_HW_FIELDS):
             return {
                 "action":     "abort",
                 "reason":     f"Profile '{profile_name}' has no hardware configuration — only a description was provided.",
@@ -784,9 +772,7 @@ def _preflight_check(
             + _validate_with_internet(profile_data, verbose=verbose)
         )
         if profile_issues:
-            blockers   = [i for i in profile_issues if i["severity"] == "error"]
-            auto_fixes = [i for i in profile_issues if i.get("auto_fix") and i["severity"] != "error"]
-            warnings   = [i for i in profile_issues if i["severity"] == "warning" and not i.get("auto_fix")]
+            blockers, auto_fixes, warnings = _triage(profile_issues)
             if blockers:
                 return {
                     "action":      "ask_user",
@@ -856,7 +842,7 @@ def _preflight_check(
 
     elif tool_name == "send_monitor_cmd":
         cmd = str(args.get("cmd", "")).strip().lower()
-        if any(d in cmd for d in ["quit","system_reset","powerdown","eject","device_del","drive_del"]):
+        if any(d in cmd for d in _DESTRUCTIVE_MON_CMDS):
             return {"action":"ask_user","reason":f"Potentially destructive monitor command: '{cmd}'","question":f"Run QEMU monitor command '{cmd}'? This may affect the running VM.","fix_field":None,"options":["Yes, run it","No, cancel"]}
 
     elif tool_name in ("snapshot_restore", "snapshot_delete"):

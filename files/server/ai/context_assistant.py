@@ -40,7 +40,23 @@ def _strip_stopwords(text: str) -> str:
 
 
 def _name_near_triggers(prompt: str, name: str, triggers: List[str]) -> bool:
-    """True if `name` appears within _CONTRA_WINDOW words of any trigger phrase."""
+    """Return True if ``name`` appears within ``_CONTRA_WINDOW`` words of any trigger.
+
+    Args:
+        prompt:   Raw user prompt string.
+        name:     VM or entity name to look for.
+        triggers: Trigger phrases (e.g. ``["delete", "remove"]``).
+
+    Returns:
+        ``True`` if ``name`` is found near a trigger word; ``False`` otherwise.
+
+    Example::
+
+        _name_near_triggers("please delete myvm now", "myvm", ["delete"])
+        # → True
+        _name_near_triggers("list all vms", "myvm", ["delete"])
+        # → False
+    """
     words  = prompt.split()
     name_positions = [i for i, w in enumerate(words) if name in w]
     if not name_positions:

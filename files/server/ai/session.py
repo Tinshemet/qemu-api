@@ -9,8 +9,9 @@ import json
 import os
 from typing import Dict, List, Optional
 
-_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_CFG         = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _SESSION_CFG = _CFG["session"]
+_DRIFT       = _CFG.get("drift_thresholds", {})
 
 SESSION_FILE        = os.path.expanduser(_SESSION_CFG["file"])
 MAX_SESSION_HISTORY = _SESSION_CFG["max_history"]
@@ -86,17 +87,23 @@ def detect_drift(messages: List[Dict]) -> Optional[tuple]:
     user_count      = sum(1 for m in messages if m.get("role") == "user")
     assistant_count = sum(1 for m in messages if m.get("role") == "assistant")
 
-    if user_count >= 4:
+    _min_turns      = _DRIFT.get("min_user_turns",  4)
+    _crit_ratio     = _DRIFT.get("critical_ratio",  0.65)
+    _warn_ratio     = _DRIFT.get("warn_ratio",      0.40)
+    _crit_consec    = _DRIFT.get("critical_consec", 6)
+    _warn_consec    = _DRIFT.get("warn_consec",     3)
+
+    if user_count >= _min_turns:
         orphan_ratio = (user_count - assistant_count) / user_count
         pct = int(orphan_ratio * 100)
-        if orphan_ratio > 0.65:
+        if orphan_ratio > _crit_ratio:
             return (
                 "critical",
                 f"session severely drifted: {user_count} user turns, only "
                 f"{assistant_count} verified responses ({pct}% unverified) — "
                 f"the model is likely poisoned. Type 'clear session' now.",
             )
-        if orphan_ratio > 0.4:
+        if orphan_ratio > _warn_ratio:
             return (
                 "warn",
                 f"session drift: {user_count} user turns but only "
@@ -111,13 +118,13 @@ def detect_drift(messages: List[Dict]) -> Optional[tuple]:
             max_consec = max(max_consec, consec)
         else:
             consec = 0
-    if max_consec >= 6:
+    if max_consec >= _crit_consec:
         return (
             "critical",
             f"session severely drifted: {max_consec} consecutive unanswered "
             f"user turns — the model is likely poisoned. Type 'clear session' now.",
         )
-    if max_consec >= 3:
+    if max_consec >= _warn_consec:
         return (
             "warn",
             f"session drift: {max_consec} consecutive unanswered user turns "

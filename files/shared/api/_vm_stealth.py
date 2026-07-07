@@ -3,11 +3,15 @@ _vm_stealth.py — VM Stealth Setup Mixin (guest fingerprint hardening scripts).
 
 Provides _VmStealthMixin which is composed into QemuManager.
 """
+import json
 import os
 import threading
 from typing import Any, Dict
 
 from .qemu_config import MachineConfig
+
+_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_STEALTH_CFG = _CFG.get("stealth", {})
 
 
 class _VmStealthMixin:
@@ -43,8 +47,8 @@ class _VmStealthMixin:
 
         mfr            = cfg.manufacturer or "Unknown"
         product        = cfg.product_name or "Unknown"
-        webgl_renderer = "Intel(R) Iris(R) Xe Graphics"
-        webgl_vendor   = "Intel"
+        webgl_renderer = _STEALTH_CFG.get("webgl_renderer", "Intel(R) Iris(R) Xe Graphics")
+        webgl_vendor   = _STEALTH_CFG.get("webgl_vendor",   "Intel")
 
         is_windows = "windows" in (cfg.os_type or "").lower()
 

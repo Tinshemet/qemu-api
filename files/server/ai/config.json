@@ -207,6 +207,8 @@
             "edk ii",
             "bochs"
         ],
+        "vm_manufacturers": ["qemu", "bochs", "vmware", "virtualbox", "xen"],
+        "vm_nic_models":    ["virtio-net-pci", "virtio-net", "vmxnet3"],
         "vm_chassis_types": [
             "other",
             "unspecified",
@@ -218,6 +220,13 @@
         ],
         "score_good": 80,
         "score_warn": 50
+    },
+    "drift_thresholds": {
+        "min_user_turns":    4,
+        "critical_ratio":    0.65,
+        "warn_ratio":        0.40,
+        "critical_consec":   6,
+        "warn_consec":       3
     },
     "model": "qwen2.5:7b"
 }

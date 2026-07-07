@@ -48,6 +48,10 @@ from shared.display import (
 )
 
 _CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
+_API_CFG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "shared", "api", "config.json",
+)
 try:
     _CONN      = json.load(open(_CFG_PATH))
     _SERVER    = os.environ.get("SERVER_URL", _CONN.get("server_url", "http://localhost:8080"))
@@ -58,6 +62,13 @@ try:
     _HEADERS   = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}
 except Exception:
     _SERVER, _TOKEN, _TIMEOUT, _VERIFY, _HEADERS = "http://localhost:8080", "", 120, True, {}
+try:
+    _API_CFG      = json.load(open(_API_CFG_PATH))
+    _VNC_VIEWERS  = _API_CFG.get("vnc_viewer_candidates", [])
+    _IO_CHUNK     = _API_CFG.get("io_chunk_bytes", 4 * 1024 * 1024)
+except Exception:
+    _VNC_VIEWERS  = []
+    _IO_CHUNK     = 4 * 1024 * 1024
 
 try:
     from shared.api.qemu_config import (
@@ -211,7 +222,8 @@ def run(args: List[str], verbose: bool = False):
         if r.get("display") == "vnc" and (r.get("success") or r.get("already_running")):
             port = r.get("vnc_port", 5900)
             opened = None
-            for _viewer in ("vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"):
+            _fallback = ("vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre")
+            for _viewer in (_VNC_VIEWERS or _fallback):
                 try:
                     import subprocess as _sp
                     _sp.Popen([_viewer, f"localhost:{port}"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
@@ -418,7 +430,7 @@ def run(args: List[str], verbose: bool = False):
                     return
                 os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
                 with open(dest, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=4 * 1024 * 1024):
+                    for chunk in resp.iter_content(chunk_size=_IO_CHUNK):
                         if chunk:
                             f.write(chunk)
                             h.update(chunk)
@@ -465,7 +477,7 @@ def run(args: List[str], verbose: bool = False):
                     return
                 downloaded = 0
                 with open(dest_file, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=4 * 1024 * 1024):
+                    for chunk in resp.iter_content(chunk_size=_IO_CHUNK):
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
