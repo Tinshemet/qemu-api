@@ -29,6 +29,7 @@ _CLI_CFG_PATH = os.path.join(os.path.dirname(__file__), "CLI_config.json")
 
 
 def _load_cli_config() -> dict:
+    """Load the client CLI config (accent colour, font size), or defaults."""
     try:
         return json.load(open(_CLI_CFG_PATH))
     except Exception:
@@ -36,6 +37,7 @@ def _load_cli_config() -> dict:
 
 
 def main() -> None:
+    """Client entry point — parse flags and launch the chat client or direct CLI."""
     argv    = sys.argv[1:]
     verbose = "-v" in argv
     if verbose:

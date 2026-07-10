@@ -68,6 +68,7 @@ def _is_critical(tool_name: str, args: dict) -> bool:
 # matches what will actually be created.
 # In: dict args → Out: List[tuple[str, str]]
 def _build_vm_spec_rows(args: dict) -> list:
+    """Build the (label, value) rows previewing the specs create_vm will use."""
     name    = args.get("name") or "?"
     os_type = args.get("os_type") or _MC["os_type"]
     os_name = args.get("os_name") or ""
@@ -211,6 +212,7 @@ def _safety_gate(tool_name: str, raw_args: dict, state: "TurnState",
         return GateOutcome.PROCEED
 
     def cancel() -> None:
+        """Append the cancellation messages and mark the operation cancelled."""
         messages.append({
             "role":    "tool",
             "content": json.dumps(

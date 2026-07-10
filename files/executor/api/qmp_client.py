@@ -23,6 +23,7 @@ class QMPClient:
     # Supports Unix domain sockets (Linux/macOS) and TCP via "tcp:host:port" (Windows).
     # In: int timeout → Out: nothing
     def connect(self, timeout: int = _CFG["timeouts"]["qmp_connect"]) -> None:
+        """Open the QMP socket and complete the capabilities handshake."""
         if self.socket_path.startswith("tcp:"):
             host, port = self.socket_path[4:].rsplit(":", 1)
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -39,6 +40,7 @@ class QMPClient:
     # Serializes a dict to JSON and sends it over the socket.
     # In: dict → Out: nothing
     def _send(self, data: dict) -> None:
+        """Send one JSON QMP command over the socket."""
         self.sock.sendall((json.dumps(data) + "\n").encode())
 
     # Reads bytes from the socket until a complete JSON object is assembled.
@@ -49,6 +51,7 @@ class QMPClient:
     # the actual command response.
     # In: nothing → Out: dict
     def _recv(self) -> dict:
+        """Read and parse one JSON QMP response, skipping async events."""
         buf = b""
         while True:
             if b"\n" not in buf:
@@ -73,6 +76,7 @@ class QMPClient:
     # Sends a QMP command with optional args and returns the response dict.
     # In: str cmd, dict args → Out: dict
     def execute(self, cmd: str, args: dict = None) -> dict:
+        """Run a QMP command and return its response dict."""
         payload = {"execute": cmd}
         if args:
             payload["arguments"] = args
@@ -82,5 +86,6 @@ class QMPClient:
     # Closes the socket connection.
     # In: nothing → Out: nothing
     def close(self) -> None:
+        """Close the QMP socket if open."""
         if self.sock:
             self.sock.close()

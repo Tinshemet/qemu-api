@@ -50,6 +50,7 @@ _RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
 
 
 def _show_drift_report(messages: list, runtime_drift_count: int) -> None:
+    """Render the session drift report (orphaned turns, consecutive no-tool count)."""
     from rich.table import Table
     from rich.text  import Text
 
@@ -453,6 +454,7 @@ def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
 
 
 def chat_loop(verbose: bool = False) -> None:
+    """Run the interactive AI chat REPL until the user exits."""
     global _LOOP_MAX
     print_banner(
         verbose=verbose,
@@ -487,6 +489,7 @@ def chat_loop(verbose: bool = False) -> None:
         import threading, requests as _req
         _liveness_stop = threading.Event()
         def _liveness_loop() -> None:
+            """Background thread — ping the server every 30s and warn if it stops responding."""
             import time as _t
             while not _liveness_stop.wait(30):
                 try:

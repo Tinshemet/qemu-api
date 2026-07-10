@@ -28,6 +28,7 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", _OLLAMA["model"])
 # Assembles the LLM system prompt from live OVMF/profile state and custom-mode flag.
 # In: nothing → Out: str
 def _build_system_prompt() -> str:
+    """Assemble the system prompt (tool list + rules) sent to the model."""
     profiles    = [p["name"] for p in list_profiles()]
     ovmf_status = "AVAILABLE" if _get_ovmf().get("available") else "NOT FOUND (SeaBIOS fallback active)"
     custom_note = (
@@ -114,6 +115,7 @@ ARM/Pi  → kvm=false + qemu_binary=qemu-system-aarch64 + machine_type=virt
 # POSTs the full chat payload (with tools) to the Ollama API and returns the parsed JSON response.
 # In: List[dict] messages → Out: dict response
 def _call_ollama(messages: List[Dict]) -> Dict:
+    """Send the conversation to Ollama's chat API; return the parsed response."""
     payload = {
         "model":    OLLAMA_MODEL,
         "messages": [{"role": "system", "content": _build_system_prompt()}] + messages,

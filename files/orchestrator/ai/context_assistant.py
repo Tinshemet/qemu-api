@@ -36,6 +36,7 @@ _MSG:               Dict[str, str]       = _CFG["messages"]
 
 
 def _strip_stopwords(text: str) -> str:
+    """Drop corporate stopwords from a product string for token matching."""
     return " ".join(w for w in text.split() if w not in _STOPWORDS)
 
 
@@ -83,6 +84,7 @@ def _name_near_triggers(prompt: str, name: str, triggers: List[str]) -> bool:
 # must not be mistaken for the user invoking that trigger. Require that
 # neither side of the match be a word character OR a dash/underscore.
 def _trigger_in(text: str, trigger: str) -> bool:
+    """Return True if any trigger phrase occurs in the text."""
     pattern = r"(?<![\w-])" + re.escape(trigger) + r"(?![\w-])"
     return re.search(pattern, text) is not None
 

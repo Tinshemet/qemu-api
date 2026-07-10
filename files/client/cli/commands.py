@@ -92,9 +92,15 @@ except ImportError:
     OVMF = {"available": False}
     # Fallbacks when the executor package isn't in a client-only checkout —
     # return empty data so the direct CLI still imports and runs (server path).
-    def list_profiles() -> list: return []                        # type: ignore[misc]
-    def check_profile_compatibility(*a, **kw) -> dict: return {}  # type: ignore[misc]
-    def check_system_capabilities() -> dict: return {}            # type: ignore[misc]
+    def list_profiles() -> list:                          # type: ignore[misc]
+        """No local profiles when the executor package is absent."""
+        return []
+    def check_profile_compatibility(*a, **kw) -> dict:    # type: ignore[misc]
+        """No local compat data when the executor package is absent."""
+        return {}
+    def check_system_capabilities() -> dict:              # type: ignore[misc]
+        """No local capability data when the executor package is absent."""
+        return {}
 
 try:
     from shared.executioner.tool_executor import manager

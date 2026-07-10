@@ -177,6 +177,7 @@ class _VmRuntimeMixin:
                 # at "Select language". A truly host-independent version needs screen-
                 # state detection or an answer file that fully skips the language page.
                 def _spam_boot_keys() -> None:
+                    """Repeatedly send keypresses over the monitor socket to dismiss boot menus."""
                     conn = None
                     for _ in range(30):
                         try:
@@ -468,6 +469,7 @@ class _VmRuntimeMixin:
         tpm_dir = os.path.join(vm_dir, "tpm")
 
         def _reap(pid: int) -> None:
+            """Terminate a PID (SIGTERM, then SIGKILL after a grace period); no-op if gone."""
             try:
                 os.kill(pid, _signal.SIGTERM)
             except (ProcessLookupError, OSError):
@@ -582,6 +584,7 @@ class _VmRuntimeMixin:
                 super().__init__(*a, directory=script_dir, **kw)
 
             def log_message(self, *_) -> None:
+                """Silence the default HTTP request logging."""
                 pass
 
         srv = http.server.HTTPServer(("0.0.0.0", port), _H)

@@ -5,6 +5,7 @@ import sys
 import importlib
 
 def _alias(legacy: str, real: str) -> None:
+    """Register a legacy module name as an alias for its real module."""
     try:
         mod = importlib.import_module(real)
         sys.modules[legacy] = mod

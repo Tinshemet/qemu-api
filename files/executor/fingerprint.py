@@ -38,6 +38,7 @@ except ImportError:
 # Simulates what inxi -M -N -C -D -A -G would report from inside the guest,
 # scoring each field and printing a recommendation panel.
 def tf_report(name: str, summary: bool = False) -> dict:
+    """Generate an inxi-style hardware fingerprint report for a VM."""
     if MachineConfig is None:
         return {"success": False, "error": "fingerprint not available in provider-only mode"}
 

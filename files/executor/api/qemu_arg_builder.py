@@ -375,6 +375,7 @@ class QemuArgBuilder:
     # Adds -smbios type=0 (BIOS), type=1 (system), type=3 (chassis); skipped on ARM.
     # In: nothing → Out: appends to self.args
     def _chassis_type_byte(self) -> int:
+        """Return the SMBIOS chassis-type byte for the config's smbios_type/machine_class."""
         mapping = _CFG["smbios_chassis_type_map"]
         guess = mapping.get((self.cfg.smbios_type or "").lower(), 0)
         if not guess:
@@ -424,6 +425,7 @@ class QemuArgBuilder:
         return value.replace(",", "")
 
     def _smbios(self) -> None:
+        """Emit SMBIOS type-1 override args (manufacturer/product/serial/family)."""
         if self.is_arm:
             return
         if self.cfg.manufacturer or self.cfg.product_name:

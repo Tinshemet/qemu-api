@@ -49,6 +49,7 @@ _SESSION_FILE = os.path.expanduser("~/.qemu_vms/.chat_session_id")
 
 
 def _load_session_id() -> str:
+    """Return the persisted chat session id, generating and saving one if absent."""
     try:
         return open(_SESSION_FILE).read().strip()
     except FileNotFoundError:
@@ -56,6 +57,7 @@ def _load_session_id() -> str:
 
 
 def _save_session_id(sid: str) -> None:
+    """Persist the chat session id to the local session file."""
     os.makedirs(os.path.dirname(_SESSION_FILE), exist_ok=True)
     with open(_SESSION_FILE, "w") as f:
         f.write(sid)
@@ -101,6 +103,7 @@ def _hex_to_curses(hex_color: str) -> tuple:
 
 
 def _init_colours(color_hex: str = "#aaaaaa") -> None:
+    """Initialise curses colour pairs from the configured accent hex."""
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(C_HEADER, curses.COLOR_WHITE,  curses.COLOR_BLUE)
@@ -120,6 +123,7 @@ def _init_colours(color_hex: str = "#aaaaaa") -> None:
 
 
 def _cp(n: int) -> int:
+    """Return the curses attribute for colour-pair number ``n``."""
     return curses.color_pair(n)
 
 
@@ -150,6 +154,7 @@ _EXIT_CMDS   = {"exit", "quit", "q", "bye"}
 # ── History helpers ───────────────────────────────────────────────────────────
 
 def _add(text: str, attr: int = 0, wrap: int = 0) -> None:
+    """Append a line to the scrollback buffer (thread-safe), optionally wrapping."""
     with _lock:
         if wrap:
             for line in textwrap.wrap(text, wrap) or [""]:
@@ -159,12 +164,14 @@ def _add(text: str, attr: int = 0, wrap: int = 0) -> None:
 
 
 def _add_sep() -> None:
+    """Append a dim horizontal separator to the scrollback."""
     _add("  " + "─" * 62, _cp(C_DIM))
 
 
 # ── Draw ──────────────────────────────────────────────────────────────────────
 
 def _draw(stdscr: "curses.window", input_buf: str) -> None:
+    """Redraw the full TUI — scrollback, separators, and the input/status line."""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
 
@@ -235,6 +242,7 @@ def _draw(stdscr: "curses.window", input_buf: str) -> None:
 # ── VNC helpers ───────────────────────────────────────────────────────────────
 
 def _vnc_host() -> str:
+    """Return the host to point a VNC viewer at (derived from the server URL)."""
     from urllib.parse import urlparse
     parsed = urlparse(SERVER_URL)
     host   = parsed.hostname or "localhost"
@@ -242,6 +250,7 @@ def _vnc_host() -> str:
 
 
 def _try_open_vnc(port: int) -> Optional[str]:
+    """Try each configured VNC viewer; return the one that launched, or None."""
     import subprocess as _sp
     host = _vnc_host()
     for viewer in ("vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"):
@@ -280,6 +289,7 @@ def _iso_distro_hint(iso_name: str) -> str:
     return ""
 
 def _render_tool_result(tool: str, result: dict) -> None:
+    """Render a tool result into the scrollback, formatted per tool type."""
     if tool == "list_vms":
         vms = result if isinstance(result, list) else result.get("vms", [])
         if not vms:
@@ -399,6 +409,7 @@ def _render_tool_result(tool: str, result: dict) -> None:
 
 def _post_chat(message: str, session_id: str,
                auto_confirm: bool = False, verbose: bool = False) -> dict:
+    """POST a message to the server's /chat endpoint; return the parsed response."""
     payload = {
         "message":      message,
         "session_id":   session_id,
@@ -428,6 +439,7 @@ def _post_chat(message: str, session_id: str,
 
 
 def _execute(tool_name: str, args: dict | None = None) -> dict:
+    """POST a direct tool call to the server's /execute endpoint; return the result."""
     if args is None:
         args = {}
     try:
@@ -453,12 +465,14 @@ def _execute(tool_name: str, args: dict | None = None) -> dict:
 # ── Auto-start server (localhost only) ───────────────────────────────────────
 
 def _is_localhost() -> bool:
+    """Return True when the configured server URL points at the local machine."""
     from urllib.parse import urlparse
     host = urlparse(SERVER_URL).hostname or "localhost"
     return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _server_reachable() -> bool:
+    """Return True if the server's /health endpoint answers."""
     try:
         r = requests.get(f"{SERVER_URL}/health", timeout=2, verify=_VERIFY)
         return r.ok
@@ -511,6 +525,7 @@ def _autostart_server(stdscr: "curses.window") -> bool:
 # ── Sync ──────────────────────────────────────────────────────────────────────
 
 def _sync_from_server() -> bool:
+    """Refresh the cached remote VM/profile lists from the server; return success."""
     global _REMOTE_VMS, _REMOTE_PROFILES
     global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SC_CLEAR
     try:
@@ -537,6 +552,7 @@ def _sync_from_server() -> bool:
 # ── Response processing ───────────────────────────────────────────────────────
 
 def _process_response(result: dict, verbose: bool = False) -> None:
+    """Apply a /chat response — render text/tools and update confirm state."""
     global _session_id, _needs_confirm, _is_confirm
 
     if result.get("error"):
@@ -583,6 +599,7 @@ def _process_response(result: dict, verbose: bool = False) -> None:
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 def _show_help() -> None:
+    """Print the in-TUI command help into the scrollback."""
     _add_sep()
     _add("  Shortcuts (instant, no AI):", _cp(C_CYAN) | curses.A_BOLD)
     helps = [
@@ -615,6 +632,7 @@ def _show_help() -> None:
 # ── HTTP worker ───────────────────────────────────────────────────────────────
 
 def _http_worker(message: str, auto_confirm: bool, verbose: bool) -> None:
+    """Background thread body — send one message and queue the response."""
     result = _post_chat(message, _session_id, auto_confirm, verbose)
     _resp_q.put(result)
 
@@ -690,6 +708,7 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
 # ── Main TUI loop ─────────────────────────────────────────────────────────────
 
 def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13) -> None:
+    """curses main loop — draw, read keys, and dispatch commands until quit."""
     global _waiting, _session_id, _needs_confirm, _is_confirm, _pending_kill
 
     curses.curs_set(0)
@@ -816,6 +835,7 @@ def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaa
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def chat_loop(verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13) -> None:
+    """Entry point — run the curses chat client until the user exits."""
     try:
         curses.wrapper(lambda s: _run(s, verbose, color_hex, font_size))
     except KeyboardInterrupt:

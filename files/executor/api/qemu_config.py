@@ -35,6 +35,7 @@ _OVMF_MS_VARS_PATHS     = _CFG["ovmf_ms_vars_paths"]
 # Scans a list of paths and returns the first one that exists on disk.
 # In: List[str] paths → Out: str | None
 def _find_first(paths: List[str]) -> Optional[str]:
+    """Return the first path in ``paths`` that exists, or None."""
     for p in paths:
         if os.path.exists(p):
             return p
@@ -192,6 +193,7 @@ class DiskConfig:
     # Converts this disk config into -drive / -device QEMU args for its bus type.
     # In: int index → Out: List[str]
     def to_qemu_args(self, index: int = 0) -> List[str]:
+        """Return the QEMU -drive/-device args for this disk."""
         drive_id = f"drive{index}"
         args = [
             "-drive",
@@ -259,6 +261,7 @@ class NetworkConfig:
     # Generates a MAC using a vendor-matched OUI when possible, otherwise any real OUI.
     # In: nothing → Out: sets self.mac
     def _generate_mac(self) -> None:
+        """Assign a stable, locally-administered MAC to this NIC if unset."""
         import random
         hint = (self.manufacturer_hint or "").lower()
         pool = next(
@@ -306,6 +309,7 @@ class NetworkConfig:
     # Returns -netdev/-device args for NAT or bridge networking.
     # In: nothing → Out: List[str]
     def to_qemu_args(self) -> List[str]:
+        """Return the QEMU -netdev/-device args for this network."""
         args = []
         if self.mode == "none":
             args += ["-nic", "none"]
@@ -437,16 +441,19 @@ class MachineConfig:
     # Returns the VM's directory path (~/.qemu_vms/<name>).
     # In: nothing → Out: str
     def get_vm_dir(self) -> str:
+        """Return this VM's state directory under ~/.qemu_vms."""
         return os.path.expanduser(f"~/.qemu_vms/{self.name}")
 
     # Returns the path to the VM's config.json.
     # In: nothing → Out: str
     def get_config_path(self) -> str:
+        """Return the path to this VM's config.json."""
         return os.path.join(self.get_vm_dir(), "config.json")
 
     # Returns the QMP socket address — Unix path on Linux/macOS, tcp:host:port on Windows.
     # In: nothing → Out: str
     def get_qmp_socket(self) -> str:
+        """Return the QMP socket path (or TCP address on Windows)."""
         if sys.platform == "win32" and self.qmp_tcp_port:
             return f"tcp:127.0.0.1:{self.qmp_tcp_port}"
         return os.path.join(self.get_vm_dir(), "qmp.sock")
@@ -454,6 +461,7 @@ class MachineConfig:
     # Returns the monitor socket address — Unix path on Linux/macOS, tcp:host:port on Windows.
     # In: nothing → Out: str
     def get_monitor_socket(self) -> str:
+        """Return the HMP monitor socket path (or TCP address on Windows)."""
         if sys.platform == "win32" and self.monitor_tcp_port:
             return f"tcp:127.0.0.1:{self.monitor_tcp_port}"
         return os.path.join(self.get_vm_dir(), "monitor.sock")
@@ -461,6 +469,7 @@ class MachineConfig:
     # Serializes the config to a dict, stripping runtime-only fields (pid, sockets).
     # In: nothing → Out: dict
     def to_dict(self) -> Dict[str, Any]:
+        """Return this config as a JSON-serialisable dict."""
         d = asdict(self)
         d.pop("pid", None)
         d.pop("monitor_socket", None)
@@ -470,6 +479,7 @@ class MachineConfig:
     # Writes the config to ~/.qemu_vms/<name>/config.json.
     # In: nothing → Out: nothing
     def save(self) -> None:
+        """Write this config to the VM's config.json."""
         os.makedirs(self.get_vm_dir(), exist_ok=True)
         with open(self.get_config_path(), "w") as f:
             json.dump(self.to_dict(), f, indent=2)
@@ -478,6 +488,7 @@ class MachineConfig:
     # In: str name → Out: MachineConfig
     @classmethod
     def load(cls, name: str) -> "MachineConfig":
+        """Load a MachineConfig from a VM's saved config.json."""
         path = os.path.expanduser(f"~/.qemu_vms/{name}/config.json")
         if not os.path.exists(path):
             raise FileNotFoundError(f"No VM config found for '{name}'")
@@ -499,6 +510,7 @@ PROFILES_DIR = os.path.expanduser(_DIRS["profiles"])
 # Reads all .json files from ~/.qemu_vms/_profiles/ into a dict.
 # In: nothing → Out: dict
 def _load_custom_profiles() -> Dict[str, Dict[str, Any]]:
+    """Load all user-saved hardware profiles from disk."""
     profiles = {}
     if not os.path.isdir(PROFILES_DIR):
         return profiles
@@ -531,6 +543,7 @@ def save_custom_profile(name: str, profile_data: Dict[str, Any]) -> Dict[str, An
 # Deletes a custom profile JSON file by name.
 # In: str name → Out: dict with success
 def delete_custom_profile(name: str) -> Dict[str, Any]:
+    """Delete a user-saved profile by name; return a result dict."""
     safe_name = name.lower().replace(" ", "_").replace("-", "_")
     path = os.path.join(PROFILES_DIR, f"{safe_name}.json")
     if not os.path.exists(path):
@@ -569,6 +582,7 @@ def get_all_profiles() -> Dict[str, Dict[str, Any]]:
 # Copies all matching profile fields onto a MachineConfig.
 # In: MachineConfig, str profile_name → Out: MachineConfig
 def apply_profile(config: MachineConfig, profile_name: str) -> MachineConfig:
+    """Apply a named hardware profile's fields onto ``config``."""
     all_profiles = get_all_profiles()
     profile = all_profiles.get(profile_name)
     if not profile:
@@ -588,6 +602,7 @@ def apply_profile(config: MachineConfig, profile_name: str) -> MachineConfig:
 # Returns a flat list of all profiles with name, description, arch, and custom flag.
 # In: nothing → Out: List[dict]
 def list_profiles() -> List[Dict[str, str]]:
+    """Return the available hardware profiles as summary dicts."""
     all_profiles = get_all_profiles()
     result = []
     for k, v in all_profiles.items():
@@ -696,6 +711,7 @@ def check_profile_compatibility(profile_name: str) -> Dict[str, Any]:
 # Injects OS-specific CPU features: Hyper-V flags for Windows, KVM PV for Linux, vendor tweak for macOS.
 # In: MachineConfig → Out: MachineConfig
 def apply_os_hints(config: MachineConfig) -> MachineConfig:
+    """Adjust config defaults based on the guest OS type."""
     os_type = config.os_type.lower()
     _os_cpu = _CFG.get("os_cpu_features", {})
     if "windows" in os_type or os_type == "windows":

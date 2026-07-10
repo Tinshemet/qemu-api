@@ -89,14 +89,17 @@ _STUB_PLACEHOLDER_VM_NAMES = frozenset()
 
 
 def _resolve_iso_stub(p: str) -> str:
+    """Identity ISO resolver used in executor-only mode (no orchestrator)."""
     return p
 
 
 def _preflight_check_stub(*a, **k) -> dict:
+    """No-op preflight stub — the orchestrator already validated the args."""
     return {"action": "ok"}
 
 
 def _show_preflight_warning_stub(*a, **k) -> None:
+    """No-op preflight-warning stub for executor-only dispatch."""
     pass
 
 

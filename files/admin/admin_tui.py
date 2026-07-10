@@ -20,6 +20,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 
 
 def _load_json(path: str) -> dict:
+    """Load a JSON file, returning an empty dict on any error."""
     try:
         return _json.load(open(path))
     except Exception:
@@ -37,6 +38,7 @@ _EVENTS_LIMIT = _ADMIN_CFG.get("events_display_limit", 200)
 
 
 def _token() -> str:
+    """Return the admin API token from the environment or config."""
     t = os.environ.get("API_TOKEN") or _CONN_CFG.get("token", "")
     if t:
         return t
@@ -50,6 +52,7 @@ def _token() -> str:
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 def _post(path: str, body: dict) -> dict:
+    """POST to an admin-server path; return the parsed JSON (or an error dict)."""
     import requests
     try:
         r = requests.post(
@@ -64,6 +67,7 @@ def _post(path: str, body: dict) -> dict:
 
 
 def _get(path: str, params: dict = None) -> dict:
+    """GET an admin-server path; return the parsed JSON (or an error dict)."""
     import requests
     try:
         r = requests.get(
@@ -78,10 +82,12 @@ def _get(path: str, params: dict = None) -> dict:
 
 
 def _exec(tool_name: str, args: dict = None) -> dict:
+    """Run a tool via the admin server's /execute endpoint."""
     return _post("/execute", {"tool_name": tool_name, "args": args or {}})
 
 
 def _get_events(limit: int = 200) -> list:
+    """Return the most recent event-log entries from the server."""
     return _get("/events", {"limit": limit}).get("events", [])
 
 
@@ -91,6 +97,7 @@ _health_cache: tuple = (0.0, False)
 
 
 def _server_online() -> bool:
+    """Return True if the admin server is reachable (result cached briefly)."""
     global _health_cache
     now = time.monotonic()
     if now - _health_cache[0] < 2.0:
@@ -107,6 +114,7 @@ def _server_online() -> bool:
 # ── local process helpers (only useful when admin runs on orchestrator machine) ─
 
 def _local_pid() -> int | None:
+    """Return the PID of a locally running server process, or None."""
     try:
         out = subprocess.check_output(["pgrep", "-f", "api_server"], text=True).strip()
         pids = [int(p) for p in out.splitlines() if p.strip()]
@@ -135,6 +143,7 @@ _CUSTOM_COLOR_SLOT = 16
 
 
 def _hex_to_curses(hex_color: str) -> tuple:
+    """Convert a #RRGGBB hex colour to a curses 0-1000 RGB triple."""
     h = hex_color.lstrip("#")
     if len(h) != 6:
         return (667, 667, 667)
@@ -143,6 +152,7 @@ def _hex_to_curses(hex_color: str) -> tuple:
 
 
 def _init_colours(color_hex: str = "#aaaaaa") -> None:
+    """Initialise curses colour pairs from the configured accent hex."""
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(C_HEADER, curses.COLOR_WHITE,  curses.COLOR_BLUE)
@@ -159,12 +169,14 @@ def _init_colours(color_hex: str = "#aaaaaa") -> None:
 
 
 def _cp(n: int) -> int:
+    """Return the curses attribute for colour-pair number ``n``."""
     return curses.color_pair(n)
 
 
 # ── draw ──────────────────────────────────────────────────────────────────────
 
 def _hline(stdscr: "curses.window", row: int, w: int, label: str="") -> None:
+    """Draw a horizontal rule at ``row``, optionally labelled."""
     if row < 0:
         return
     try:
@@ -181,6 +193,7 @@ def _hline(stdscr: "curses.window", row: int, w: int, label: str="") -> None:
 
 
 def _draw(stdscr: "curses.window", vms: list, events: list, uptime_s: float) -> None:
+    """Redraw the dashboard — header, VM table, event table, and input line."""
     global _cmd_buf, _cmd_msg
     h, w = stdscr.getmaxyx()
     stdscr.erase()
@@ -292,6 +305,7 @@ def _draw(stdscr: "curses.window", vms: list, events: list, uptime_s: float) -> 
 
 
 def _draw_help(stdscr: "curses.window", h: int, w: int) -> None:
+    """Draw the help overlay listing the admin commands."""
     SECTIONS = [
         ("VM Commands", [
             ("launch <vm>",  "Start a VM"),
@@ -345,6 +359,7 @@ def _draw_help(stdscr: "curses.window", h: int, w: int) -> None:
 # ── command dispatch ──────────────────────────────────────────────────────────
 
 def _dispatch(cmd: str) -> None:
+    """Parse and run one admin command (stop/kill/launch/start-server/…)."""
     if not cmd:
         return
     import signal as _signal
@@ -451,6 +466,7 @@ def _dispatch(cmd: str) -> None:
 # ── keyboard ──────────────────────────────────────────────────────────────────
 
 def _handle_input(stdscr: "curses.window") -> None:
+    """Read one keypress and update the command buffer / help mode."""
     global _cmd_buf, _cmd_msg, _help_mode
     while not _quit.is_set():
         try:
@@ -481,6 +497,7 @@ def _handle_input(stdscr: "curses.window") -> None:
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def _run(stdscr: "curses.window") -> None:
+    """curses main loop — poll server state, draw, and handle input."""
     cfg       = _load_json(os.path.join(_here, "admin_config.json"))
     color_hex = cfg.get("text_color", "#aaaaaa")
     font_size = int(cfg.get("font_size", 13))
@@ -518,6 +535,7 @@ def _run(stdscr: "curses.window") -> None:
 
 
 def main() -> None:
+    """Entry point — run the admin TUI until the user exits."""
     try:
         curses.wrapper(_run)
     except KeyboardInterrupt:

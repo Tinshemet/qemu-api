@@ -31,6 +31,7 @@ class IsolatedNetManager:
     # Reads the networks.json state file from disk.
     # In: nothing → Out: dict
     def _load(self) -> Dict:
+        """Load the persisted network map, or an empty dict on error."""
         if os.path.exists(self.NET_FILE):
             try:
                 with open(self.NET_FILE) as f:
@@ -42,12 +43,14 @@ class IsolatedNetManager:
     # Writes the current network state back to networks.json.
     # In: nothing → Out: nothing
     def _save(self) -> None:
+        """Persist the network map to disk."""
         with open(self.NET_FILE, "w") as f:
             json.dump(self._nets, f, indent=2)
 
     # Creates a named multicast network with an auto-assigned port.
     # In: str net_name → Out: dict with success and network info
     def create_network(self, net_name: str) -> Dict[str, Any]:
+        """Create a named user network; return a result dict."""
         if net_name in self._nets:
             return {"success": False, "error": f"Network '{net_name}' already exists."}
         used_ports = [n["mcast_port"] for n in self._nets.values()]
@@ -67,6 +70,7 @@ class IsolatedNetManager:
     # Removes a network by name from state and disk.
     # In: str net_name → Out: dict with success
     def delete_network(self, net_name: str) -> Dict[str, Any]:
+        """Delete a named network; return a result dict."""
         if net_name not in self._nets:
             return {"success": False, "error": f"Network '{net_name}' not found."}
         del self._nets[net_name]
@@ -76,6 +80,7 @@ class IsolatedNetManager:
     # Returns all currently defined isolated networks.
     # In: nothing → Out: List[dict]
     def list_networks(self) -> List[Dict]:
+        """Return all defined networks."""
         return list(self._nets.values())
 
     # Returns the -netdev socket,mcast=... QEMU args to attach a VM to the network.

@@ -148,6 +148,7 @@ _CHUNK   = _CFG.get("io_chunk_bytes", 4 * 1024 * 1024)
 
 
 def _disk_path(vm_name: str) -> pathlib.Path:
+    """Return the path to a VM's first qcow2 disk, or raise 404 if absent."""
     vm_dir = _VM_BASE / vm_name
     if not vm_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"VM '{vm_name}' not found.")
@@ -194,6 +195,7 @@ def vm_disk(vm_name: str, request: Request) -> StreamingResponse:
     length = end - start + 1
 
     def _stream() -> Iterator[bytes]:
+        """Yield a byte range of a file in chunks for HTTP streaming."""
         remaining = length
         with open(path, "rb") as f:
             f.seek(start)
@@ -227,6 +229,7 @@ def vm_bundle(vm_name: str) -> StreamingResponse:
         raise HTTPException(status_code=404, detail=f"VM '{vm_name}' not found.")
 
     def _tar_stream() -> Iterator[bytes]:
+        """Yield a tar archive of a VM directory as a byte stream."""
         proc = subprocess.Popen(
             ["tar", "czf", "-", "-C", str(vm_dir.parent), vm_name],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,

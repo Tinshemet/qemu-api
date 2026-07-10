@@ -148,6 +148,7 @@ def _get_session(sid: str) -> Dict[str, Any]:
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
+    """Liveness endpoint — return a simple ok status."""
     return {"status": "ok"}
 
 
@@ -414,8 +415,12 @@ def _manager_proxy() -> object:
         from shared.executioner.tool_executor import manager
         return manager
     class _Proxy:
-        def scan_isos(self) -> dict: return _exec("scan_isos", {})
-        def list_vms(self) -> dict: return _exec("list_vms", {})
+        def scan_isos(self) -> dict:
+            """Proxy scan_isos to the executor via the HTTP /execute path."""
+            return _exec("scan_isos", {})
+        def list_vms(self) -> dict:
+            """Proxy list_vms to the executor via the HTTP /execute path."""
+            return _exec("list_vms", {})
     return _Proxy()
 
 
@@ -517,6 +522,7 @@ def _executor_url() -> str:
 
 
 def _exec_headers() -> dict:
+    """Return the auth headers for calling the executor server."""
     from orchestrator.executor_client import _TOKEN as _EXEC_TOKEN
     return {"Authorization": f"Bearer {_EXEC_TOKEN}"}
 
@@ -597,6 +603,7 @@ def image_download(vm_name: str, request: Request) -> StreamingResponse:
     length = end - start + 1
 
     def _stream(path: pathlib.Path, start: int, length: int) -> Iterator[bytes]:
+        """Yield ``length`` bytes of a file starting at ``start`` in chunks."""
         remaining = length
         with open(path, "rb") as f:
             f.seek(start)
@@ -643,6 +650,7 @@ def vm_bundle(vm_name: str) -> StreamingResponse:
         raise HTTPException(status_code=404, detail=f"VM '{vm_name}' not found.")
 
     def _tar_stream() -> Iterator[bytes]:
+        """Yield a tar archive of the VM directory as a byte stream."""
         proc = _sp.Popen(
             ["tar", "czf", "-", "-C", str(vm_dir.parent), vm_name],
             stdout=_sp.PIPE, stderr=_sp.DEVNULL,

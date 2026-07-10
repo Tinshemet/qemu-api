@@ -40,6 +40,7 @@ def _summarise_args(tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _summarise_result(result: Any) -> str:
+    """Condense a tool result into a short outcome string for the event log."""
     if isinstance(result, dict):
         if result.get("success") is False:
             return result.get("error", "failed")

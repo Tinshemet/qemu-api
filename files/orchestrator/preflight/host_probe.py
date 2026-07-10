@@ -50,6 +50,7 @@ _MS_WINDOWS_ISO_PAGE   = _CFG["ms_windows_iso_page"]
 # Toggles the global flag that disables product verification via DuckDuckGo.
 # In: bool → Out: nothing
 def set_custom_mode(enabled: bool) -> None:
+    """Toggle custom mode, which disables DuckDuckGo product verification."""
     global _CUSTOM_MODE
     _CUSTOM_MODE = enabled
 
@@ -158,6 +159,7 @@ def _get_qemu_cpu_models(binary: str = "qemu-system-x86_64") -> set:
 # Returns True if the CPU name matches known ARM prefixes.
 # In: str cpu_model → Out: bool
 def _is_arm_cpu(cpu_model: str) -> bool:
+    """Return True if the CPU model name matches a known ARM prefix."""
     lower = cpu_model.lower()
     return any(lower.startswith(p) for p in _ARM_CPU_PREFIXES)
 
@@ -165,6 +167,7 @@ def _is_arm_cpu(cpu_model: str) -> bool:
 # Returns True if the CPU name matches known x86 names.
 # In: str cpu_model → Out: bool
 def _is_x86_cpu(cpu_model: str) -> bool:
+    """Return True if the CPU model name matches a known x86 name."""
     lower = cpu_model.lower().replace("-", "").replace("_", "")
     return any(x86 in lower for x86 in _X86_CPU_NAMES)
 
@@ -172,6 +175,7 @@ def _is_x86_cpu(cpu_model: str) -> bool:
 # Queries DuckDuckGo to verify a hardware product is real; returns found flag and summary snippet.
 # In: str manufacturer, str product → Out: dict
 def _lookup_product(manufacturer: str, product: str) -> Dict[str, Any]:
+    """Query DuckDuckGo to verify a product exists; return found flag + summary."""
     query  = f"{manufacturer} {product} laptop desktop specifications"
     params = urllib.parse.urlencode({"q": query, "format": "json", "no_html": "1"})
     data   = _net_get(f"https://api.duckduckgo.com/?{params}")

@@ -53,11 +53,13 @@ _IO_CHUNK        = _SHARED_API_CFG.get("io_chunk_bytes", 4 * 1024 * 1024)
 
 
 def tf_report(vm_name: str) -> None:
+    """Print an inxi-style fingerprint report for a VM."""
     result = execute_tool("fingerprint_vm", {"name": vm_name})
     console.print(result.get("report") or result.get("error") or result)
 
 
 def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
+    """Show the one-time stealth guest-setup instructions via a GUI popup."""
     import platform
     import subprocess
     is_win_guest = setup_cmd.startswith("irm ")
@@ -126,11 +128,13 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
 # Dispatches direct sub-commands (list, launch, stop, snapshot, network, etc.) to the manager and renders output.
 # In: List[str] args, bool verbose → Out: nothing
 def cli_direct(args: List[str], verbose: bool = False) -> None:
+    """Dispatch a direct ``qemu-api <cmd>`` sub-command and render its output."""
     if manager is None:
         console.print("[bold yellow]Direct CLI requires the client package. In server-only mode use the AI chat — commands execute remotely via API_URL.[/bold yellow]")
         return
 
     def pp(data: object) -> None:
+        """Pretty-print a JSON result when running in verbose mode."""
         if verbose:
             console.print_json(json.dumps(data, default=str))
 
@@ -298,6 +302,7 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
             def __init__(self, *a, **kw):
                 super().__init__(*a, directory=script_dir, **kw)
             def log_message(self, *_) -> None:
+                """Silence the default HTTP request logging."""
                 pass  # silence access log
 
         srv = http.server.HTTPServer(('0.0.0.0', port), _Handler)

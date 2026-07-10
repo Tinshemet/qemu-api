@@ -21,6 +21,7 @@ AUTO_CLEAR_SESSION  = _SESSION_CFG.get("auto_clear", False)
 # Reads chat history from ~/.qemu_vms/.session.json, capped at the last 40 messages.
 # In: nothing → Out: List[dict]
 def load_session() -> List[Dict]:
+    """Load the saved chat history (most recent messages), or an empty list."""
     if os.path.exists(SESSION_FILE):
         try:
             with open(SESSION_FILE) as f:
@@ -34,6 +35,7 @@ def load_session() -> List[Dict]:
 # Filters to only user/assistant turns and writes the last 40 to session.json.
 # In: List[dict] messages → Out: nothing
 def save_session(messages: List[Dict]) -> None:
+    """Persist the chat history, trimming to the configured max length."""
     try:
         # Walk the raw message list to separate verified assistant messages
         # (those that immediately follow a tool result) from unverified ones
@@ -81,6 +83,7 @@ def save_session(messages: List[Dict]) -> None:
 # warn    : orphan ratio > 40% or >=3 consecutive unanswered turns (early signal).
 # In: List[dict] messages → Out: Optional[tuple[str, str]]
 def detect_drift(messages: List[Dict]) -> Optional[tuple]:
+    """Return a (level, message) drift signal when the model stops calling tools."""
     if not messages:
         return None
 
@@ -137,6 +140,7 @@ def detect_drift(messages: List[Dict]) -> Optional[tuple]:
 # Deletes the session file if it exists.
 # In: nothing → Out: nothing
 def clear_session() -> None:
+    """Delete the saved chat session file."""
     if os.path.exists(SESSION_FILE):
         os.remove(SESSION_FILE)
 
@@ -144,6 +148,7 @@ def clear_session() -> None:
 # Patches the auto_clear flag in config.json and updates the module-level constant.
 # In: bool enabled → Out: nothing
 def set_auto_clear(enabled: bool) -> None:
+    """Toggle whether the session is auto-cleared on next start."""
     global AUTO_CLEAR_SESSION
     cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
     with open(cfg_path) as f:
@@ -158,6 +163,7 @@ def set_auto_clear(enabled: bool) -> None:
 # Pass None to clear the override and revert to the default.
 # In: int|None limit → Out: int effective limit
 def set_loop_max(limit: Optional[int]) -> int:
+    """Persist a tool-loop-limit override (or clear it); return the effective limit."""
     cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
     with open(cfg_path) as f:
         cfg = json.load(f)
@@ -168,6 +174,7 @@ def set_loop_max(limit: Optional[int]) -> int:
 
 
 def get_loop_max() -> int:
+    """Return the effective tool-loop limit (override if set, else default)."""
     cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
     with open(cfg_path) as f:
         cfg = json.load(f)

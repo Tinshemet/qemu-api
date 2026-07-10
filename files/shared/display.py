@@ -34,6 +34,7 @@ console = Console(theme=THEME)
 # Converts seconds to HH:MM:SS string.
 # In: int seconds → Out: str
 def _fmt_uptime(seconds: int) -> str:
+    """Format a second count as a compact 'Nh Nm' / 'Nm Ns' string."""
     h, r = divmod(seconds, 3600)
     m, s = divmod(r, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
@@ -44,6 +45,7 @@ def _fmt_uptime(seconds: int) -> str:
 # Prints a Rich table of all VMs with status, OS, CPU, RAM, and disk count.
 # In: List[dict] → Out: nothing (console output)
 def render_vm_list(vms: List[Dict]) -> None:
+    """Render the VM list as a Rich table."""
     if not vms:
         console.print("[warn]No VMs found.[/warn]")
         return
@@ -75,6 +77,7 @@ def render_vm_list(vms: List[Dict]) -> None:
 # Prints a colored panel with VM running/stopped state, PID, CPU%, RAM, and uptime.
 # In: dict → Out: nothing (console output)
 def render_status(status: Dict) -> None:
+    """Render a single VM's status panel."""
     state  = status.get("state", "unknown")
     colour = "green" if state == "running" else "red"
     name   = status.get("name", "?")
@@ -95,6 +98,7 @@ def render_status(status: Dict) -> None:
 # Prints a detailed monitoring panel with resource stats and block I/O.
 # In: dict → Out: nothing (console output)
 def render_monitor(report: Dict) -> None:
+    """Render a VM's live resource-monitor report."""
     name  = report.get("name", "?")
     state = report.get("state", "stopped")
     if state != "running":
@@ -130,6 +134,7 @@ def render_monitor(report: Dict) -> None:
 # Prints a table of hardware profiles with name, arch, and custom flag.
 # In: List[dict] → Out: nothing (console output)
 def render_profiles(profiles: List[Dict]) -> None:
+    """Render the hardware-profile list as a table."""
     t = Table(box=box.ROUNDED, border_style="magenta", header_style="bold magenta")
     t.add_column("Name",        style="bold cyan")
     t.add_column("Arch",        style="dim")
@@ -144,6 +149,7 @@ def render_profiles(profiles: List[Dict]) -> None:
 # Prints a colored compatibility panel with issues, warnings, alternatives, and host summary.
 # In: dict → Out: nothing (console output)
 def render_compat(result: Dict) -> None:
+    """Render a profile-compatibility check result."""
     name  = result.get("profile", "?")
     ok    = result.get("compatible", False)
     color = "green" if ok else "red"
@@ -178,6 +184,7 @@ def render_compat(result: Dict) -> None:
 # Prints a full failure report panel with diagnosis, errors, suggestions, and last log lines.
 # In: dict → Out: nothing (console output)
 def render_vm_failure(report: Dict) -> None:
+    """Render a VM launch/boot failure report."""
     name  = report.get("name", "?")
     lines = []
 
@@ -230,6 +237,7 @@ def render_vm_failure(report: Dict) -> None:
 # Prints a table of snapshot IDs, tags, sizes, and dates.
 # In: dict → Out: nothing (console output)
 def render_snapshots(result: Dict) -> None:
+    """Render a VM's snapshot list."""
     snaps = result.get("snapshots", [])
     if not snaps:
         console.print("[warn]No snapshots found.[/warn]")
@@ -244,6 +252,7 @@ def render_snapshots(result: Dict) -> None:
 # Prints a system capabilities panel (CPU, RAM, KVM, OVMF, QEMU version).
 # In: dict → Out: nothing (console output)
 def render_system(caps: Dict) -> None:
+    """Render the host system-capabilities panel."""
     t = Table(box=box.SIMPLE, show_header=False)
     t.add_column("Key",   style="dim",        width=25)
     t.add_column("Value", style="bold white")
@@ -265,6 +274,7 @@ def render_system(caps: Dict) -> None:
 # Prints a specs preview panel for create_vm before the user confirms.
 # In: List[tuple[str, str]] rows → Out: nothing (console output)
 def render_vm_specs(rows: List[tuple]) -> None:
+    """Render the create_vm spec preview as a table."""
     t = Table(box=box.SIMPLE, show_header=False)
     t.add_column("Key",   style="dim",        width=20)
     t.add_column("Value", style="bold white")
@@ -279,6 +289,7 @@ def print_banner(
     verbose: bool, ollama_url: str, ollama_model: str,
     ovmf_available: bool, ovmf_code: str, api_url: str = "local",
 ) -> None:
+    """Print the startup banner with connection / OVMF info."""
     ovmf_line = (
         f"[success]OVMF ✓[/success]  {ovmf_code}"
         if ovmf_available
