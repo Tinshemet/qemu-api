@@ -70,6 +70,7 @@ from tests.layer10_pipeline_full import (
 from tests.layer11_remote_split import (
     REMOTE_SPLIT_TESTS, run_remote_split_test,
 )
+from tests.layer12_chat_loop import CHAT_TESTS, run_chat_scenario
 from tests.renderer         import (
     LAYER_NAMES, render_layer_results,
     render_pipeline_table, render_gated_table, render_full_pipeline_table,
@@ -151,7 +152,7 @@ def main():
         return
 
     # ── Layer filter ──────────────────────────────────────────────────────────
-    run_layers = {1, 2, 5, 6, 7, 8, 9, 10, 11} if quick else {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+    run_layers = {1, 2, 5, 6, 7, 8, 9, 10, 11, 12} if quick else {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
     if "-l" in argv:
         idx = argv.index("-l")
@@ -386,6 +387,15 @@ def main():
             all_results.append(r)
             console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
                            f"{tc.id} [{r.duration_s*1000:.0f}ms]")
+
+    chat_tests = list(CHAT_TESTS) if 12 in run_layers else []
+    if chat_tests:
+        console.print(f"\n[bold bright_blue]Layer 12 — Chat Loop ({len(chat_tests)})[/bold bright_blue]")
+        for tc in track(chat_tests, description="  Running..."):
+            r = run_chat_scenario(tc)   # tc is a (name, fn) tuple
+            all_results.append(r)
+            console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
+                           f"{tc[0]} [{r.duration_s*1000:.0f}ms]")
 
     console.print()
     for layer in sorted(run_layers):
