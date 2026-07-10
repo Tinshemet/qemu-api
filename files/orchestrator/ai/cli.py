@@ -13,6 +13,7 @@ import socket
 import sys
 import threading
 from typing import List
+from dataclasses import dataclass, field
 
 from rich import box
 from rich.panel import Panel
@@ -558,6 +559,44 @@ def process_message(
 
 # Runs the interactive Ollama chat REPL: reads input, drives the agentic tool loop (up to 15 rounds), handles clarifications, and saves session.
 # In: bool verbose → Out: nothing (blocks until exit)
+@dataclass
+class TurnState:
+    """Mutable per-user-turn state for the chat REPL.
+
+    Bundles the flags and sets the tool-processing stages (context assistant,
+    pre-flight, safety gate, clarify) read and write, so they pass as one object
+    instead of a dozen loose locals. Constructed once per user message;
+    reset_iteration() clears the per-agentic-round flags.
+
+    Example::
+
+        st = TurnState(user_wants_action=True)
+        st.confirmed_tool_types.add("create_vm")
+        st.reset_iteration()          # clears clarify_* / op_cancelled
+    """
+    user_wants_action:       bool = False
+    tools_called:            bool = False   # a tool_call was seen this turn
+    tool_executed:           bool = False   # execute_tool actually ran this turn
+    last_had_tools:          bool = False   # last Ollama response had tool_calls
+    context_assistant_fired: bool = False
+    clarified_fields:        set  = field(default_factory=set)   # fields answered via clarify
+    clarified_values:        set  = field(default_factory=set)   # (field, value) answered
+    confirmed_values:        set  = field(default_factory=set)   # (field, value) safety-confirmed
+    confirmed_tool_types:    set  = field(default_factory=set)   # tool types batch-confirmed
+    # reset every agentic round:
+    op_cancelled:            bool = False
+    clarify_happened:        bool = False
+    clarify_answer:          str  = ""
+    clarify_field:           str  = ""
+
+    def reset_iteration(self) -> None:
+        """Clear the flags that live for a single agentic round."""
+        self.op_cancelled     = False
+        self.clarify_happened = False
+        self.clarify_answer   = ""
+        self.clarify_field    = ""
+
+
 def chat_loop(verbose: bool = False):
     global _LOOP_MAX
     print_banner(
@@ -683,15 +722,7 @@ def chat_loop(verbose: bool = False):
         if not _is_synthetic:
             messages.append({"role": "user", "content": user_input})
 
-        _user_wants_action = bool(set(_ui.split()) & _ACTION_WORDS)
-        _tools_called_this_turn   = False
-        _just_clarified_fields: set = set()  # field names answered via clarify gate this turn
-        _just_clarified_values: set = set()  # (field, value) pairs answered via clarify gate
-        _confirmed_values: set = set()       # (field, value) pairs confirmed via safety gate
-        _confirmed_tool_types: set = set()  # tool names batch-confirmed this turn
-        _context_assistant_fired  = False
-        _tool_executed_this_turn  = False    # True only when execute_tool actually ran
-        _last_had_tools           = False    # True when last Ollama response had tool_calls
+        state = TurnState(user_wants_action=bool(set(_ui.split()) & _ACTION_WORDS))
 
         # Agentic tool loop — up to _LOOP_MAX rounds per user turn
         for _loop_iter in range(_LOOP_MAX):
@@ -709,7 +740,7 @@ def chat_loop(verbose: bool = False):
             messages.append(assistant_msg)
 
             tool_calls = msg.get("tool_calls", [])
-            _last_had_tools = bool(tool_calls)
+            state.last_had_tools = bool(tool_calls)
             if not tool_calls:
                 text = msg.get("content", "").strip()
                 # Empty response (no tool calls, no text) — nudge the AI to respond.
@@ -725,7 +756,7 @@ def chat_loop(verbose: bool = False):
                     continue
                 # If the model gave a text-only response for an action request
                 # without ever calling a tool, it hallucinated — force a retry.
-                if _user_wants_action and not _tools_called_this_turn and _loop_iter < _LOOP_MAX - 1:
+                if state.user_wants_action and not state.tools_called and _loop_iter < _LOOP_MAX - 1:
                     # Remove the bad assistant message so the model doesn't
                     # anchor on its own hallucinated success in the next attempt.
                     # Use _INTERNAL_ prefix so save_session filters it out.
@@ -744,12 +775,9 @@ def chat_loop(verbose: bool = False):
                     console.print(f"\n[bold green]Assistant:[/bold green] {text}\n")
                 break
 
-            _tools_called_this_turn = True
+            state.tools_called = True
 
-            _clarify_happened = False
-            _clarify_answer   = ""
-            _clarify_field    = ""
-            _op_cancelled     = False
+            state.reset_iteration()
 
             for tc in tool_calls:
                 fn        = tc.get("function", {})
@@ -790,11 +818,11 @@ def chat_loop(verbose: bool = False):
                     and not str(m.get("content", "")).startswith("_INTERNAL_")
                 ]
                 _recent_context = " ".join(_recent_user_msgs[-6:])
-                if not _context_assistant_fired:
+                if not state.context_assistant_fired:
                     _ca_hint = check_context(user_input, tool_name, raw_args,
                                              recent_context=_recent_context)
                     if _ca_hint:
-                        _context_assistant_fired = True
+                        state.context_assistant_fired = True
                         if "never mentioned it" in _ca_hint:
                             # Hallucinated required field — ask the user directly
                             # rather than re-prompting the AI (model ignores the hint).
@@ -814,8 +842,8 @@ def chat_loop(verbose: bool = False):
                                 raw_args = dict(raw_args)
                                 raw_args.update(_filled)
                                 messages.append({"role": "user", "content": str(_filled)})
-                                _just_clarified_fields.update(_filled.keys())
-                                _just_clarified_values.update(_filled.items())
+                                state.clarified_fields.update(_filled.keys())
+                                state.clarified_values.update(_filled.items())
                             # Don't break — continue with corrected args
                         else:
                             # Mismatch or high-stakes — let the AI re-evaluate
@@ -833,15 +861,15 @@ def chat_loop(verbose: bool = False):
                 # let the AI guess from session history.  When no OS is
                 # mentioned, strip any AI-inferred value so the gate can ask.
                 if tool_name == "create_vm" \
-                        and "os_type" not in _just_clarified_fields:
+                        and "os_type" not in state.clarified_fields:
                     _ui_tokens = {t.strip('.,!?;:') for t in _ui.split()}
                     _matched_kw = next(iter(_OS_KEYWORDS & _ui_tokens), None)
                     if _matched_kw:
                         _canonical = OS_TYPE_ALIASES.get(_matched_kw, _matched_kw)
                         raw_args = dict(raw_args)
                         raw_args["os_type"] = _canonical
-                        _just_clarified_fields.add("os_type")
-                        _just_clarified_values.add(("os_type", _canonical))
+                        state.clarified_fields.add("os_type")
+                        state.clarified_values.add(("os_type", _canonical))
                     elif "os_type" in raw_args:
                         raw_args.pop("os_type")
                 # ──────────────────────────────────────────────────────────
@@ -910,12 +938,12 @@ def chat_loop(verbose: bool = False):
                             "role":    "user",
                             "content": "_INTERNAL_ The user cancelled this operation. Ask what they would like to do instead.",
                         })
-                        _op_cancelled = True
+                        state.op_cancelled = True
                         break
                     if fix_field:
                         raw_args = dict(raw_args)
                         raw_args[fix_field] = pf_answer
-                        _just_clarified_fields.add(fix_field)
+                        state.clarified_fields.add(fix_field)
                     elif tool_name == "create_profile":
                         # User approved "Save anyway" — bypass the executor's
                         # duplicate preflight so we don't double-prompt.
@@ -939,7 +967,7 @@ def chat_loop(verbose: bool = False):
                 if _conf_entry:
                     field, verb = _conf_entry
                     proposed = raw_args.get(field, "")
-                if _conf_entry and (field, proposed) not in _just_clarified_values and (field, proposed) not in _confirmed_values:
+                if _conf_entry and (field, proposed) not in state.clarified_values and (field, proposed) not in state.confirmed_values:
 
                     def _cancel_op():
                         messages.append({
@@ -965,7 +993,7 @@ def chat_loop(verbose: bool = False):
                             return
                         if step1.upper() != "YES":
                             _cancel_op()
-                            _op_cancelled = True
+                            state.op_cancelled = True
                             break
                         console.print(f"[dim]Type the name [bold]{proposed}[/bold] to confirm.[/dim]")
                         try:
@@ -976,14 +1004,14 @@ def chat_loop(verbose: bool = False):
                         if step2 != proposed:
                             console.print("[dim]Name did not match. Cancelled.[/dim]")
                             _cancel_op()
-                            _op_cancelled = True
+                            state.op_cancelled = True
                             break
 
                     elif tool_name in _CONFIRM_YN:
                         # y/n confirm for reversible modify and launch/stop.
                         # If this tool type was already confirmed earlier in the
                         # same turn (batch), skip re-prompting.
-                        if tool_name in _confirmed_tool_types:
+                        if tool_name in state.confirmed_tool_types:
                             console.print(f"  [dim]auto-confirmed: {verb}: {proposed}[/dim]")
                         else:
                             if tool_name == "create_vm":
@@ -997,9 +1025,9 @@ def chat_loop(verbose: bool = False):
                                 return
                             if answer not in ("y", "yes", "1"):
                                 _cancel_op()
-                                _op_cancelled = True
+                                state.op_cancelled = True
                                 break
-                            _confirmed_tool_types.add(tool_name)
+                            state.confirmed_tool_types.add(tool_name)
 
                     else:
                         # Name confirm for destructive operations — exact match required
@@ -1015,10 +1043,10 @@ def chat_loop(verbose: bool = False):
                             if confirmed:
                                 console.print("[dim]Name did not match. Cancelled.[/dim]")
                             _cancel_op()
-                            _op_cancelled = True
+                            state.op_cancelled = True
                             break
 
-                    _confirmed_values.add((field, proposed))  # this exact value confirmed
+                    state.confirmed_values.add((field, proposed))  # this exact value confirmed
                 # ──────────────────────────────────────────────────────────
 
                 # ── Pre-execution gate ─────────────────────────────────────────
@@ -1031,7 +1059,7 @@ def chat_loop(verbose: bool = False):
                 _pre_gate_result = None
                 if _gate_required and tool_name != "clarify":
                     _user_slots = extract_slots(user_input)
-                    for _clf in _just_clarified_fields:
+                    for _clf in state.clarified_fields:
                         if _clf in raw_args and raw_args[_clf]:
                             _user_slots[_clf] = raw_args[_clf]
                     _missing_early = [
@@ -1111,12 +1139,12 @@ def chat_loop(verbose: bool = False):
                     # pre-gate doesn't re-ask — manual config owns this field.
                     if not raw_args.get("os_type"):
                         raw_args["os_type"] = _def_os
-                    _just_clarified_fields.add("os_type")
-                    _just_clarified_values.add(("os_type", raw_args["os_type"]))
+                    state.clarified_fields.add("os_type")
+                    state.clarified_values.add(("os_type", raw_args["os_type"]))
                     # Clear any pre-gate result — manual config handled missing fields.
                     _pre_gate_result = None
                     # Don't auto-confirm next VM — each needs its own config
-                    _confirmed_tool_types.discard("create_vm")
+                    state.confirmed_tool_types.discard("create_vm")
                 elif tool_name == "create_vm" and "manual" in raw_args:
                     raw_args = dict(raw_args)
                     raw_args.pop("manual", None)
@@ -1126,7 +1154,7 @@ def chat_loop(verbose: bool = False):
                     result = _pre_gate_result
                 else:
                     result = execute_tool(tool_name, raw_args, verbose)
-                    _tool_executed_this_turn = True
+                    state.tool_executed = True
 
                 # Remote VNC launch — render connection panel and strip from tool result.
                 if (
@@ -1206,14 +1234,14 @@ def chat_loop(verbose: bool = False):
                                     messages.append({"role": "user", "content": _conf})
                             elif _cancelled:
                                 messages.append({"role": "user", "content": "_INTERNAL_ The user cancelled. Do not retry this operation."})
-                                _op_cancelled = True
+                                state.op_cancelled = True
                             else:
                                 hint = result.get("hint", "")
                                 messages.append({"role": "user", "content": _conf})
                                 messages.append({"role": "user", "content": f"_INTERNAL_ The user confirmed. {hint} Keep ALL original arguments exactly as they were."})
-                            _clarify_happened = True
-                            _clarify_answer   = _conf
-                            _clarify_field    = ""
+                            state.clarify_happened = True
+                            state.clarify_answer   = _conf
+                            state.clarify_field    = ""
                             break
 
                         if opts:
@@ -1240,11 +1268,11 @@ def chat_loop(verbose: bool = False):
                                         "role":    "user",
                                         "content": f"_INTERNAL_ The user chose to overwrite. Call create_vm again with name='{orig}' and overwrite=true, keeping ALL other original arguments exactly as they were.",
                                     })
-                                    _just_clarified_fields.update(filled.keys())
-                                    _just_clarified_values.update(filled.items())
-                                    _clarify_happened = True
-                                    _clarify_answer   = clarified
-                                    _clarify_field    = "overwrite"
+                                    state.clarified_fields.update(filled.keys())
+                                    state.clarified_values.update(filled.items())
+                                    state.clarify_happened = True
+                                    state.clarify_answer   = clarified
+                                    state.clarify_field    = "overwrite"
                                     break
                             filled[f] = clarified
                             messages.append({"role": "user", "content": clarified})
@@ -1252,8 +1280,8 @@ def chat_loop(verbose: bool = False):
                             # executor can auto-find the matching ISO.
                             if f == "os_type" and clarified.lower().strip() in OS_TYPE_ALIASES:
                                 filled["os_name"] = clarified.lower().strip()
-                    _just_clarified_fields.update(filled.keys())
-                    _just_clarified_values.update(filled.items())
+                    state.clarified_fields.update(filled.keys())
+                    state.clarified_values.update(filled.items())
                     if filled:
                         _field_summary = ", ".join(f"{k}='{v}'" for k, v in filled.items())
                         _iso_hint = (
@@ -1265,24 +1293,24 @@ def chat_loop(verbose: bool = False):
                             "role":    "user",
                             "content": f"_INTERNAL_ The user provided the missing values: {_field_summary}. Call the correct tool using these EXACT values — do not invent different ones.{_iso_hint}",
                         })
-                    _clarify_happened = True
-                    _clarify_answer   = str(filled)
-                    _clarify_field    = ", ".join(filled.keys())
+                    state.clarify_happened = True
+                    state.clarify_answer   = str(filled)
+                    state.clarify_field    = ", ".join(filled.keys())
                     break  # Don't process further tool calls until AI re-plans with the answers
 
-            if _op_cancelled:
+            if state.op_cancelled:
                 continue  # let AI ask what the user wants to do instead
 
-            if _context_assistant_fired and not tool_calls:
+            if state.context_assistant_fired and not tool_calls:
                 # Mismatch/high-stakes path: hint was injected, give AI another pass.
                 # Hallucinated-field path: args were patched in-place, loop continues normally.
-                _tools_called_this_turn = False
+                state.tools_called = False
                 continue
 
-            if _clarify_happened:
+            if state.clarify_happened:
                 hint = (
-                    f" The user provided: {_clarify_answer} (for fields: {_clarify_field})."
-                    if _clarify_field else ""
+                    f" The user provided: {state.clarify_answer} (for fields: {state.clarify_field})."
+                    if state.clarify_field else ""
                 )
                 messages.append({
                     "role":    "user",
@@ -1297,7 +1325,7 @@ def chat_loop(verbose: bool = False):
 
         else:
             # for loop exhausted all _LOOP_MAX iterations without a natural break
-            if _last_had_tools:
+            if state.last_had_tools:
                 console.print(
                     f"\n[yellow]⚠  Tool loop reached the {_LOOP_MAX}-iteration limit "
                     f"— the task may be incomplete.[/yellow]"
@@ -1317,7 +1345,7 @@ def chat_loop(verbose: bool = False):
 
         # If the user wanted an action but no tool ever executed, the last
         # assistant message is a hallucinated success — strip it before saving.
-        if _user_wants_action and not _tool_executed_this_turn and messages:
+        if state.user_wants_action and not state.tool_executed and messages:
             last = messages[-1]
             if last.get("role") == "assistant" and not last.get("tool_calls"):
                 messages.pop()
@@ -1325,7 +1353,7 @@ def chat_loop(verbose: bool = False):
 
         # Runtime drift counter — warn after 3 consecutive action turns where
         # the model gave text instead of calling a tool.
-        if _user_wants_action and not _tool_executed_this_turn:
+        if state.user_wants_action and not state.tool_executed:
             _runtime_drift_count += 1
             if _runtime_drift_count >= 6:
                 console.print(
@@ -1338,7 +1366,7 @@ def chat_loop(verbose: bool = False):
                     f"[bold yellow]⚠ drift detected: {_runtime_drift_count} consecutive "
                     f"turns with no tool call — type 'clear session' to reset[/bold yellow]"
                 )
-        elif _tool_executed_this_turn:
+        elif state.tool_executed:
             _runtime_drift_count = 0
 
 
