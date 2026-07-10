@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from .shared import ContextAssistantTest, TestResult, check_context
+from orchestrator.ai.context_assistant import scan_tool_hints
 
 _CFG_PATH = pathlib.Path(__file__).parents[1] / "server" / "ai" / "context_assistant_config.json"
 with _CFG_PATH.open() as _f:
@@ -386,10 +387,19 @@ def generate_random_ca_tests(n: int = 25, seed: int = 42) -> List[ContextAssista
             trigger     = rng.choice(_TOOL_HINTS[hint_tool])
             prompt      = f"{trigger} {vm}"
 
-            # Pick a called tool that isn't the hinted one, isn't suppressed,
-            # and isn't a recon tool (recon tools are always exempt from CA checks).
-            other_tools = [t for t in hintable_tools if t != hint_tool and t not in _RECON_TOOLS]
-            called_tool = rng.choice(other_tools) if other_tools else hint_tool
+            # Pick a called tool that isn't the hinted one, isn't a recon tool
+            # (always exempt), AND isn't itself hinted by this prompt. The
+            # assistant fires only when `tool_name not in scan_tool_hints(prompt)`,
+            # so a called tool the trigger also hints — e.g. "dry run" hints
+            # launch_vm via its "run" trigger — is legitimately NOT a mismatch and
+            # the heuristic correctly stays silent. Excluding those (mirroring the
+            # heuristic's own scan) keeps every generated case a real mismatch.
+            hinted      = set(scan_tool_hints(prompt))
+            other_tools = [t for t in hintable_tools
+                           if t != hint_tool and t not in _RECON_TOOLS and t not in hinted]
+            if not other_tools:
+                continue  # trigger is ambiguous (hints >1 tool) — no clean mismatch to build
+            called_tool = rng.choice(other_tools)
 
             args: Dict[str, Any] = {"name": vm}
             if "snap_name" in _REQUIRED_FIELDS.get(called_tool, []):

@@ -438,12 +438,18 @@ EXECUTOR_TESTS: List[ExecutorTest] = [
     ),
 
     # ── Display device selection via print_command ────────────────────────────
+    # These build their own stealth fixture VM (see ExecutorTest.setup) rather
+    # than assuming a specific VM exists in the environment.
     ExecutorTest(
         id="executor_stealth_linux_display_vmware_svga",
         tags=["executor","stealth","display","print_command"],
         description="Stealth Linux VM uses vmware-svga in QEMU command (not cirrus-vga)",
         tool="print_command",
-        input_args={"name": "mint-stealth"},
+        input_args={},
+        # display pinned so the test exercises stealth device *selection*, not the
+        # environment-dependent default display mode (which can resolve to 'none'
+        # => -nographic and no video device at all).
+        setup={"os_type": "linux", "stealth": True, "disk_size_gb": 10, "display": "sdl"},
         expect_success=True,
         expect_cmd_contains=["-device vmware-svga"],
     ),
@@ -452,7 +458,8 @@ EXECUTOR_TESTS: List[ExecutorTest] = [
         tags=["executor","stealth","display","print_command"],
         description="Stealth Windows VM uses VGA (not vmware-svga) in QEMU command",
         tool="print_command",
-        input_args={"name": "work-laptop"},
+        input_args={},
+        setup={"os_type": "windows", "stealth": True, "disk_size_gb": 10, "display": "sdl"},
         expect_success=True,
         expect_cmd_contains=["-device VGA"],
     ),
@@ -575,8 +582,18 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
     # over (e.g. revert's console.input() prompt blocking invisibly under
     # the stdout/stderr redirection below).
     _clear_revert()
+    _fixture_name = None
     try:
         args = dict(tc.input_args)
+
+        # Build a throwaway fixture VM if the test needs a pre-existing one, then
+        # point the tool at it — keeps the test self-contained (no dependency on
+        # a VM that happens to exist in the developer's environment).
+        if tc.setup is not None:
+            _fixture_name = f"fixt-{_uid()}"
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                execute_tool("create_vm", dict(tc.setup, name=_fixture_name), verbose=False)
+            args["name"] = _fixture_name
 
         if tc.expect_preflight is not None:
             pf     = _preflight_check(tc.tool, args, [], verbose=False)
@@ -617,9 +634,9 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
                     issues.append(f"Command output missing expected substring: {substr!r}")
 
         if tc.expect_cfg and isinstance(result, dict) and result.get("success"):
-            _cfg_name = tc.input_args.get("name", "")
+            _cfg_name = args.get("name", "") or tc.input_args.get("name", "")
             try:
-                from shared.api.qemu_config import MachineConfig as _MC2
+                from executor.api.qemu_config import MachineConfig as _MC2
                 _cfg_loaded = _MC2.load(_cfg_name)
                 for cfg_k, cfg_v in tc.expect_cfg.items():
                     if cfg_v is None:
@@ -645,12 +662,14 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
     except Exception:
         issues.append(f"Exception: {traceback.format_exc()}")
     finally:
+        import shutil as _shutil
         vm_name = tc.input_args.get("name","")
         if vm_name and tc.tool == "create_vm":
             vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", vm_name)
-            if os.path.exists(vm_dir):
-                import shutil as _shutil
-                _shutil.rmtree(vm_dir, ignore_errors=True)
+            _shutil.rmtree(vm_dir, ignore_errors=True)
+        if _fixture_name:
+            _fx_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", _fixture_name)
+            _shutil.rmtree(_fx_dir, ignore_errors=True)
 
     return TestResult(test_id=tc.id, layer=2, passed=len(issues)==0,
                       issues=issues, fixes_applied=fixes, duration_s=time.time()-start)

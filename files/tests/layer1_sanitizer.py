@@ -645,7 +645,7 @@ def run_sanitiser_test(tc: SanitiserTest) -> TestResult:
 
 def run_preview_tests() -> List[TestResult]:
     import time as _time
-    from server.ai.cli import _build_vm_spec_rows
+    from orchestrator.ai.cli import _build_vm_spec_rows
 
     cases = [
         {
@@ -700,8 +700,8 @@ def run_preview_tests() -> List[TestResult]:
 
 def run_arg_builder_tests() -> List[TestResult]:
     import time as _time, traceback as _tb
-    from shared.api.qemu_config import MachineConfig
-    from shared.api.qemu_arg_builder import QemuArgBuilder
+    from executor.api.qemu_config import MachineConfig
+    from executor.api.qemu_arg_builder import QemuArgBuilder
 
     results: List[TestResult] = []
 

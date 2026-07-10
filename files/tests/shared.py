@@ -18,22 +18,23 @@ from rich.progress import track
 # Add files/ to sys.path so layer-module imports resolve correctly
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from shared.executioner.tool_executor import execute_tool, manager
-from shared.sanitizer.sanitizer import _sanitise_args, _resolve_iso
-from shared.preflight.validator import (
+from shared.executioner.tool_executor import manager
+from orchestrator.pipeline import execute_tool
+from orchestrator.sanitizer.sanitizer import _sanitise_args, _resolve_iso
+from orchestrator.preflight.validator import (
     _preflight_check, _validate_with_internet, _validate_profile_for_host,
 )
-from server.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL, TOOLS, _build_system_prompt
-from server.ai.context_assistant import check_context
-from shared.preflight.validator import (
+from orchestrator.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL, TOOLS, _build_system_prompt
+from orchestrator.ai.context_assistant import check_context
+from orchestrator.preflight.validator import (
     _get_qemu_machine_types, _get_qemu_cpu_models,
     _is_arm_cpu, _is_x86_cpu, _net_get, _net_head,
 )
-from shared.sanitizer.sanitizer import (
+from orchestrator.sanitizer.sanitizer import (
     VALID_AUDIO_TYPES, VALID_NETWORK_MODES, VALID_OS_TYPES,
     VALID_MACHINE_TYPES, OS_TYPE_ALIASES,
 )
-from shared.api.qemu_config import (
+from executor.api.qemu_config import (
     OVMF, get_all_profiles, MachineConfig,
     save_custom_profile, delete_custom_profile,
     check_system_capabilities,
@@ -90,6 +91,12 @@ class ExecutorTest:
     expect_cfg:         Dict[str, Any] = field(default_factory=dict)
     # Check that result["command"] contains all of these substrings (print_command / dry_run).
     expect_cmd_contains: List[str]     = field(default_factory=list)
+    # create_vm args for a throwaway fixture VM built before the main tool runs.
+    # The runner generates a unique name, creates the VM, injects that name into
+    # input_args["name"], and deletes the fixture afterwards — so tests that need
+    # an existing VM (e.g. print_command) stay self-contained instead of relying
+    # on a VM that happens to exist in the developer's environment.
+    setup:              Optional[Dict[str, Any]] = None
 
 
 @dataclass

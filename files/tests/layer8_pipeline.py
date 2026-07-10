@@ -25,7 +25,7 @@ Known constraints baked into test design:
 import os, random, time, traceback
 from typing import Any, Dict, List, Optional, Tuple
 
-from .shared import PipelineTest, TestResult, execute_tool
+from .shared import PipelineTest, TestResult, execute_tool, _sanitise_args
 
 
 # ── Layer detection ────────────────────────────────────────────────────────────
@@ -385,10 +385,10 @@ PIPELINE_TESTS: List[PipelineTest] = [
 
     # ── snapshot_create ───────────────────────────────────────────────────────
     _vs("snapshot_create", {"name":"probe8_min","snap_name":"probe8_snap"},      "needs running VM"),
-    _b ("snapshot_create", {"name":"probe8_min","snap_name":"snap1"},            "VM is stopped — snapshot requires running"),
+    _v ("snapshot_create", {"name":"probe8_min","snap_name":"snap1"},            "VM is stopped — offline snapshot via qemu-img still succeeds"),
     _b ("snapshot_create", {"name":"ghost_xyz","snap_name":"snap1"},         "VM doesn't exist"),
-    _b ("snapshot_create", {"name":"probe8_min","snap_name":"!!!bad name!!!"},   "invalid chars — sanitizer may clean name, but VM is stopped so snapshot fails"),
-    _m ("snapshot_create", {"name":"probe8_min"},                                "no snap_name"),
+    _v ("snapshot_create", {"name":"probe8_min","snap_name":"!!!bad name!!!"},   "qemu-img snapshot tags aren't filesystem paths — special chars are fine"),
+    _v ("snapshot_create", {"name":"probe8_min"},                                "no snap_name — tool_defaults supplies one"),
     _m ("snapshot_create", {"snap_name":"snap1"},                            "no name"),
     _m ("snapshot_create", {},                                               "both missing"),
 
@@ -519,8 +519,10 @@ PIPELINE_TESTS: List[PipelineTest] = [
     # Profile: arch/cpu inconsistency — sanitizer does not reject x86 cpu_model on ARM arch profile
     _c ("create_profile", {"profile_name":"probe8_confp1","description":"test","memory_mb":2048,"cpu_model":"host","uefi":True,"bios":"seabios"}, "uefi=True + bios=seabios — sanitizer promotes bios to ovmf, profile saves"),
     _c ("create_profile", {"profile_name":"probe8_confp2","description":"test","uefi":True,"bios":"seabios"},               "uefi + seabios — unresolved, profile saves both"),
-    # launch_vm with display + dry_run=False — live launch is state-dependent
-    _cs("launch_vm", {"name":"probe8_cpu","display":"sdl","dry_run":False}, "display + dry_run=False — live launch is state-dep"),
+    # launch_vm with display + dry_run=False — live launch is state-dependent.
+    # display=none keeps it headless so the test doesn't pop a GUI window
+    # (cleanup_probe_artifacts force-stops it afterwards regardless).
+    _cs("launch_vm", {"name":"probe8_cpu","display":"none","dry_run":False}, "display + dry_run=False — live launch is state-dep"),
 
     # ── foreign keys (valid keys from a different tool's schema) ─────────────
     _fk ("create_vm",     {"name":"probe8_fk1","os_type":"linux","snap_name":"snap1","net_name":"mynet"},                                     "foreign: snapshot + network keys alongside create_vm args"),
@@ -725,9 +727,11 @@ _TOOL_SCHEMAS: Dict[str, Dict] = {
     "create_vm": {
         "required": {
             "name":    {"valid": ["probe8r_{uid}"], "missing": ["", None]},
-            "os_type": {"valid": ["linux","windows","other"], "missing": ["", None]},
         },
         "optional": {
+            # os_type is required at the GATE (layer 9) but the executor DEFAULTS it
+            # to linux when missing, so at this skip_gate layer it's executor-optional.
+            "os_type":      {"valid": ["linux","windows","other"], "sanitized": ["unicorn_os"], "broken": None},
             "memory_mb":    {"valid": [2048, 4096],         "sanitized": [-1, 999999999], "broken": None},
             "cpu_cores":    {"valid": [2, 4],               "sanitized": [9999, -1],      "broken": None},
             "cpu_threads":  {"valid": [1, 2],               "sanitized": [-1],             "broken": None},
@@ -1075,14 +1079,20 @@ def generate_random_pipeline_tests(n: int = 30, seed: Optional[int] = None) -> L
             exp_success = None
             exp_layer   = None
             category    = "missing" if has_missing_req else "valid"
+        elif is_state_dep:
+            # State-dependent tools: the outcome of a missing field depends on
+            # existing state AND on which fields the executor defaults (e.g.
+            # create_profile needs a hardware field, not 'description'), so don't
+            # assert success/failure here — layer 9 (gated) is where required-field
+            # enforcement is actually checked. Checked BEFORE has_missing_req so a
+            # dropped field doesn't wrongly force expect_success=False.
+            exp_success = None
+            exp_layer   = None
+            category    = "missing" if has_missing_req else "valid"
         elif has_missing_req:
             exp_success = False
             exp_layer   = "executor"
             category    = "missing"
-        elif is_state_dep:
-            exp_success = None
-            exp_layer   = None
-            category    = "valid"
         else:
             exp_success = True
             exp_layer   = "ok"
@@ -1148,13 +1158,20 @@ _PROBE_NET_PREFIX     = "probe8"
 def cleanup_probe_artifacts():
     """Remove VMs, profiles, and networks created by this layer."""
     import shutil
-    from shared.executioner.tool_executor import execute_tool as _et
-    from shared.api.qemu_config import get_all_profiles, delete_custom_profile
+    from orchestrator.pipeline import execute_tool as _et
+    from executor.api.qemu_config import get_all_profiles, delete_custom_profile
 
     vm_dir = os.path.expanduser("~/.qemu_vms")
     if os.path.isdir(vm_dir):
         for entry in os.listdir(vm_dir):
             if entry.startswith(_PROBE_VM_PREFIX):
+                # Stop first — a live-launch probe (dry_run=False) leaves QEMU
+                # running, and delete_vm refuses to delete a running VM, so
+                # without this the process (and its window) would leak.
+                try:
+                    _et("stop_vm", {"name": entry, "force": True}, verbose=True, skip_gate=True)
+                except Exception:
+                    pass
                 try:
                     _et("delete_vm", {"name": entry}, verbose=True, skip_gate=True)
                 except Exception:
@@ -1186,7 +1203,13 @@ def run_pipeline_test(tc: PipelineTest) -> TestResult:
     issues: List[str] = []
 
     try:
-        result = execute_tool(tc.tool, dict(tc.input_args), verbose=True, skip_gate=True)
+        # Module docstring: "All calls go through _sanitise_args -> executor
+        # only. gate_check is skipped." skip_gate=True on execute_tool skips
+        # sanitisation too (it's the same "orchestrator already ran" flag), so
+        # sanitise explicitly here to keep that promise for the "broken input,
+        # sanitizer corrects it" (_bs) and conflict-resolution test categories.
+        sanitised_args = _sanitise_args(tc.tool, dict(tc.input_args))
+        result = execute_tool(tc.tool, sanitised_args, verbose=True, skip_gate=True)
     except Exception:
         tb = traceback.format_exc()
         passed = tc.expect_success is not True  # exception = failure, ok unless we expected success

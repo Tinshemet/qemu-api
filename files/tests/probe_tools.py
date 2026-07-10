@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.table   import Table
 from rich         import box
 
-from shared.executioner.tool_executor import execute_tool
+from orchestrator.pipeline import execute_tool
 
 console = Console()
 
@@ -211,7 +211,7 @@ def main():
 
     # Cleanup: remove probe_broken_vm_zz if it was accidentally created
     try:
-        from shared.executioner.tool_executor import execute_tool as et
+        from orchestrator.pipeline import execute_tool as et
         probe_vms = [v["name"] for v in et("list_vms", {}, verbose=True)
                      if "probe_" in v.get("name", "")]
         for pv in probe_vms:

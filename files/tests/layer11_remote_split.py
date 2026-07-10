@@ -35,7 +35,7 @@ without needing a real Ollama instance or real QEMU process.
 
   E. executor_client:
     - server.executor_client.execute_tool is a re-export of
-      shared.executioner.tool_executor.execute_tool (same object)
+      orchestrator.pipeline.execute_tool (same object)
 
   F. /sync endpoint:
     - missing auth → 401/403
@@ -533,7 +533,7 @@ def _t_execute_overrides_sdl_to_vnc() -> List[str]:
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
@@ -559,7 +559,7 @@ def _t_execute_overrides_gtk_to_vnc() -> List[str]:
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
@@ -582,7 +582,7 @@ def _t_execute_passthrough_vnc_injects_bind_local() -> List[str]:
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
@@ -633,7 +633,7 @@ def _t_execute_preflight_auto_fix() -> List[str]:
         return {"success": True, "name": args.get("name", "vm")}
 
     fixed = {"name": f"rs-fixed-{_uid()}", "machine_type": "q35", "os_type": "linux"}
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={
              "action": "auto_fix", "reason": "machine_type was a profile name",
              "correction": "corrected to q35", "fixed_args": fixed,
@@ -717,7 +717,7 @@ def _t_execute_junk_extra_fields() -> List[str]:
     def fake_execute(tool_name, args, verbose=False):
         return {"success": True, "vms": []}
 
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
@@ -753,7 +753,7 @@ def _t_execute_foreign_args() -> List[str]:
         "restore_id": "abc123",       # foreign: belongs to snapshot tool
         "keep_old":   True,           # foreign: belongs to snapshot tool
     }
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
@@ -778,7 +778,7 @@ def _t_execute_conflict_display_and_bind_local() -> List[str]:
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 1, "display": "vnc"}
 
-    with patch("shared.executioner.tool_executor.execute_tool", side_effect=fake_execute), \
+    with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
          patch("orchestrator.preflight.validator._preflight_check", return_value={"action": "ok"}):
         resp = client.post(
             "/execute",
@@ -1124,20 +1124,21 @@ def _t_rotate_junk_body_fields() -> List[str]:
 # ════════════════════════════════════════════════════════════════════════════════
 
 def _t_executor_client_is_re_export() -> List[str]:
-    """server.executor_client.execute_tool is a wrapper (adds logging, access control,
-    display override) that delegates to shared.executioner.tool_executor.execute_tool
-    via ec._execute_tool.  Verify the delegation is intact — ec._execute_tool must be
-    the same object as te.execute_tool."""
+    """orchestrator.executor_client.execute_tool is a wrapper (adds logging, access
+    control, display override) that delegates to orchestrator.pipeline.execute_tool
+    (the full sanitize/gate/dispatch pipeline) via ec._execute_tool. Verify the
+    delegation is intact — ec._execute_tool must be the same object as
+    pipeline.execute_tool."""
     sys.path.insert(0, _FILES_DIR)
-    for mod in ("server.executor_client", "shared.executioner.tool_executor"):
+    for mod in ("server.executor_client", "orchestrator.pipeline"):
         if mod in sys.modules:
             del sys.modules[mod]
     import orchestrator.executor_client as ec
-    import shared.executioner.tool_executor as te
-    if ec._execute_tool is not te.execute_tool:
+    import orchestrator.pipeline as pipeline
+    if ec._execute_tool is not pipeline.execute_tool:
         return [
-            "server.executor_client._execute_tool is NOT the same object as "
-            "shared.executioner.tool_executor.execute_tool — the delegation is broken"
+            "orchestrator.executor_client._execute_tool is NOT the same object as "
+            "orchestrator.pipeline.execute_tool — the delegation is broken"
         ]
     return []
 
@@ -1450,7 +1451,7 @@ REMOTE_SPLIT_TESTS: List[RemoteSplitTest] = [
     RemoteSplitTest(
         id="rs_executor_client_is_re_export",
         tags=["remote_split", "executor_client"],
-        description="server.executor_client.execute_tool is shared.executioner.tool_executor.execute_tool",
+        description="orchestrator.executor_client.execute_tool is orchestrator.pipeline.execute_tool",
         fn=_t_executor_client_is_re_export,
     ),
 ]

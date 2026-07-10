@@ -192,7 +192,7 @@ GATED_TESTS: List[PipelineTest] = [
 
     # ── launch_vm (gate: name) ───────────────────────────────────────────────
 
-    _pts("launch_vm", {"name":"probe9_cpu"},                        "gate passes — executor may fail if already running"),
+    _pts("launch_vm", {"name":"probe9_cpu","display":"none"},       "gate passes — executor may fail if already running (headless: no window)"),
     _pts("launch_vm", {"name":"probe9_min","dry_run":True},         "dry_run — gate passes"),
     _g  ("launch_vm", {},                    ["name"],          "name missing"),
     _g  ("launch_vm", {"dry_run":True},      ["name"],          "dry_run only — gate asks for name"),
@@ -263,7 +263,7 @@ GATED_TESTS: List[PipelineTest] = [
 
     # ── snapshot_create (gate: name, snap_name) ──────────────────────────────
 
-    _eb ("snapshot_create", {"name":"probe9_min","snap_name":"probe9_snap"},  "gate passes — VM stopped so executor fails"),
+    _pt ("snapshot_create", {"name":"probe9_min","snap_name":"probe9_snap"},  "gate passes — VM stopped but offline snapshot via qemu-img still succeeds"),
     _g  ("snapshot_create", {},                                            ["name","snap_name"], "both missing"),
     _g  ("snapshot_create", {"name":"probe9_min"},                             ["snap_name"],        "name present → only snap_name asked"),
     _g  ("snapshot_create", {"snap_name":"snap1"},                         ["name"],             "snap_name present → only name asked"),
@@ -396,13 +396,19 @@ GATED_TESTS = _dedup(GATED_TESTS)
 
 def cleanup_gated_artifacts():
     import shutil, os
-    from shared.executioner.tool_executor import execute_tool as _et
-    from shared.api.qemu_config import get_all_profiles, delete_custom_profile
+    from orchestrator.pipeline import execute_tool as _et
+    from executor.api.qemu_config import get_all_profiles, delete_custom_profile
 
     vm_dir = os.path.expanduser("~/.qemu_vms")
     if os.path.isdir(vm_dir):
         for entry in os.listdir(vm_dir):
             if entry.startswith("probe9"):
+                # Stop first — the live launch_vm(probe9_cpu) test leaves QEMU
+                # running, and delete_vm refuses a running VM (would leak).
+                try:
+                    _et("stop_vm", {"name": entry, "force": True}, verbose=False, skip_gate=True)
+                except Exception:
+                    pass
                 try:
                     _et("delete_vm", {"name": entry}, verbose=False, skip_gate=True)
                 except Exception:
