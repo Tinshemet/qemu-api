@@ -1136,6 +1136,71 @@ def _clarify_drain(result: dict, tool_name: str, state: "TurnState",
     return GateOutcome.SKIP_TOOL
 
 
+def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
+                    verbose: bool) -> bool:
+    """Handle a REPL slash-command shortcut, if the input is one.
+
+    Covers list / system / profiles / clear-session / drift / auto-clear on|off /
+    loop-limit. Returns True when it handled the input (the caller continues the
+    REPL), False when the input isn't a command (fall through to the AI).
+
+    Example::
+
+        _handle_command("list", messages, 0, False)   # → True (ran list_vms)
+        _handle_command("make a vm", messages, 0, False)  # → False
+    """
+    global _LOOP_MAX
+    if ui in _SHORTCUTS["list"]:
+        execute_tool("list_vms", {}, verbose)
+        return True
+    if ui in _SHORTCUTS["system"]:
+        execute_tool("check_system", {}, verbose)
+        return True
+    if ui in _SHORTCUTS["profiles"]:
+        execute_tool("list_profiles", {}, verbose)
+        return True
+    if ui in _SHORTCUTS["clear_session"]:
+        clear_session()
+        messages.clear()
+        console.print("[dim]Session cleared.[/dim]")
+        return True
+    if ui in _SHORTCUTS["drift"]:
+        _show_drift_report(messages, runtime_drift_count)
+        return True
+    if ui in _SHORTCUTS["auto_clear_on"]:
+        set_auto_clear(True)
+        console.print("[dim]Auto-clear enabled — session will be cleared on next start.[/dim]")
+        return True
+    if ui in _SHORTCUTS["auto_clear_off"]:
+        set_auto_clear(False)
+        console.print("[dim]Auto-clear disabled.[/dim]")
+        return True
+    ll_matched = next((s for s in _SHORTCUTS["loop_limit"] if ui == s or ui.startswith(s + " ")), None)
+    if ll_matched is not None:
+        ll_inline = ui[len(ll_matched):].strip()
+        if ll_inline:
+            ll_input = ll_inline
+        else:
+            console.print(f"[dim]Current tool loop limit: [bold]{_LOOP_MAX}[/bold] (default: {_CFG['chat']['tool_loop_max']})[/dim]")
+            console.print("[dim]Enter a number to set a new limit, or press Enter to clear the override.[/dim]")
+            try:
+                ll_input = console.input("[bold cyan]New limit:[/bold cyan] ").strip()
+            except (KeyboardInterrupt, EOFError):
+                return True
+        if ll_input == "":
+            set_loop_max(None)
+            _LOOP_MAX = _CFG["chat"]["tool_loop_max"]
+            console.print(f"[dim]Loop limit reset to default ({_LOOP_MAX}).[/dim]")
+        elif ll_input.isdigit() and int(ll_input) > 0:
+            _LOOP_MAX = int(ll_input)
+            set_loop_max(_LOOP_MAX)
+            console.print(f"[dim]Loop limit set to {_LOOP_MAX}.[/dim]")
+        else:
+            console.print("[dim]Invalid input — loop limit unchanged.[/dim]")
+        return True
+    return False
+
+
 def chat_loop(verbose: bool = False):
     global _LOOP_MAX
     print_banner(
@@ -1202,60 +1267,7 @@ def chat_loop(verbose: bool = False):
             console.print("[dim]Goodbye.[/dim]")
             break
 
-        if _ui in _SHORTCUTS["list"]:
-            result = execute_tool("list_vms", {}, verbose)
-            continue
-
-        if _ui in _SHORTCUTS["system"]:
-            execute_tool("check_system", {}, verbose)
-            continue
-
-        if _ui in _SHORTCUTS["profiles"]:
-            execute_tool("list_profiles", {}, verbose)
-            continue
-
-        if _ui in _SHORTCUTS["clear_session"]:
-            clear_session()
-            messages = []
-            console.print("[dim]Session cleared.[/dim]")
-            continue
-
-        if _ui in _SHORTCUTS["drift"]:
-            _show_drift_report(messages, _runtime_drift_count)
-            continue
-
-        if _ui in _SHORTCUTS["auto_clear_on"]:
-            set_auto_clear(True)
-            console.print("[dim]Auto-clear enabled — session will be cleared on next start.[/dim]")
-            continue
-
-        if _ui in _SHORTCUTS["auto_clear_off"]:
-            set_auto_clear(False)
-            console.print("[dim]Auto-clear disabled.[/dim]")
-            continue
-
-        _ll_matched = next((s for s in _SHORTCUTS["loop_limit"] if _ui == s or _ui.startswith(s + " ")), None)
-        if _ll_matched is not None:
-            _ll_inline = _ui[len(_ll_matched):].strip()
-            if _ll_inline:
-                _ll_input = _ll_inline
-            else:
-                console.print(f"[dim]Current tool loop limit: [bold]{_LOOP_MAX}[/bold] (default: {_CFG['chat']['tool_loop_max']})[/dim]")
-                console.print("[dim]Enter a number to set a new limit, or press Enter to clear the override.[/dim]")
-                try:
-                    _ll_input = console.input("[bold cyan]New limit:[/bold cyan] ").strip()
-                except (KeyboardInterrupt, EOFError):
-                    continue
-            if _ll_input == "":
-                set_loop_max(None)
-                _LOOP_MAX = _CFG["chat"]["tool_loop_max"]
-                console.print(f"[dim]Loop limit reset to default ({_LOOP_MAX}).[/dim]")
-            elif _ll_input.isdigit() and int(_ll_input) > 0:
-                _LOOP_MAX = int(_ll_input)
-                set_loop_max(_LOOP_MAX)
-                console.print(f"[dim]Loop limit set to {_LOOP_MAX}.[/dim]")
-            else:
-                console.print("[dim]Invalid input — loop limit unchanged.[/dim]")
+        if _handle_command(_ui, messages, _runtime_drift_count, verbose):
             continue
 
         if not _is_synthetic:
