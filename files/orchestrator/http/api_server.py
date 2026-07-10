@@ -383,7 +383,13 @@ def rotate_token(new_token: str = Body(..., embed=True)) -> Dict[str, Any]:
         )
     _TOKEN = new_token
     os.environ["API_TOKEN"] = new_token
-    _TOKEN_FILE.write_text(new_token)
+    # Create the file 0600 from the start — write_text()+chmod leaves a brief
+    # world-readable window. chmod still covers a pre-existing looser file.
+    _fd = os.open(str(_TOKEN_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(_fd, new_token.encode())
+    finally:
+        os.close(_fd)
     _TOKEN_FILE.chmod(0o600)
     return {"ok": True, "message": "Token rotated. Update API_TOKEN on the AI provider too."}
 
