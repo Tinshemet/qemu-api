@@ -223,7 +223,13 @@ def _build_vnc_args(vnc_bind_local: bool) -> List[str]:
     cfg.kvm            = False
     cfg.disks          = []
     cfg.networks       = []
-    return QemuArgBuilder(cfg).build()
+    try:
+        return QemuArgBuilder(cfg).build()
+    finally:
+        # build() writes smbios_chassis.bin into the VM dir as a real side
+        # effect; this test only inspects the arg list, so don't leave the dir.
+        import shutil
+        shutil.rmtree(cfg.get_vm_dir(), ignore_errors=True)
 
 
 def _t_vnc_bind_local_true() -> List[str]:
@@ -1470,3 +1476,22 @@ def run_remote_split_test(tc: RemoteSplitTest) -> TestResult:
         fixes_applied = [],
         duration_s    = time.time() - start,
     )
+
+
+def cleanup_remote_artifacts() -> None:
+    """Remove any VM dirs the remote-split layer may leave behind.
+
+    The VNC arg-binding test builds a real MachineConfig — whose build() writes
+    smbios_chassis.bin into the VM dir as a side effect — and the pre-flight
+    probes use rs-* names. Prefix-scoped so this only touches this layer's own
+    artifacts. Registered in test_api's cleanup safety net so an interrupted run
+    can't leave the dirs behind (the builder also cleans up inline on success).
+    """
+    import os
+    import shutil
+    vm_dir = os.path.expanduser("~/.qemu_vms")
+    if not os.path.isdir(vm_dir):
+        return
+    for entry in os.listdir(vm_dir):
+        if entry.startswith("vnc-test-") or entry.startswith("rs-"):
+            shutil.rmtree(os.path.join(vm_dir, entry), ignore_errors=True)

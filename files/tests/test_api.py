@@ -68,7 +68,7 @@ from tests.layer10_pipeline_full import (
     generate_random_full_tests,
 )
 from tests.layer11_remote_split import (
-    REMOTE_SPLIT_TESTS, run_remote_split_test,
+    REMOTE_SPLIT_TESTS, run_remote_split_test, cleanup_remote_artifacts,
 )
 from tests.layer12_chat_loop import CHAT_TESTS, run_chat_scenario
 from tests.renderer         import (
@@ -82,11 +82,11 @@ from tests.renderer         import (
 # Runs on normal exit, unhandled exceptions, and SIGINT/SIGTERM so probe VMs/
 # profiles/networks never persist if the suite is killed or crashes mid-run
 # (e.g. left running unattended). Cheap to call even if a layer never ran —
-# each cleanup function only touches entries with its own probe8_/probe9_/probe10_
-# prefix. atexit does NOT fire on SIGKILL — only normal exit, exceptions, and
-# signals we explicitly trap below.
+# each cleanup function only touches entries with its own prefix (probe8_ /
+# probe9_ / probe10_ / vnc-test- / rs-). atexit does NOT fire on SIGKILL — only
+# normal exit, exceptions, and signals we explicitly trap below.
 def _cleanup_all_artifacts():
-    for fn in (cleanup_probe_artifacts, cleanup_gated_artifacts, cleanup_full_artifacts):
+    for fn in (cleanup_probe_artifacts, cleanup_gated_artifacts, cleanup_full_artifacts, cleanup_remote_artifacts):
         try:
             fn()
         except Exception as e:
@@ -382,11 +382,13 @@ def main():
     rs_tests = [t for t in REMOTE_SPLIT_TESTS if tag_ok(t.tags)] if 11 in run_layers else []
     if rs_tests:
         console.print(f"\n[bold bright_blue]Layer 11 — Remote Split ({len(rs_tests)})[/bold bright_blue]")
+        cleanup_remote_artifacts()
         for tc in track(rs_tests, description="  Running..."):
             r = run_remote_split_test(tc)
             all_results.append(r)
             console.print(f"    {'[green]✓[/green]' if r.passed else '[red]✗[/red]'} "
                            f"{tc.id} [{r.duration_s*1000:.0f}ms]")
+        cleanup_remote_artifacts()
 
     chat_tests = list(CHAT_TESTS) if 12 in run_layers else []
     if chat_tests:
