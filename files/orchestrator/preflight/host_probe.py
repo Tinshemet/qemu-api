@@ -321,7 +321,7 @@ def _validate_profile_for_host(profile_name: str, profile_data: Optional[Dict[st
                 if int(f.read().strip()) == 0:
                     issues.append({"severity":"error","message":f"Profile '{profile_name}' uses hugepages but none are allocated","fix":"sudo sysctl vm.nr_hugepages=2048","auto_fix":True,"fix_field":"hugepages","fix_value":False})
         except Exception:
-            pass
+            pass  # hugepages probe is advisory — skip the warning if /proc can't be read
 
     profile_mem = int(profile.get("memory_mb", 2048))
     host_mem    = caps.get("host_memory_mb", 0)

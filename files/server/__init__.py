@@ -9,7 +9,7 @@ def _alias(legacy: str, real: str) -> None:
         mod = importlib.import_module(real)
         sys.modules[legacy] = mod
     except ImportError:
-        pass
+        pass  # legacy alias is optional — skip it when the real module isn't importable
 
 # Register each time this package is imported so that after a test deletes
 # "server.http.api_server", re-importing "server" re-establishes the aliases.

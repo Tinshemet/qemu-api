@@ -508,7 +508,7 @@ def _preflight_check(
             if cfg.iso_path and not os.path.exists(cfg.iso_path):
                 return {"action":"ask_user","reason":f"ISO file missing: {cfg.iso_path}","question":f"The ISO '{os.path.basename(cfg.iso_path)}' is missing. Launch without ISO, or fix the path?","fix_field":None,"options":["Launch anyway (no ISO)","Cancel"]}
         except Exception:
-            pass
+            pass  # preflight is advisory — unreadable config skips the ISO check rather than blocking launch
 
     elif tool_name == "delete_vm":
         name = str(args.get("name", "")).strip()
@@ -525,7 +525,7 @@ def _preflight_check(
                 if name not in known_vms:
                     return {"action":"abort","reason":f"VM '{name}' does not exist — cannot resize disk","correction":"Create the VM first with create_vm, then resize."}
             except Exception:
-                pass
+                pass  # advisory check — if listing VMs fails, skip existence check rather than block resize
             # Attempt to read disk size for shrink guard (local mode only; silently skipped in split mode)
             try:
                 from executor.api.qemu_config import MachineConfig
@@ -535,7 +535,7 @@ def _preflight_check(
                     if new_size < current:
                         return {"action":"abort","reason":f"Cannot shrink disk from {current}GB to {new_size}GB — QEMU doesn't support shrinking","correction":f"new_size_gb must be >= current size ({current}GB)"}
             except Exception:
-                pass
+                pass  # advisory check — unreadable config skips the shrink check rather than blocking resize
 
     elif tool_name == "send_monitor_cmd":
         cmd = str(args.get("cmd", "")).strip().lower()

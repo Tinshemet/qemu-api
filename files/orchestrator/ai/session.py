@@ -27,7 +27,7 @@ def load_session() -> List[Dict]:
                 data = json.load(f)
             return data[-MAX_SESSION_HISTORY:]
         except Exception:
-            pass
+            pass  # corrupt/unreadable session — return the empty history below rather than crash
     return []
 
 
@@ -71,7 +71,7 @@ def save_session(messages: List[Dict]):
         with open(SESSION_FILE, "w") as f:
             json.dump(filtered, f, indent=2)
     except Exception:
-        pass
+        pass  # session persistence is best-effort — a write failure just means it isn't saved
 
 
 # Inspects loaded session history for signs of drift.

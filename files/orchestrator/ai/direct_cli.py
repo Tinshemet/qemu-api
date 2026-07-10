@@ -88,7 +88,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
             ).start()
             return
         except Exception:
-            pass
+            pass  # ctypes/user32 unavailable — fall through to the next GUI method
 
     # ── Linux/macOS host: zenity first (GNOME/Cinnamon) ──────────────────────
     try:
@@ -101,7 +101,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
         ])
         return
     except FileNotFoundError:
-        pass
+        pass  # zenity not installed — fall through to notify-send
     # notify-send (desktop notification, non-blocking)
     try:
         subprocess.Popen([
@@ -110,7 +110,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
         ])
         return
     except FileNotFoundError:
-        pass
+        pass  # notify-send not installed — fall through to tkinter
     # tkinter (universal fallback)
     try:
         import tkinter as tk
@@ -120,7 +120,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
         messagebox.showinfo(title, text)
         root.destroy()
     except Exception:
-        pass
+        pass  # no GUI toolkit available — the popup is optional, so give up silently
 
 
 # Dispatches direct sub-commands (list, launch, stop, snapshot, network, etc.) to the manager and renders output.
