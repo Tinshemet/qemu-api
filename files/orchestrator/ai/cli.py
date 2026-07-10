@@ -796,6 +796,60 @@ def _preflight_gate(tool_name: str, raw_args: dict, state: "TurnState",
     return raw_args, GateOutcome.PROCEED
 
 
+def _context_assistant_gate(tool_name: str, raw_args: dict, user_input: str,
+                            recent_context: str, state: "TurnState",
+                            messages: List[dict]):
+    """Fire the context assistant (once per turn) and act on its hint.
+
+    A hallucinated required field ("never mentioned it") is asked of the user
+    directly and patched into raw_args (PROCEED); a tool mismatch / high-stakes
+    hint pops the bad assistant message and nudges the AI to re-plan (REPLAN).
+
+    Returns (raw_args, outcome): EXIT (Ctrl-C), REPLAN (mismatch), or PROCEED
+    (patched / no hint / already fired this turn).
+
+    Example::
+
+        _context_assistant_gate("delete_vm", {"name": "x"}, "show x", "", st, msgs)
+        # mismatch hint → (raw_args, GateOutcome.REPLAN)
+    """
+    if state.context_assistant_fired:
+        return raw_args, GateOutcome.PROCEED
+    hint = check_context(user_input, tool_name, raw_args, recent_context=recent_context)
+    if not hint:
+        return raw_args, GateOutcome.PROCEED
+    state.context_assistant_fired = True
+    if "never mentioned it" in hint:
+        # Hallucinated required field — ask the user directly (the model ignores
+        # the hint if we just re-prompt it).
+        import re as _re
+        fields = _re.findall(r"You set (\w+)=", hint)
+        filled = {}
+        for f in fields:
+            console.print(f"[yellow]?[/yellow] What {f} would you like to use?")
+            try:
+                ans = console.input("[bold cyan]You:[/bold cyan] ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Cancelled.[/dim]")
+                return raw_args, GateOutcome.EXIT
+            if ans:
+                filled[f] = ans
+        if filled:
+            raw_args = dict(raw_args)
+            raw_args.update(filled)
+            messages.append({"role": "user", "content": str(filled)})
+            state.clarified_fields.update(filled.keys())
+            state.clarified_values.update(filled.items())
+        return raw_args, GateOutcome.PROCEED   # continue with the corrected args
+    # Mismatch or high-stakes — let the AI re-evaluate.
+    messages.pop()
+    messages.append({
+        "role":    "user",
+        "content": f"_INTERNAL_ {hint} Re-evaluate and call the correct tool.",
+    })
+    return raw_args, GateOutcome.REPLAN
+
+
 def _maybe_enable_custom_mode(tool_name: str, user_input_lower: str,
                               messages: List[dict]) -> None:
     """Enable custom mode for create_profile when the user said 'custom'.
@@ -1111,42 +1165,12 @@ def chat_loop(verbose: bool = False):
                     and not str(m.get("content", "")).startswith("_INTERNAL_")
                 ]
                 _recent_context = " ".join(_recent_user_msgs[-6:])
-                if not state.context_assistant_fired:
-                    _ca_hint = check_context(user_input, tool_name, raw_args,
-                                             recent_context=_recent_context)
-                    if _ca_hint:
-                        state.context_assistant_fired = True
-                        if "never mentioned it" in _ca_hint:
-                            # Hallucinated required field — ask the user directly
-                            # rather than re-prompting the AI (model ignores the hint).
-                            import re as _re
-                            _fields = _re.findall(r"You set (\w+)=", _ca_hint)
-                            _filled = {}
-                            for _f in _fields:
-                                console.print(f"[yellow]?[/yellow] What {_f} would you like to use?")
-                                try:
-                                    _ans = console.input("[bold cyan]You:[/bold cyan] ").strip()
-                                except (KeyboardInterrupt, EOFError):
-                                    console.print("\n[dim]Cancelled.[/dim]")
-                                    return
-                                if _ans:
-                                    _filled[_f] = _ans
-                            if _filled:
-                                raw_args = dict(raw_args)
-                                raw_args.update(_filled)
-                                messages.append({"role": "user", "content": str(_filled)})
-                                state.clarified_fields.update(_filled.keys())
-                                state.clarified_values.update(_filled.items())
-                            # Don't break — continue with corrected args
-                        else:
-                            # Mismatch or high-stakes — let the AI re-evaluate
-                            messages.pop()
-                            messages.append({
-                                "role":    "user",
-                                "content": f"_INTERNAL_ {_ca_hint} Re-evaluate and call the correct tool.",
-                            })
-                            break       # break tool_calls loop, re-enter outer loop
-                # ──────────────────────────────────────────────────────────
+                raw_args, _ca_out = _context_assistant_gate(
+                    tool_name, raw_args, user_input, _recent_context, state, messages)
+                if _ca_out is GateOutcome.EXIT:
+                    return
+                if _ca_out is GateOutcome.REPLAN:
+                    break
 
                 # ── os_type guard ──────────────────────────────────────────
                 raw_args = _resolve_os_type(tool_name, raw_args, _ui, state)
