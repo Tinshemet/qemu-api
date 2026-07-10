@@ -22,7 +22,7 @@ class QMPClient:
     # Connects to the QEMU QMP socket, reads the greeting, and activates capabilities.
     # Supports Unix domain sockets (Linux/macOS) and TCP via "tcp:host:port" (Windows).
     # In: int timeout → Out: nothing
-    def connect(self, timeout: int = _CFG["timeouts"]["qmp_connect"]):
+    def connect(self, timeout: int = _CFG["timeouts"]["qmp_connect"]) -> None:
         if self.socket_path.startswith("tcp:"):
             host, port = self.socket_path[4:].rsplit(":", 1)
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -38,7 +38,7 @@ class QMPClient:
 
     # Serializes a dict to JSON and sends it over the socket.
     # In: dict → Out: nothing
-    def _send(self, data: dict):
+    def _send(self, data: dict) -> None:
         self.sock.sendall((json.dumps(data) + "\n").encode())
 
     # Reads bytes from the socket until a complete JSON object is assembled.
@@ -81,6 +81,6 @@ class QMPClient:
 
     # Closes the socket connection.
     # In: nothing → Out: nothing
-    def close(self):
+    def close(self) -> None:
         if self.sock:
             self.sock.close()

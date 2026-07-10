@@ -33,7 +33,7 @@ def load_session() -> List[Dict]:
 
 # Filters to only user/assistant turns and writes the last 40 to session.json.
 # In: List[dict] messages → Out: nothing
-def save_session(messages: List[Dict]):
+def save_session(messages: List[Dict]) -> None:
     try:
         # Walk the raw message list to separate verified assistant messages
         # (those that immediately follow a tool result) from unverified ones
@@ -136,14 +136,14 @@ def detect_drift(messages: List[Dict]) -> Optional[tuple]:
 
 # Deletes the session file if it exists.
 # In: nothing → Out: nothing
-def clear_session():
+def clear_session() -> None:
     if os.path.exists(SESSION_FILE):
         os.remove(SESSION_FILE)
 
 
 # Patches the auto_clear flag in config.json and updates the module-level constant.
 # In: bool enabled → Out: nothing
-def set_auto_clear(enabled: bool):
+def set_auto_clear(enabled: bool) -> None:
     global AUTO_CLEAR_SESSION
     cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
     with open(cfg_path) as f:

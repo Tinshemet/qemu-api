@@ -41,7 +41,7 @@ class IsolatedNetManager:
 
     # Writes the current network state back to networks.json.
     # In: nothing → Out: nothing
-    def _save(self):
+    def _save(self) -> None:
         with open(self.NET_FILE, "w") as f:
             json.dump(self._nets, f, indent=2)
 

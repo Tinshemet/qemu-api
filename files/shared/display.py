@@ -43,7 +43,7 @@ def _fmt_uptime(seconds: int) -> str:
 
 # Prints a Rich table of all VMs with status, OS, CPU, RAM, and disk count.
 # In: List[dict] → Out: nothing (console output)
-def render_vm_list(vms: List[Dict]):
+def render_vm_list(vms: List[Dict]) -> None:
     if not vms:
         console.print("[warn]No VMs found.[/warn]")
         return
@@ -74,7 +74,7 @@ def render_vm_list(vms: List[Dict]):
 
 # Prints a colored panel with VM running/stopped state, PID, CPU%, RAM, and uptime.
 # In: dict → Out: nothing (console output)
-def render_status(status: Dict):
+def render_status(status: Dict) -> None:
     state  = status.get("state", "unknown")
     colour = "green" if state == "running" else "red"
     name   = status.get("name", "?")
@@ -94,7 +94,7 @@ def render_status(status: Dict):
 
 # Prints a detailed monitoring panel with resource stats and block I/O.
 # In: dict → Out: nothing (console output)
-def render_monitor(report: Dict):
+def render_monitor(report: Dict) -> None:
     name  = report.get("name", "?")
     state = report.get("state", "stopped")
     if state != "running":
@@ -129,7 +129,7 @@ def render_monitor(report: Dict):
 
 # Prints a table of hardware profiles with name, arch, and custom flag.
 # In: List[dict] → Out: nothing (console output)
-def render_profiles(profiles: List[Dict]):
+def render_profiles(profiles: List[Dict]) -> None:
     t = Table(box=box.ROUNDED, border_style="magenta", header_style="bold magenta")
     t.add_column("Name",        style="bold cyan")
     t.add_column("Arch",        style="dim")
@@ -143,7 +143,7 @@ def render_profiles(profiles: List[Dict]):
 
 # Prints a colored compatibility panel with issues, warnings, alternatives, and host summary.
 # In: dict → Out: nothing (console output)
-def render_compat(result: Dict):
+def render_compat(result: Dict) -> None:
     name  = result.get("profile", "?")
     ok    = result.get("compatible", False)
     color = "green" if ok else "red"
@@ -177,7 +177,7 @@ def render_compat(result: Dict):
 
 # Prints a full failure report panel with diagnosis, errors, suggestions, and last log lines.
 # In: dict → Out: nothing (console output)
-def render_vm_failure(report: Dict):
+def render_vm_failure(report: Dict) -> None:
     name  = report.get("name", "?")
     lines = []
 
@@ -229,7 +229,7 @@ def render_vm_failure(report: Dict):
 
 # Prints a table of snapshot IDs, tags, sizes, and dates.
 # In: dict → Out: nothing (console output)
-def render_snapshots(result: Dict):
+def render_snapshots(result: Dict) -> None:
     snaps = result.get("snapshots", [])
     if not snaps:
         console.print("[warn]No snapshots found.[/warn]")
@@ -243,7 +243,7 @@ def render_snapshots(result: Dict):
 
 # Prints a system capabilities panel (CPU, RAM, KVM, OVMF, QEMU version).
 # In: dict → Out: nothing (console output)
-def render_system(caps: Dict):
+def render_system(caps: Dict) -> None:
     t = Table(box=box.SIMPLE, show_header=False)
     t.add_column("Key",   style="dim",        width=25)
     t.add_column("Value", style="bold white")
@@ -264,7 +264,7 @@ def render_system(caps: Dict):
 
 # Prints a specs preview panel for create_vm before the user confirms.
 # In: List[tuple[str, str]] rows → Out: nothing (console output)
-def render_vm_specs(rows: List[tuple]):
+def render_vm_specs(rows: List[tuple]) -> None:
     t = Table(box=box.SIMPLE, show_header=False)
     t.add_column("Key",   style="dim",        width=20)
     t.add_column("Value", style="bold white")
@@ -278,7 +278,7 @@ def render_vm_specs(rows: List[tuple]):
 def print_banner(
     verbose: bool, ollama_url: str, ollama_model: str,
     ovmf_available: bool, ovmf_code: str, api_url: str = "local",
-):
+) -> None:
     ovmf_line = (
         f"[success]OVMF ✓[/success]  {ovmf_code}"
         if ovmf_available

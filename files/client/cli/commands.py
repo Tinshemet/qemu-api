@@ -54,7 +54,7 @@ except ImportError:
     from rich.console import Console
     console = Console()
 
-    def _render_json(data, *_a, **_kw):
+    def _render_json(data, *_a, **_kw) -> None:
         console.print_json(data=data, default=str)
 
     render_vm_list   = _render_json
@@ -99,7 +99,7 @@ except ImportError:
     manager = None                                               # type: ignore[assignment]
 
 
-def _require_manager():
+def _require_manager() -> None:
     if manager is None:
         console.print(
             "[bold yellow]Direct commands require QEMU to be installed on this machine.[/bold yellow]\n"
@@ -179,7 +179,7 @@ def clear_session_flag() -> None:
     console.print("[dim]Session cleared.[/dim]")
 
 
-def _show_stealth_popup(vm_name: str, setup_cmd: str):
+def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
     """Serve the stealth setup script via a one-shot HTTP server so the VM can pull it."""
     script_path = None
     if manager is not None:   # None in remote mode — no local manager to generate against
@@ -202,9 +202,9 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str):
 
     import http.server
     class _Handler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, *_): pass
+        def log_message(self, *_) -> None: pass
 
-    def _serve():
+    def _serve() -> None:
         srv = http.server.HTTPServer(("", port), _Handler)
         srv.handle_request()
         srv.server_close()
@@ -226,7 +226,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str):
     ))
 
 
-def run(args: List[str], verbose: bool = False):
+def run(args: List[str], verbose: bool = False) -> None:
     if not args:
         console.print("[dim]No command given. Try: list, launch, stop, status, profiles, system[/dim]")
         return
@@ -234,7 +234,7 @@ def run(args: List[str], verbose: bool = False):
     cmd  = args[0]
     rest = args[1:]
 
-    def pp(data):
+    def pp(data) -> None:
         if verbose:
             console.print_json(json.dumps(data, default=str))
 

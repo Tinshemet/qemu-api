@@ -38,19 +38,19 @@ class VMState:
 
     # Writes current state to .state.json.
     # In: nothing → Out: nothing
-    def _save(self):
+    def _save(self) -> None:
         with open(STATE_FILE, "w") as f:
             json.dump(self._data, f, indent=2)
 
     # Records a VM as running with its PID and start timestamp.
     # In: str name, int pid → Out: nothing
-    def set_running(self, name: str, pid: int):
+    def set_running(self, name: str, pid: int) -> None:
         self._data[name] = {"pid": pid, "started": datetime.now().isoformat()}
         self._save()
 
     # Removes a VM from the running state and saves.
     # In: str name → Out: nothing
-    def set_stopped(self, name: str):
+    def set_stopped(self, name: str) -> None:
         self._data.pop(name, None)
         self._save()
 
@@ -98,7 +98,7 @@ class _PsutilProcWrapper:
 
     # Sends SIGTERM; silently ignores if the process is already gone.
     # In: nothing → Out: nothing
-    def terminate(self):
+    def terminate(self) -> None:
         try:
             self._proc.terminate()
         except psutil.NoSuchProcess:
@@ -106,7 +106,7 @@ class _PsutilProcWrapper:
 
     # Sends SIGKILL; silently ignores if the process is already gone.
     # In: nothing → Out: nothing
-    def kill(self):
+    def kill(self) -> None:
         try:
             self._proc.kill()
         except psutil.NoSuchProcess:

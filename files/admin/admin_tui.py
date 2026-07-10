@@ -142,7 +142,7 @@ def _hex_to_curses(hex_color: str) -> tuple:
     return (r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
 
 
-def _init_colours(color_hex: str = "#aaaaaa"):
+def _init_colours(color_hex: str = "#aaaaaa") -> None:
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(C_HEADER, curses.COLOR_WHITE,  curses.COLOR_BLUE)
@@ -164,7 +164,7 @@ def _cp(n):
 
 # ── draw ──────────────────────────────────────────────────────────────────────
 
-def _hline(stdscr, row, w, label=""):
+def _hline(stdscr, row, w, label="") -> None:
     if row < 0:
         return
     try:
@@ -180,7 +180,7 @@ def _hline(stdscr, row, w, label=""):
         pass  # addstr past the screen edge — skip the section rule
 
 
-def _draw(stdscr, vms: list, events: list, uptime_s: float):
+def _draw(stdscr, vms: list, events: list, uptime_s: float) -> None:
     global _cmd_buf, _cmd_msg
     h, w = stdscr.getmaxyx()
     stdscr.erase()
@@ -291,7 +291,7 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     stdscr.refresh()
 
 
-def _draw_help(stdscr, h, w):
+def _draw_help(stdscr, h, w) -> None:
     SECTIONS = [
         ("VM Commands", [
             ("launch <vm>",  "Start a VM"),
@@ -344,7 +344,7 @@ def _draw_help(stdscr, h, w):
 
 # ── command dispatch ──────────────────────────────────────────────────────────
 
-def _dispatch(cmd: str):
+def _dispatch(cmd: str) -> None:
     if not cmd:
         return
     import signal as _signal
@@ -450,7 +450,7 @@ def _dispatch(cmd: str):
 
 # ── keyboard ──────────────────────────────────────────────────────────────────
 
-def _handle_input(stdscr):
+def _handle_input(stdscr) -> None:
     global _cmd_buf, _cmd_msg, _help_mode
     while not _quit.is_set():
         try:
@@ -480,7 +480,7 @@ def _handle_input(stdscr):
 
 # ── main loop ─────────────────────────────────────────────────────────────────
 
-def _run(stdscr):
+def _run(stdscr) -> None:
     cfg       = _load_json(os.path.join(_here, "admin_config.json"))
     color_hex = cfg.get("text_color", "#aaaaaa")
     font_size = int(cfg.get("font_size", 13))
@@ -517,7 +517,7 @@ def _run(stdscr):
         time.sleep(0.05)
 
 
-def main():
+def main() -> None:
     try:
         curses.wrapper(_run)
     except KeyboardInterrupt:

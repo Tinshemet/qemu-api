@@ -185,7 +185,7 @@ class DiskConfig:
 
     # Coerces size_gb to int — guards against AI sending strings like "60".
     # In: self (post-construction) → Out: nothing (self-mutation)
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Coerce string values from AI (it sometimes sends "60" instead of 60)
         self.size_gb = int(self.size_gb)
 
@@ -245,7 +245,7 @@ class NetworkConfig:
 
     # Generates or validates the MAC address on init.
     # In: self (post-construction) → Out: nothing (self-mutation)
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.mac:
             self._generate_mac()
         else:
@@ -258,7 +258,7 @@ class NetworkConfig:
 
     # Generates a MAC using a vendor-matched OUI when possible, otherwise any real OUI.
     # In: nothing → Out: sets self.mac
-    def _generate_mac(self):
+    def _generate_mac(self) -> None:
         import random
         hint = (self.manufacturer_hint or "").lower()
         pool = next(
@@ -420,7 +420,7 @@ class MachineConfig:
 
     # Coerces int fields and auto-falls back to SeaBIOS if OVMF is absent.
     # In: self (post-construction) → Out: nothing (self-mutation)
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Coerce types that AI may send as strings
         self.cpu_cores   = int(self.cpu_cores)
         self.cpu_threads = int(self.cpu_threads)
@@ -469,7 +469,7 @@ class MachineConfig:
 
     # Writes the config to ~/.qemu_vms/<name>/config.json.
     # In: nothing → Out: nothing
-    def save(self):
+    def save(self) -> None:
         os.makedirs(self.get_vm_dir(), exist_ok=True)
         with open(self.get_config_path(), "w") as f:
             json.dump(self.to_dict(), f, indent=2)

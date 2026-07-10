@@ -54,7 +54,7 @@ def _load_session_id() -> str:
         return ""
 
 
-def _save_session_id(sid: str):
+def _save_session_id(sid: str) -> None:
     os.makedirs(os.path.dirname(_SESSION_FILE), exist_ok=True)
     with open(_SESSION_FILE, "w") as f:
         f.write(sid)
@@ -99,7 +99,7 @@ def _hex_to_curses(hex_color: str) -> tuple:
     return (r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
 
 
-def _init_colours(color_hex: str = "#aaaaaa"):
+def _init_colours(color_hex: str = "#aaaaaa") -> None:
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(C_HEADER, curses.COLOR_WHITE,  curses.COLOR_BLUE)
@@ -148,7 +148,7 @@ _EXIT_CMDS   = {"exit", "quit", "q", "bye"}
 
 # ── History helpers ───────────────────────────────────────────────────────────
 
-def _add(text: str, attr: int = 0, wrap: int = 0):
+def _add(text: str, attr: int = 0, wrap: int = 0) -> None:
     with _lock:
         if wrap:
             for line in textwrap.wrap(text, wrap) or [""]:
@@ -157,13 +157,13 @@ def _add(text: str, attr: int = 0, wrap: int = 0):
             _history.append((attr, text))
 
 
-def _add_sep():
+def _add_sep() -> None:
     _add("  " + "─" * 62, _cp(C_DIM))
 
 
 # ── Draw ──────────────────────────────────────────────────────────────────────
 
-def _draw(stdscr, input_buf: str):
+def _draw(stdscr, input_buf: str) -> None:
     h, w = stdscr.getmaxyx()
     stdscr.erase()
 
@@ -278,7 +278,7 @@ def _iso_distro_hint(iso_name: str) -> str:
             return distro
     return ""
 
-def _render_tool_result(tool: str, result: dict):
+def _render_tool_result(tool: str, result: dict) -> None:
     if tool == "list_vms":
         vms = result if isinstance(result, list) else result.get("vms", [])
         if not vms:
@@ -535,7 +535,7 @@ def _sync_from_server():
 
 # ── Response processing ───────────────────────────────────────────────────────
 
-def _process_response(result: dict, verbose: bool = False):
+def _process_response(result: dict, verbose: bool = False) -> None:
     global _session_id, _needs_confirm, _is_confirm
 
     if result.get("error"):
@@ -581,7 +581,7 @@ def _process_response(result: dict, verbose: bool = False):
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
-def _show_help():
+def _show_help() -> None:
     _add_sep()
     _add("  Shortcuts (instant, no AI):", _cp(C_CYAN) | curses.A_BOLD)
     helps = [
@@ -613,7 +613,7 @@ def _show_help():
 
 # ── HTTP worker ───────────────────────────────────────────────────────────────
 
-def _http_worker(message: str, auto_confirm: bool, verbose: bool):
+def _http_worker(message: str, auto_confirm: bool, verbose: bool) -> None:
     result = _post_chat(message, _session_id, auto_confirm, verbose)
     _resp_q.put(result)
 
@@ -688,7 +688,7 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
 
 # ── Main TUI loop ─────────────────────────────────────────────────────────────
 
-def _run(stdscr, verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13):
+def _run(stdscr, verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13) -> None:
     global _waiting, _session_id, _needs_confirm, _is_confirm, _pending_kill
 
     curses.curs_set(0)
@@ -814,7 +814,7 @@ def _run(stdscr, verbose: bool = False, color_hex: str = "#aaaaaa", font_size: i
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def chat_loop(verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13):
+def chat_loop(verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13) -> None:
     try:
         curses.wrapper(lambda s: _run(s, verbose, color_hex, font_size))
     except KeyboardInterrupt:

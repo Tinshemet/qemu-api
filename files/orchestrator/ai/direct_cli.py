@@ -125,12 +125,12 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
 
 # Dispatches direct sub-commands (list, launch, stop, snapshot, network, etc.) to the manager and renders output.
 # In: List[str] args, bool verbose → Out: nothing
-def cli_direct(args: List[str], verbose: bool = False):
+def cli_direct(args: List[str], verbose: bool = False) -> None:
     if manager is None:
         console.print("[bold yellow]Direct CLI requires the client package. In server-only mode use the AI chat — commands execute remotely via API_URL.[/bold yellow]")
         return
 
-    def pp(data):
+    def pp(data) -> None:
         if verbose:
             console.print_json(json.dumps(data, default=str))
 
@@ -297,7 +297,7 @@ def cli_direct(args: List[str], verbose: bool = False):
         class _Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *a, **kw):
                 super().__init__(*a, directory=script_dir, **kw)
-            def log_message(self, *_):
+            def log_message(self, *_) -> None:
                 pass  # silence access log
 
         srv = http.server.HTTPServer(('0.0.0.0', port), _Handler)
