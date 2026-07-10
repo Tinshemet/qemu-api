@@ -14,7 +14,7 @@ loads its own _CFG, so it never imports from cli — the edge is one-directional
 
 import json
 import os
-from typing import List
+from typing import List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -39,6 +39,8 @@ _OS_KEYWORDS    = set(_CFG["os_keywords_gate"])
 _CONFIRM_YN     = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
 _CONFIRM_NAME   = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
 _RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
+_CRITICAL_TOOLS = set(_CFG.get("critical_tools", ["delete_vm"]))   # irreversible → double-confirm
+_RECENT_CONTEXT_WINDOW = _CFG["chat"].get("recent_context_window", 6)  # msgs kept for multi-turn context
 
 
 def _is_critical(tool_name: str, args: dict) -> bool:
@@ -49,7 +51,8 @@ def _is_critical(tool_name: str, args: dict) -> bool:
         args:      Tool arguments (reserved for future per-arg checks).
 
     Returns:
-        ``True`` only for irreversible, data-destroying operations.
+        ``True`` only for irreversible, data-destroying operations
+        (the set is config-driven — ``critical_tools`` in config.json).
 
     Example::
 
@@ -57,7 +60,7 @@ def _is_critical(tool_name: str, args: dict) -> bool:
         _is_critical("launch_vm",  {"name": "myvm"})  # → False
         _is_critical("stop_vm",    {"name": "myvm"})  # → False
     """
-    return tool_name == "delete_vm"
+    return tool_name in _CRITICAL_TOOLS
 
 
 # Builds (label, value) rows describing the specs create_vm is about to use,
@@ -155,7 +158,13 @@ class TurnState:
     clarify_field:           str  = ""
 
     def reset_iteration(self) -> None:
-        """Clear the flags that live for a single agentic round."""
+        """Clear the flags that live for a single agentic round.
+
+        Example::
+
+            st = TurnState(); st.op_cancelled = True
+            st.reset_iteration()      # st.op_cancelled is now False again
+        """
         self.op_cancelled     = False
         self.clarify_happened = False
         self.clarify_answer   = ""
@@ -277,7 +286,7 @@ def _safety_gate(tool_name: str, raw_args: dict, state: "TurnState",
 
 
 def _preflight_gate(tool_name: str, raw_args: dict, state: "TurnState",
-                    messages: List[dict], verbose: bool):
+                    messages: List[dict], verbose: bool) -> Tuple[dict, "GateOutcome"]:
     """Run pre-flight validation and act on the result before execution.
 
     Returns (raw_args, outcome): EXIT (Ctrl-C), REPLAN (abort — the AI is nudged
@@ -362,7 +371,7 @@ def _preflight_gate(tool_name: str, raw_args: dict, state: "TurnState",
 
 def _context_assistant_gate(tool_name: str, raw_args: dict, user_input: str,
                             recent_context: str, state: "TurnState",
-                            messages: List[dict]):
+                            messages: List[dict]) -> Tuple[dict, "GateOutcome"]:
     """Fire the context assistant (once per turn) and act on its hint.
 
     A hallucinated required field ("never mentioned it") is asked of the user
@@ -414,8 +423,8 @@ def _context_assistant_gate(tool_name: str, raw_args: dict, user_input: str,
     return raw_args, GateOutcome.REPLAN
 
 
-def _manual_config_gate(tool_name: str, raw_args: dict, pre_gate_result,
-                        state: "TurnState"):
+def _manual_config_gate(tool_name: str, raw_args: dict, pre_gate_result: Optional[dict],
+                        state: "TurnState") -> Tuple[dict, Optional[dict], "GateOutcome"]:
     """Interactive per-VM config when create_vm was called with manual=True.
 
     Prompts for os/cpu/mem/disk, applies them, marks os_type clarified, and
@@ -491,7 +500,7 @@ def _maybe_enable_custom_mode(tool_name: str, user_input_lower: str,
     if tool_name != "create_profile":
         return
     ctx = user_input_lower + " " + " ".join(
-        m.get("content", "").lower() for m in messages[-6:] if m.get("role") == "user"
+        m.get("content", "").lower() for m in messages[-_RECENT_CONTEXT_WINDOW:] if m.get("role") == "user"
     )
     if "custom" in ctx:
         set_custom_mode(True)
@@ -528,7 +537,7 @@ def _resolve_os_type(tool_name: str, raw_args: dict, user_input_lower: str,
 
 
 def _build_pre_gate_result(tool_name: str, raw_args: dict, user_input: str,
-                           recent_context: str, state: "TurnState"):
+                           recent_context: str, state: "TurnState") -> Optional[dict]:
     """Return a clarify result if a gate-required field is missing from what the
     user actually said, else None.
 
@@ -752,7 +761,7 @@ def _process_tool_call(tc: dict, user_input: str, ui: str, state: "TurnState",
         if m.get("role") == "user"
         and not str(m.get("content", "")).startswith("_INTERNAL_")
     ]
-    _recent_context = " ".join(_recent_user_msgs[-6:])
+    _recent_context = " ".join(_recent_user_msgs[-_RECENT_CONTEXT_WINDOW:])
     raw_args, _ca_out = _context_assistant_gate(
         tool_name, raw_args, user_input, _recent_context, state, messages)
     if _ca_out is GateOutcome.EXIT:
@@ -771,10 +780,10 @@ def _process_tool_call(tc: dict, user_input: str, ui: str, state: "TurnState",
         return _pf_out
 
     # ── Safety confirmation gate ───────────────────────────────
-    _sg = _safety_gate(tool_name, raw_args, state, messages)
-    if _sg is GateOutcome.EXIT:
+    safety_out = _safety_gate(tool_name, raw_args, state, messages)
+    if safety_out is GateOutcome.EXIT:
         return GateOutcome.EXIT
-    if _sg is GateOutcome.CANCELLED:
+    if safety_out is GateOutcome.CANCELLED:
         return GateOutcome.CANCELLED
 
     # ── Pre-execution gate ─────────────────────────────────────────
