@@ -138,7 +138,7 @@ def set_custom_mode_flag(enabled: bool) -> None:
         console.print(f"[dim]Custom mode {'enabled' if enabled else 'disabled'} (local)[/dim]")
         return
     except ImportError:
-        pass
+        pass  # orchestrator not importable here — fall through to the HTTP path below
     if _SERVER and _TOKEN:
         try:
             r = requests.post(f"{_SERVER}/custom-mode", headers=_HEADERS,
@@ -182,12 +182,14 @@ def clear_session_flag() -> None:
 def _show_stealth_popup(vm_name: str, setup_cmd: str):
     """Serve the stealth setup script via a one-shot HTTP server so the VM can pull it."""
     script_path = None
-    try:
-        r = manager.generate_guest_setup(vm_name)
-        if r.get("success"):
-            script_path = r["path"]
-    except Exception:
-        pass
+    if manager is not None:   # None in remote mode — no local manager to generate against
+        try:
+            r = manager.generate_guest_setup(vm_name)
+            if r.get("success"):
+                script_path = r["path"]
+        except Exception as e:
+            # a genuine generation failure — surface it instead of swallowing
+            console.print(f"[dim]guest setup generation failed: {e}[/dim]")
     if not script_path:
         return
 
@@ -277,7 +279,7 @@ def run(args: List[str], verbose: bool = False):
                     remote_vms = remote_result if isinstance(remote_result, list) else remote_result.get("vms", [])
                     remote_exists = any(v.get("name") == vm_name for v in remote_vms)
             except Exception:
-                pass
+                pass  # remote existence check is best-effort — a network error just skips remote dedupe
 
         use_remote = False
         if local_exists and remote_exists:

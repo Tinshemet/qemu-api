@@ -180,13 +180,13 @@ def _draw(stdscr, input_buf: str):
     try:
         stdscr.addstr(0, 0, hdr[:w - 1].ljust(w - 1), _cp(C_HEADER) | curses.A_BOLD)
     except curses.error:
-        pass
+        pass  # addstr fails past the screen edge — skip drawing the header
 
     # Separator
     try:
         stdscr.addstr(1, 0, "─" * (w - 1), _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr fails past the screen edge — skip the separator
 
     # Chat history (rows 2 .. h-5)
     chat_rows = max(1, h - 6)
@@ -199,26 +199,26 @@ def _draw(stdscr, input_buf: str):
         try:
             stdscr.addstr(row, 0, text[:w - 1], attr)
         except curses.error:
-            pass
+            pass  # addstr fails past the screen edge — skip this message row
 
     # Input separator
     try:
         stdscr.addstr(h - 4, 0, "─" * (w - 1), _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr fails past the screen edge — skip the input separator
 
     # Input / waiting line
     if _waiting:
         try:
             stdscr.addstr(h - 3, 0, f" ⟳ waiting for response...", _cp(C_DIM))
         except curses.error:
-            pass
+            pass  # addstr fails past the screen edge — skip the waiting line
     else:
         prompt = f" > {input_buf}"
         try:
             stdscr.addstr(h - 3, 0, prompt[:w - 1], _cp(C_CYAN) | curses.A_BOLD)
         except curses.error:
-            pass
+            pass  # addstr fails past the screen edge — skip the prompt
 
     # Hint line
     try:
@@ -226,7 +226,7 @@ def _draw(stdscr, input_buf: str):
                       "  list  system  profiles  drift  /clear  help  q=quit"[:w - 1],
                       _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr fails past the screen edge — skip the hint line
 
     stdscr.refresh()
 
@@ -483,7 +483,7 @@ def _autostart_server(stdscr) -> bool:
         token = open(os.path.expanduser("~/.qemu-api.token")).read().strip()
         env["API_TOKEN"] = token
     except Exception:
-        pass
+        pass  # no token file — run without an API token (server may allow it)
 
     _log_path = _UI_CFG.get("log_path", "/tmp/qemu-api-server.log")
     import subprocess as _sp
@@ -635,7 +635,7 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
             requests.delete(f"{SERVER_URL}/sessions/{_session_id}",
                             headers=_HEADERS, timeout=10, verify=_VERIFY)
         except Exception:
-            pass
+            pass  # best-effort server-side session clear — ignore network errors
         _session_id = str(uuid.uuid4())
         _save_session_id(_session_id)
         _add("  Session cleared.", _cp(C_DIM))
@@ -750,7 +750,7 @@ def _run(stdscr, verbose: bool = False, color_hex: str = "#aaaaaa", font_size: i
             _waiting = False
             _process_response(result, verbose)
         except queue.Empty:
-            pass
+            pass  # no response queued this tick — nothing to drain
 
         _draw(stdscr, input_buf if not _waiting else "")
 
@@ -818,4 +818,4 @@ def chat_loop(verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int 
     try:
         curses.wrapper(lambda s: _run(s, verbose, color_hex, font_size))
     except KeyboardInterrupt:
-        pass
+        pass  # Ctrl-C — exit the TUI cleanly

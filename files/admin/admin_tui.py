@@ -177,7 +177,7 @@ def _hline(stdscr, row, w, label=""):
         else:
             stdscr.addstr(row, 0, "─" * (w - 1), _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the section rule
 
 
 def _draw(stdscr, vms: list, events: list, uptime_s: float):
@@ -197,7 +197,7 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     try:
         stdscr.addstr(0, 0, hdr.ljust(w - 1), _cp(C_HEADER) | curses.A_BOLD)
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the header
 
     body_h  = h - 4 - 6
     max_vms = min(len(vms), max(1, body_h // 3))
@@ -210,12 +210,12 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     try:
         stdscr.addstr(row, 0, cols_vm[:w-1], _cp(C_CYAN) | curses.A_BOLD)
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the VM column header
     row += 1
     try:
         stdscr.addstr(row, 0, "  " + "─" * (w - 3), _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the rule
     row += 1
 
     for v in vms[:max_vms]:
@@ -233,7 +233,7 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
             stdscr.addstr(row, 27, f"{dot}{status:<14}",        color)
             stdscr.addstr(row, 43, f"{cpu:>4}  {ram:>5}  {os_s}", _cp(C_NORMAL))
         except curses.error:
-            pass
+            pass  # addstr past the screen edge — skip this VM row
         row += 1
 
     _hline(stdscr, row, w, "Recent Events"); row += 1
@@ -242,12 +242,12 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
     try:
         stdscr.addstr(row, 0, cols_ev[:w-1], _cp(C_CYAN) | curses.A_BOLD)
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the events column header
     row += 1
     try:
         stdscr.addstr(row, 0, "  " + "─" * (w - 3), _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the rule
     row += 1
 
     for e in events[-max_evs:]:
@@ -268,7 +268,7 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
             stdscr.addstr(row, 64, f"{outcome_s:<28}",                    res_color)
             stdscr.addstr(row, 93, f"{ms:>6}",                            _cp(C_DIM))
         except curses.error:
-            pass
+            pass  # addstr past the screen edge — skip this event row
         row += 1
 
     _hline(stdscr, h - 3, w)
@@ -281,12 +281,12 @@ def _draw(stdscr, vms: list, events: list, uptime_s: float):
             p_end = min(len(prompt), w - 2)
             stdscr.addstr(h - 2, p_end, msg[:w - p_end - 1], _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the prompt line
     try:
         _hint = "  stop/kill/launch/list/stopall <vm>   start-server  shutdown  status  help  q=quit"
         stdscr.addstr(h - 1, 0, _hint[:w-1], _cp(C_DIM))
     except curses.error:
-        pass
+        pass  # addstr past the screen edge — skip the hint line
 
     stdscr.refresh()
 
@@ -339,7 +339,7 @@ def _draw_help(stdscr, h, w):
             win.addstr(box_h - 1, 2, "any key to close", _cp(C_DIM))
         win.refresh()
     except curses.error:
-        pass
+        pass  # addstr past the popup edge — stop drawing the box
 
 
 # ── command dispatch ──────────────────────────────────────────────────────────
@@ -391,7 +391,7 @@ def _dispatch(cmd: str):
                     with open(os.path.expanduser("~/.qemu-api.token")) as f:
                         env["API_TOKEN"] = f.read().strip()
                 except Exception:
-                    pass
+                    pass  # no token file — run the admin server without an API token
                 with open(_LOG_PATH, "w") as log_fh:
                     proc = subprocess.Popen(
                         [sys.executable, "-m", "uvicorn",
@@ -521,7 +521,7 @@ def main():
     try:
         curses.wrapper(_run)
     except KeyboardInterrupt:
-        pass
+        pass  # Ctrl-C — exit the admin TUI cleanly
 
 
 if __name__ == "__main__":
