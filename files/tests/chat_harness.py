@@ -26,6 +26,7 @@ from unittest.mock import patch
 
 import orchestrator.ai.cli as cli
 import orchestrator.ai.chat_turn as chat_turn
+import orchestrator.ai.chat_types as chat_types
 import shared.display as _display
 
 
@@ -146,7 +147,7 @@ def run_chat(
     # rebinds per-namespace, so a seam reached from both sides must be patched
     # on both. hasattr keeps it correct when a name lives in only one module.
     def _seam(name, repl):
-        for _mod in (cli, chat_turn):
+        for _mod in (cli, chat_turn, chat_types):
             if hasattr(_mod, name):
                 add(patch.object(_mod, name, repl))
 
