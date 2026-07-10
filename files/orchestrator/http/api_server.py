@@ -20,7 +20,7 @@ import pathlib
 import uuid
 
 from fastapi import FastAPI, HTTPException, Depends, Body, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from typing import Any, Dict, Iterator, List, Optional
@@ -29,15 +29,9 @@ from typing import Any, Dict, Iterator, List, Optional
 _CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 with open(_CFG_PATH) as _f:
     _CFG = json.load(_f)
-_SHARED_CFG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    "executor", "api", "config.json",
-)
-with open(_SHARED_CFG_PATH) as _sf:
-    _SHARED_CFG = json.load(_sf)
 _ALLOWED_TOOLS:       set  = set(_CFG.get("allowed_remote_tools", []))
-_LOCAL_ONLY_DISPLAYS: set  = set(_SHARED_CFG.get("local_only_displays", ["sdl", "gtk"]))
-_MIN_TOKEN_LEN:       int  = _SHARED_CFG.get("min_token_length", 16)
+_LOCAL_ONLY_DISPLAYS: set  = set(_CFG.get("local_only_displays", ["sdl", "gtk"]))
+_MIN_TOKEN_LEN:       int  = _CFG.get("min_token_length", 16)
 # Empty list = all allowed; non-empty = allowlist
 _ALLOWED_VMS:         list = _CFG.get("client_allowed_vms",      [])
 _ALLOWED_PROFILES:    list = _CFG.get("client_allowed_profiles", [])
@@ -51,11 +45,6 @@ def _filter_allowed(names: list, allowlist: list) -> list:
         return names
     return [n for n in names if n in allowlist]
 
-
-def _check_vm_allowed(vm_name: str) -> None:
-    """Raise HTTP 403 if the VM is not in the client allowlist."""
-    if _ALLOWED_VMS and vm_name not in _ALLOWED_VMS:
-        raise HTTPException(status_code=403, detail=f"VM '{vm_name}' is not accessible to clients.")
 
 # ── Token bootstrap ───────────────────────────────────────────────────────────
 # Precedence: env var → ~/.qemu-api.token file → refuse to start.
@@ -84,6 +73,13 @@ app   = FastAPI(title="qemu-api executor", version="1.0")
 _auth = HTTPBearer(auto_error=False)
 
 _LOCALHOST = {"127.0.0.1", "::1", "localhost"}
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    """Sync profiles, OVMF info, and capabilities from the executor at startup."""
+    from orchestrator.executor_client import sync as _sync
+    _sync()
 
 
 def _require_token(
@@ -157,12 +153,16 @@ def health() -> Dict[str, Any]:
 def info() -> Dict[str, Any]:
     """Return server-side runtime info for the client banner."""
     from orchestrator.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL
-    import executor.api.qemu_config as _qc
+    try:
+        import executor.api.qemu_config as _qc
+        ovmf = _qc.OVMF
+    except ImportError:
+        ovmf = {"available": False, "code": ""}
     return {
         "ollama_model":   OLLAMA_MODEL,
         "ollama_url":     OLLAMA_URL,
-        "ovmf_available": _qc.OVMF.get("available", False),
-        "ovmf_code":      _qc.OVMF.get("code") or "",
+        "ovmf_available": ovmf.get("available", False),
+        "ovmf_code":      ovmf.get("code") or "",
     }
 
 
@@ -176,9 +176,6 @@ def get_events(limit: int = 100, since: str = "") -> Dict[str, Any]:
 @app.get("/sync", dependencies=[Depends(_require_token)])
 def sync() -> Dict[str, Any]:
     """Return server-authoritative config the client should apply at startup."""
-    from shared.executioner.tool_executor import manager as _mgr
-    import executor.api.qemu_config as _qc
-
     ai_cfg_path = pathlib.Path(__file__).parent.parent / "ai" / "config.json"
     try:
         ai_cfg = json.loads(ai_cfg_path.read_text())
@@ -186,13 +183,17 @@ def sync() -> Dict[str, Any]:
         ai_cfg = {}
 
     try:
-        raw = _mgr.list_vms()
+        from orchestrator.executor_client import execute_tool as _exec
+        raw = _exec("list_vms", {})
         vms = raw if isinstance(raw, list) else raw.get("vms", [])
     except Exception:
         vms = []
 
     try:
-        profiles = _qc.list_profiles()
+        from orchestrator.executor_client import execute_tool as _exec
+        profiles = _exec("list_profiles", {})
+        if not isinstance(profiles, list):
+            profiles = []
     except Exception:
         profiles = []
 
@@ -385,24 +386,53 @@ def rotate_token(new_token: str = Body(..., embed=True)) -> Dict[str, Any]:
     return {"ok": True, "message": "Token rotated. Update API_TOKEN on the AI provider too."}
 
 
+@app.post("/custom-mode", dependencies=[Depends(_require_token)])
+def custom_mode(enabled: bool = Body(..., embed=True)) -> Dict[str, Any]:
+    """Toggle custom-machine mode (skip product verification) for -cu.
+
+    Note: this is a process-global toggle (matches orchestrator/ai/cli.py's own
+    -cu handling in local mode) — it affects every client talking to this
+    orchestrator, not just the caller.
+    """
+    from orchestrator.preflight.validator import set_custom_mode
+    set_custom_mode(enabled)
+    return {"ok": True, "custom_mode": enabled}
+
+
+def _manager_proxy():
+    """Return a real QemuManager in local mode, or a thin executor_client proxy in remote mode."""
+    from orchestrator.executor_client import API_URL, execute_tool as _exec
+    if not API_URL or API_URL == "local":
+        from shared.executioner.tool_executor import manager
+        return manager
+    class _Proxy:
+        def scan_isos(self): return _exec("scan_isos", {})
+        def list_vms(self): return _exec("list_vms", {})
+    return _Proxy()
+
+
 @app.post("/execute", dependencies=[Depends(_require_token)])
 def execute(req: ExecuteRequest) -> Any:
-    """Dispatch a tool call to tool_executor and return its result (or raise HTTP 4xx on access/preflight failure)."""
-    from shared.executioner.tool_executor import execute_tool, manager
+    """Dispatch a tool call via executor_client and return its result (or raise HTTP 4xx on access/preflight failure)."""
+    from orchestrator.executor_client import execute_tool
     import orchestrator.preflight.validator as _pf
+    manager = _manager_proxy()
 
     # ── Tool allowlist ────────────────────────────────────────────────────────
     if _ALLOWED_TOOLS and req.tool_name not in _ALLOWED_TOOLS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Tool '{req.tool_name}' is not in the remote allowlist. "
-                   f"Add it to executor.allowed_remote_tools in config.json if intentional.",
+        msg = (
+            f"Tool '{req.tool_name}' is not in the remote allowlist. "
+            f"Add it to executor.allowed_remote_tools in config.json if intentional."
         )
+        return JSONResponse(status_code=403, content={"ok": False, "result": {"success": False, "error": msg}})
 
     # ── VM access control ─────────────────────────────────────────────────────
     from orchestrator.executor_client import _VM_TOOLS
     if req.tool_name in _VM_TOOLS:
-        _check_vm_allowed(req.args.get("name", ""))
+        vm_name = req.args.get("name", "")
+        if _ALLOWED_VMS and vm_name not in _ALLOWED_VMS:
+            msg = f"VM '{vm_name}' is not accessible to clients."
+            return JSONResponse(status_code=403, content={"ok": False, "result": {"success": False, "error": msg}})
 
     # ── Server-side preflight (authoritative — uses real VM/disk state) ──────
     pf     = _pf._preflight_check(req.tool_name, req.args, manager, req.verbose)
@@ -472,6 +502,17 @@ def execute(req: ExecuteRequest) -> Any:
 _CHUNK = 4 * 1024 * 1024  # 4 MB stream chunks
 
 
+def _executor_url() -> str:
+    """Return the executor base URL, or empty string in local mode."""
+    from orchestrator.executor_client import API_URL, _TOKEN as _EXEC_TOKEN, _VERIFY as _EXEC_VERIFY
+    return API_URL if API_URL and API_URL != "local" else ""
+
+
+def _exec_headers() -> dict:
+    from orchestrator.executor_client import _TOKEN as _EXEC_TOKEN
+    return {"Authorization": f"Bearer {_EXEC_TOKEN}"}
+
+
 def _disk_path(vm_name: str) -> pathlib.Path:
     """Return the path to the first qcow2 disk for *vm_name*, raising HTTP 404 if absent."""
     vm_dir = pathlib.Path.home() / ".qemu_vms" / vm_name
@@ -485,46 +526,66 @@ def _disk_path(vm_name: str) -> pathlib.Path:
 
 @app.get("/images/{vm_name}/sha256", dependencies=[Depends(_require_token)])
 def image_sha256(vm_name: str) -> Dict[str, Any]:
-    """Return the SHA-256 checksum of the VM's primary disk (for integrity verification)."""
+    """Return the SHA-256 checksum of the VM's primary disk."""
+    exec_url = _executor_url()
+    if exec_url:
+        import requests as _req
+        from orchestrator.executor_client import _VERIFY as _EV
+        r = _req.get(f"{exec_url}/vms/{vm_name}/disk/sha256",
+                     headers=_exec_headers(), timeout=30, verify=_EV)
+        if not r.ok:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
     path = _disk_path(vm_name)
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(_CHUNK), b""):
             h.update(chunk)
-    return {"vm_name": vm_name, "disk": path.name, "sha256": h.hexdigest(), "size_bytes": path.stat().st_size}
+    return {"vm_name": vm_name, "disk": path.name, "sha256": h.hexdigest(),
+            "size_bytes": path.stat().st_size}
 
 
 @app.get("/images/{vm_name}", dependencies=[Depends(_require_token)])
 def image_download(vm_name: str, request: Request) -> StreamingResponse:
-    """
-    Stream the VM's primary qcow2 disk to the AI provider machine.
-    Supports HTTP Range for resumable downloads.
-    Response headers include X-SHA256 and X-Disk-Size for integrity checking.
-    """
-    path      = _disk_path(vm_name)
-    total     = path.stat().st_size
-
-    # Compute SHA256 (cheap enough for typical VM disk sizes on a LAN)
+    """Stream the VM's primary qcow2 disk — proxied from executor in remote mode."""
+    import requests as _req
+    from orchestrator.executor_client import _VERIFY as _EV
+    exec_url = _executor_url()
+    if exec_url:
+        upstream = _req.get(
+            f"{exec_url}/vms/{vm_name}/disk",
+            headers={**_exec_headers(), "Range": request.headers.get("range", "")},
+            stream=True, timeout=300, verify=_EV,
+        )
+        if not upstream.ok:
+            raise HTTPException(status_code=upstream.status_code, detail=upstream.text)
+        return StreamingResponse(
+            upstream.iter_content(chunk_size=_CHUNK),
+            status_code=upstream.status_code,
+            media_type="application/octet-stream",
+            headers={k: v for k, v in upstream.headers.items()
+                     if k in ("Content-Length", "Content-Range", "Accept-Ranges",
+                               "X-SHA256", "X-Disk-Size", "Content-Disposition")},
+        )
+    path  = _disk_path(vm_name)
+    total = path.stat().st_size
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(_CHUNK), b""):
             h.update(chunk)
-    checksum = h.hexdigest()
-
+    checksum     = h.hexdigest()
     range_header = request.headers.get("range")
-    start, end = 0, total - 1
-
+    start, end   = 0, total - 1
     if range_header:
         try:
-            unit, rng = range_header.split("=")
-            s, e = rng.split("-")
-            start = int(s)
-            end   = int(e) if e else total - 1
+            _, rng = range_header.split("=")
+            s, e   = rng.split("-")
+            start  = int(s)
+            end    = int(e) if e else total - 1
         except Exception:
             raise HTTPException(status_code=416, detail="Invalid Range header.")
         if start >= total or end >= total or start > end:
             raise HTTPException(status_code=416, detail="Range not satisfiable.")
-
     length = end - start + 1
 
     def _stream(path: pathlib.Path, start: int, length: int) -> Iterator[bytes]:
@@ -538,28 +599,37 @@ def image_download(vm_name: str, request: Request) -> StreamingResponse:
                 remaining -= len(data)
                 yield data
 
-    status = 206 if range_header else 200
-    headers = {
-        "Content-Length":      str(length),
-        "Content-Range":       f"bytes {start}-{end}/{total}" if range_header else f"bytes 0-{end}/{total}",
-        "Accept-Ranges":       "bytes",
-        "X-SHA256":            checksum,
-        "X-Disk-Size":         str(total),
-        "X-VM-Name":           vm_name,
-        "Content-Disposition": f'attachment; filename="{path.name}"',
-    }
     return StreamingResponse(
         _stream(path, start, length),
-        status_code=status,
+        status_code=206 if range_header else 200,
         media_type="application/octet-stream",
-        headers=headers,
+        headers={
+            "Content-Length":      str(length),
+            "Content-Range":       f"bytes {start}-{end}/{total}",
+            "Accept-Ranges":       "bytes",
+            "X-SHA256":            checksum,
+            "X-Disk-Size":         str(total),
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+        },
     )
 
 
 @app.get("/vms/{vm_name}/bundle", dependencies=[Depends(_require_token)])
 def vm_bundle(vm_name: str) -> StreamingResponse:
-    """Stream the entire VM folder as a gzipped tar archive."""
-    import subprocess as _sp
+    """Stream the entire VM folder as a tar.gz — proxied from executor in remote mode."""
+    import requests as _req, subprocess as _sp
+    from orchestrator.executor_client import _VERIFY as _EV
+    exec_url = _executor_url()
+    if exec_url:
+        upstream = _req.get(f"{exec_url}/vms/{vm_name}/bundle",
+                            headers=_exec_headers(), stream=True, timeout=300, verify=_EV)
+        if not upstream.ok:
+            raise HTTPException(status_code=upstream.status_code, detail=upstream.text)
+        return StreamingResponse(
+            upstream.iter_content(chunk_size=65536),
+            media_type="application/gzip",
+            headers={"Content-Disposition": f'attachment; filename="{vm_name}.tar.gz"'},
+        )
     vm_dir = pathlib.Path.home() / ".qemu_vms" / vm_name
     if not vm_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"VM '{vm_name}' not found.")

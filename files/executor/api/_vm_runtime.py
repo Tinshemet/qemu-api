@@ -33,14 +33,19 @@ class _VmRuntimeMixin:
         name: str,
         display: Optional[str] = None,
         dry_run: bool = False,
+        vnc_bind_local: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Build the QEMU command, start the process, record PID, apply CPU pinning.
 
         Args:
-            name:    VM name (must exist in ``~/.qemu_vms/``).
-            display: Override the display backend for this launch only
-                     (e.g. ``"vnc"``).
-            dry_run: If True, build and return the command without executing.
+            name:           VM name (must exist in ``~/.qemu_vms/``).
+            display:        Override the display backend for this launch only
+                            (e.g. ``"vnc"``).
+            dry_run:        If True, build and return the command without executing.
+            vnc_bind_local: Override the persisted config's ``vnc_bind_local`` for
+                            this launch only (the orchestrator sets this per-request
+                            for remote/split-mode launches). ``None`` means "use
+                            whatever's saved in the VM's own config".
 
         Returns:
             On success: ``{"success": True, "pid": int, "display": str, ...}``.
@@ -61,6 +66,8 @@ class _VmRuntimeMixin:
 
         if display:
             config.display = display
+        if vnc_bind_local is not None:
+            config.vnc_bind_local = vnc_bind_local
 
         if dry_run:
             cmd = QemuArgBuilder(config).build()
@@ -113,12 +120,98 @@ class _VmRuntimeMixin:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+        # QEMU fails fast on bad args, missing firmware, or permission issues
+        # (e.g. no /dev/kvm access) — give it a brief moment to crash before
+        # reporting success, so callers aren't told a dead process is running.
+        time.sleep(_TIMEOUTS.get("launch_liveness_check", 0.3))
+        if proc.poll() is not None:
+            try:
+                with open(log_path) as _lf:
+                    tail = "".join(_lf.readlines()[-5:]).strip()
+            except OSError:
+                tail = ""
+            return {
+                "success": False,
+                "error": (
+                    f"QEMU exited immediately (code {proc.returncode}). "
+                    f"{tail or 'See launch.log for details.'}"
+                ),
+            }
+
         self._procs[name] = proc
         self._state.set_running(name, proc.pid)
 
         if config.cpu_pinning:
             time.sleep(_TIMEOUTS["cpu_pinning_delay"])
             self._apply_cpu_pinning(proc.pid, config.cpu_pinning)
+
+        # Unattended Windows FIRST boot: auto-press Enter past the Windows installer's
+        # "Press any key to boot from CD or DVD" prompt (else it times out to the UEFI
+        # shell and setup never starts). Fires once (sentinel file), via the HMP
+        # monitor socket so it doesn't contend with QMP, and never touches a booted
+        # desktop (only the very first launch).
+        if config.unattended:
+            _sentinel = os.path.join(config.get_vm_dir(), ".unattended_booted")
+            if not os.path.exists(_sentinel):
+                try:
+                    open(_sentinel, "w").close()
+                except OSError:
+                    pass
+                import socket as _sock
+                import threading as _thr
+                _mon  = config.get_monitor_socket()
+                _secs = _TIMEOUTS.get("unattended_boot_keys", 25)
+
+                # Send Enter over the HMP monitor for a fixed window. The window is
+                # host-timing-tuned and does DOUBLE DUTY, which is why it can't be a
+                # naive "clear the prompt and stop":
+                #   1. clears the installer's "Press any key to boot from CD" prompt
+                #      (cdboot, appears early), AND
+                #   2. clicks "Next" past Win11 25H2 Setup's "Select language" screen,
+                #      which the modern setup still shows even with an answer file.
+                # It must also STOP before Enter lands on later controls (e.g. Setup's
+                # "Support" link → a blocking "can't open link" dialog, or a Cancel
+                # button). ~25s spans both (1) and (2) on this hardware. An adaptive
+                # stop keyed on CD read (boot.wim) was tried and REVERTED: that signal
+                # fires before the language screen, so it stopped too early and hung
+                # at "Select language". A truly host-independent version needs screen-
+                # state detection or an answer file that fully skips the language page.
+                def _spam_boot_keys():
+                    conn = None
+                    for _ in range(30):
+                        try:
+                            conn = _sock.socket(_sock.AF_UNIX)
+                            conn.connect(_mon)
+                            break
+                        except Exception:
+                            conn = None
+                            time.sleep(0.5)
+                    if conn is None:
+                        return
+                    try:
+                        time.sleep(0.2)
+                        try:
+                            conn.recv(65536)
+                        except Exception:
+                            pass
+                        _end = time.time() + _secs
+                        while time.time() < _end:
+                            try:
+                                conn.sendall(b"sendkey ret\n")
+                                time.sleep(0.3)
+                                try:
+                                    conn.recv(65536)
+                                except Exception:
+                                    pass
+                            except Exception:
+                                break
+                    finally:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+
+                _thr.Thread(target=_spam_boot_keys, daemon=True).start()
 
         result = {
             "success": True, "name": name, "pid": proc.pid,
@@ -330,6 +423,9 @@ class _VmRuntimeMixin:
         tpm_sock = os.path.join(vm_dir, "tpm.sock")
         tpm_pid  = os.path.join(vm_dir, "tpm.pid")
         os.makedirs(tpm_dir, exist_ok=True)
+        # Reap any swtpm left over from a previous launch of THIS VM before
+        # starting a fresh one — otherwise a relaunch orphans the old daemon.
+        self._stop_swtpm(os.path.basename(vm_dir.rstrip("/")))
         if os.path.exists(tpm_sock):
             os.unlink(tpm_sock)
         try:
@@ -340,6 +436,13 @@ class _VmRuntimeMixin:
                 "--tpm2",
                 "--log",      "level=0",
                 "--pid",      f"file={tpm_pid}",
+                # --terminate: swtpm exits by itself once QEMU disconnects. This is
+                # the reliable teardown: Ubuntu confines swtpm with an AppArmor
+                # profile (enforce) that permits signals only from libvirt-* peers,
+                # so os.kill from this framework is denied and _stop_swtpm's signal
+                # can't reap it. Self-termination sidesteps that entirely; the
+                # persisted tpmstate dir means a relaunch just starts a fresh swtpm.
+                "--terminate",
                 "--daemon",
             ])
         except FileNotFoundError:
@@ -351,19 +454,55 @@ class _VmRuntimeMixin:
         return "swtpm started but socket never appeared — check swtpm installation"
 
     def _stop_swtpm(self, name: str) -> None:
-        """Send SIGTERM to the swtpm process for the named VM, if running."""
-        tpm_pid = os.path.join(
-            os.path.expanduser(f"~/.qemu_vms/{name}"), "tpm.pid"
-        )
-        if not os.path.exists(tpm_pid):
-            return
+        """Reap the swtpm daemon for the named VM.
+
+        Kills by pidfile (SIGTERM, escalating to SIGKILL) AND sweeps any stray
+        swtpm still bound to this VM's tpm dir. The sweep matters because swtpm
+        is a detached daemon: a relaunch (Windows install reboots) or a crash
+        that skips stop_vm overwrites tpm.pid and orphans the old process, so the
+        pidfile alone isn't enough — orphans accumulate otherwise.
+        """
+        import signal as _signal
+        vm_dir  = os.path.expanduser(f"~/.qemu_vms/{name}")
+        tpm_pid = os.path.join(vm_dir, "tpm.pid")
+        tpm_dir = os.path.join(vm_dir, "tpm")
+
+        def _reap(pid: int) -> None:
+            try:
+                os.kill(pid, _signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                return
+            for _ in range(10):
+                time.sleep(0.1)
+                try:
+                    os.kill(pid, 0)
+                except (ProcessLookupError, OSError):
+                    return
+            try:
+                os.kill(pid, _signal.SIGKILL)
+            except OSError:
+                pass
+
+        if os.path.exists(tpm_pid):
+            try:
+                with open(tpm_pid) as f:
+                    _reap(int(f.read().strip()))
+            except (ValueError, OSError):
+                pass
+            try:
+                os.unlink(tpm_pid)
+            except OSError:
+                pass
+
+        # Sweep strays whose --tpmstate dir is this VM's tpm dir (orphans from
+        # relaunches/crashes where the pidfile no longer points at them).
         try:
-            with open(tpm_pid) as f:
-                pid = int(f.read().strip())
-            import signal as _signal
-            os.kill(pid, _signal.SIGTERM)
-            os.unlink(tpm_pid)
-        except (ValueError, ProcessLookupError, OSError):
+            for p in psutil.process_iter(["name", "cmdline"]):
+                if p.info["name"] == "swtpm" and any(
+                    tpm_dir in a for a in (p.info["cmdline"] or [])
+                ):
+                    _reap(p.pid)
+        except Exception:
             pass
 
     def _maybe_auto_detach_iso(self, config: MachineConfig) -> bool:

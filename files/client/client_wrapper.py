@@ -5,6 +5,9 @@ Usage:
     qemu-api                        AI chat (connects to server)
     qemu-api <cmd> [args...]        Direct local QEMU command (no AI)
     qemu-api -v                     AI chat with verbose tool output
+    qemu-api -cu                    AI chat with product verification disabled
+    qemu-api -cs                    Clear saved session before starting
+    qemu-api -tf <name>             Fingerprint report for a VM
 
 Appearance is configured via CLI_config.json (same directory as this file):
     text_color   Hex color for body text, e.g. "#aaaaaa"
@@ -15,6 +18,7 @@ Examples:
     qemu-api list                   List local VMs
     qemu-api launch myvm sdl        Launch VM with SDL display
     qemu-api help                   Show all direct commands
+    qemu-api -tf myvm               Fingerprint report for myvm
 """
 
 import json
@@ -36,6 +40,33 @@ def main():
     verbose = "-v" in argv
     if verbose:
         argv = [a for a in argv if a != "-v"]
+
+    custom_mode = "-cu" in argv
+    if custom_mode:
+        argv = [a for a in argv if a != "-cu"]
+
+    clear_session = "-cs" in argv
+    if clear_session:
+        argv = [a for a in argv if a != "-cs"]
+
+    if "-tf" in argv:
+        idx = argv.index("-tf")
+        vm_name = argv[idx + 1] if idx + 1 < len(argv) else None
+        argv = argv[:idx] + argv[idx + 2:]
+        if not vm_name:
+            print("Usage: qemu-api -tf <vm-name>")
+            sys.exit(1)
+        from client.cli.commands import fingerprint_report
+        fingerprint_report(vm_name)
+        return
+
+    if custom_mode:
+        from client.cli.commands import set_custom_mode_flag
+        set_custom_mode_flag(True)
+
+    if clear_session:
+        from client.cli.commands import clear_session_flag
+        clear_session_flag()
 
     cfg       = _load_cli_config()
     color_hex = cfg.get("text_color", "#aaaaaa")

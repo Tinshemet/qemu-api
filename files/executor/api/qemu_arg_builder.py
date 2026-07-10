@@ -270,7 +270,12 @@ class QemuArgBuilder:
         # removes the flag that tells the guest it's inside a hypervisor.
         # -vmx: remove VMX flag so kvm_intel.ko cannot load inside the guest
         # (if the guest sees vmx, it loads kvm_intel, which lsmod exposes to inxi).
-        for flag in ("-hypervisor", "kvm=off", "-vmx"):
+        # +invtsc: advertise an invariant TSC (CPUID 80000007H:EDX[8]) like real
+        # silicon. KVM masks it by default (it blocks live migration, which we
+        # don't do), and its ABSENCE is a common timing-based VM tell. This does
+        # NOT defeat VMEXIT-latency red-pills — that overhead is inherent to
+        # hardware virtualisation — but it closes the naive "no invariant TSC" check.
+        for flag in ("-hypervisor", "kvm=off", "-vmx", "+invtsc"):
             if flag not in self.cfg.cpu_features:
                 self.cfg.cpu_features.append(flag)
         # cpu=host already inherits all host mitigations (ssbd, ibrs, md-clear,
@@ -426,7 +431,11 @@ class QemuArgBuilder:
             if self.cfg.manufacturer:  parts.append(f"manufacturer={self._smbios_escape(self.cfg.manufacturer)}")
             if self.cfg.product_name:  parts.append(f"product={self._smbios_escape(self.cfg.product_name)}")
             if self.cfg.serial_number: parts.append(f"serial={self._smbios_escape(self.cfg.serial_number)}")
-            if self.cfg.hostname:      parts.append(f"family={self._smbios_escape(self.cfg.hostname)}")
+            # DMI "family" is the product line (e.g. "Latitude"), NOT the hostname —
+            # using the hostname here leaks "localhost" into dmidecode/inxi. Derive
+            # it from the product name's leading token; omit rather than emit a tell.
+            family = self.cfg.product_name.split()[0] if self.cfg.product_name else ""
+            if family:                 parts.append(f"family={self._smbios_escape(family)}")
             self.args += ["-smbios", ",".join(parts)]
         if self.cfg.bios_vendor or self.cfg.bios_version:
             parts = ["type=0"]
@@ -485,6 +494,22 @@ class QemuArgBuilder:
         else:
             if not self.cfg.uefi:
                 self.args += ["-boot", "order=c,menu=on"]
+        # Unattended Windows install: attach the generated answer-file CD so
+        # Windows Setup runs fully hands-off. Opt-in; the ISO is built at
+        # create_vm time into the VM dir. Inert if the ISO isn't present.
+        if self.cfg.unattended:
+            unattend_iso = os.path.join(self.vm_dir, "autounattend.iso")
+            if os.path.exists(unattend_iso):
+                # The install ISO already holds the single default-IDE unit, so put
+                # the answer CD on the AHCI controller (present for Windows' SATA
+                # disk) at the port after the disks. Falls back to plain ide-cd only
+                # if there's no AHCI controller (non-Windows edge case).
+                n_sata = sum(1 for d in self.cfg.disks if d.bus == "sata")
+                dev = f"ide-cd,drive=cdrom_ua,bus=ahci.{n_sata}" if has_sata else "ide-cd,drive=cdrom_ua"
+                self.args += [
+                    "-drive",  f"file={unattend_iso},if=none,id=cdrom_ua,readonly=on,media=cdrom",
+                    "-device", dev,
+                ]
 
     def _network(self) -> None:
         """Append network args from each NetworkConfig, falling back to default user-NAT."""
@@ -512,6 +537,21 @@ class QemuArgBuilder:
         """Append display args (SDL/GTK/SPICE/VNC/-nographic); downgrade GPU if GL is unavailable."""
         if self.is_raspi:
             self.args += ["-nographic"]  # raspi3b has NO video output in QEMU
+            return
+        # GPU passthrough: hand the guest a REAL GPU via vfio-pci so its /sys PCI
+        # vendor/device IDs are genuine hardware — the one way to defeat the
+        # "display adapter = VMware 15ad" tell that no emulated GPU can hide.
+        # Requires host prep: IOMMU on, the GPU bound to vfio-pci and isolated.
+        # The passed GPU drives the guest's own output, so QEMU runs headless.
+        if self.cfg.gpu_passthrough_pci:
+            # Comma-separated host PCI addresses (BDF). The first is the primary GPU
+            # function and gets x-vga=on; the rest (e.g. the .1 HDMI-audio function,
+            # or other devices in the IOMMU group) are passed as plain vfio-pci.
+            addrs = [a.strip() for a in self.cfg.gpu_passthrough_pci.split(",") if a.strip()]
+            for i, addr in enumerate(addrs):
+                dev = f"vfio-pci,host={addr}" + (",x-vga=on" if i == 0 else "")
+                self.args += ["-device", dev]
+            self.args += ["-display", "none"]
             return
         gpu_device = GPU_PRESETS.get(self.cfg.gpu)
         if self.cfg.display == "none":
@@ -603,15 +643,47 @@ class QemuArgBuilder:
             self.args += ["-device", "hda-duplex,audiodev=audio0"]
 
     def _usb(self) -> None:
-        """Append the NEC xHCI controller, USB keyboard, and tablet/mouse device."""
+        """Append the NEC xHCI controller, USB keyboard, and pointing device.
+
+        Stealth forces a relative ``usb-mouse`` instead of ``usb-tablet``: the
+        absolute-positioning tablet is a hypervisor-console convention (bare-metal
+        machines don't have one) that virt-detection reads as a VM tell. The
+        tradeoff is relative pointer motion over VNC/SDL for stealth VMs.
+        """
         # nec-usb-xhci: NEC uPD720200 USB 3.0 (PCI 1033:0194) — real chip PCI IDs.
         # qemu-xhci uses 1b36 (Red Hat/QEMU) which inxi detects as virtual.
         self.args += ["-device", "nec-usb-xhci,id=usb", "-device", "usb-kbd"]
-        self.args += ["-device", "usb-tablet" if self.cfg.tablet else "usb-mouse"]
+        use_tablet = self.cfg.tablet and not self.cfg.stealth
+        self.args += ["-device", "usb-tablet" if use_tablet else "usb-mouse"]
+
+        # Unattended Windows: attach the FAT answer medium as a removable USB stick.
+        # OVMF mounts FAT (unlike the plain answer ISO), so the UEFI shell auto-runs
+        # its startup.nsh to launch the installer — the install boots hands-off.
+        # Windows Setup also reads autounattend.xml off it. Attached here (after the
+        # xHCI controller) so bus=usb.0 resolves. Inert if the image isn't present.
+        if self.cfg.unattended:
+            unattend_img = os.path.join(self.vm_dir, "autounattend.img")
+            if os.path.exists(unattend_img):
+                self.args += [
+                    "-drive",  f"file={unattend_img},if=none,id=ua_fat,format=raw",
+                    "-device", "usb-storage,drive=ua_fat,removable=on,bus=usb.0",
+                ]
 
     def _battery(self) -> None:
-        """No-op placeholder — ACPI battery tables are not yet implemented for QEMU."""
-        pass
+        """Inject a synthetic ACPI battery + AC adapter for laptop personas.
+
+        QEMU has no battery device, so a laptop persona otherwise exposes no
+        /sys/class/power_supply/BAT0 — a clean "laptop with no battery"
+        inconsistency (upower/acpi/GNOME reveal it). When cfg.battery is set
+        (laptop machine_class) and the SSDT has been compiled, add it via
+        -acpitable. Inert until acpi/battery.aml exists, so a missing/uncompiled
+        table never risks the guest's ACPI boot.
+        """
+        if self.is_arm or not self.cfg.battery:
+            return
+        aml = os.path.join(os.path.dirname(__file__), "acpi", "battery.aml")
+        if os.path.exists(aml):
+            self.args += ["-acpitable", f"file={aml}"]
 
     def _kernel_direct(self) -> None:
         """Append -kernel/-initrd/-append when direct kernel boot paths are configured."""

@@ -4,3 +4,4 @@ rich>=13.0.0
 fastapi>=0.111.0
 uvicorn>=0.29.0
 httpx>=0.27.0
+windows-curses>=2.3.0; sys_platform == "win32"  # curses TUI (client) — Unix has it built-in

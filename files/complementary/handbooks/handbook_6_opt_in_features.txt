@@ -1,0 +1,195 @@
+================================================================================
+  HANDBOOK 6 — OPT-IN & ADVANCED FEATURES  (and their unique interactions)
+================================================================================
+
+The stuff that is easy to forget: how opt-in features are turned on, what each
+one actually does, the host prep some of them need, and the non-obvious ways
+they interact. All of these are create_vm arguments unless noted.
+
+
+0. HOW OPT-IN FEATURES ARE SELECTED
+────────────────────────────────────────────────────────────────────────────
+There is NO separate "enable feature? yes/no" popup. Opt-in features are
+create_vm ARGUMENTS. You reach them two ways:
+
+  1. Natural language (primary UX): you tell the AI chat what you want
+       "create a stealthy windows vm, install it unattended"
+     and the orchestrator's AI (Ollama) maps that to
+       create_vm(os_type=windows, stealth=true, unattended=true)
+
+  2. Explicit: the CLI / tool call passes the arg directly (unattended=true).
+
+The system DOES have a yes/no confirmation path — the "clarify" gate — but it
+is reserved for DESTRUCTIVE / ambiguous actions (delete_vm, snapshot_delete,
+and now unattended install). Those return:
+   {"action":"ask_user","question":"...?","options":["Yes...","No..."]}
+which the client renders as a prompt. Non-destructive opt-ins (stealth) are a
+silent flag — no nag.
+
+
+1. STEALTH   (stealth=true)                              [non-destructive]
+────────────────────────────────────────────────────────────────────────────
+Makes the VM look like a real physical machine to anti-VM detection.
+
+What it turns on automatically:
+  - hardened mode (stealth IMPLIES hardened → forces machine_type=q35,
+    seccomp sandbox, balloon/hugepages off, CPUID hypervisor bit hidden:
+    -cpu host,-hypervisor,kvm=off,-vmx,+invtsc)
+  - GPU disguise: gpu defaults to "none" → vmware-svga (Linux) / std VGA
+    (Windows), NOT a QEMU-branded adapter
+  - SMBIOS/DMI spoof: type 0/1/2/3 (BIOS, system, baseboard, chassis) + ACPI
+    OEM id; chassis type via a raw binary trick (laptop = 9)
+  - SATA disk with a spoofed real SSD model (e.g. "Samsung SSD 870 EVO")
+  - a home-router-looking NAT subnet (192.168.1.0/24, not the tell-tale 10.0.2.x)
+  - laptop personas get a synthetic ACPI battery (BAT0)
+
+PERSONA ROTATION (the important part):
+  - bare `stealth=true` with NO identity  → a RANDOM realistic persona is
+    picked from ~40 hardware_profiles (Dell/HP/Lenovo/ASUS/... laptop/desktop/
+    server) + UNIQUE per-unit noise (serial, MAC, BIOS version, RAM, CPU).
+    Rotate VMs → a defender can't build a long-term fingerprint.
+  - name a model (`manufacturer=...,product_name=...` OR `profile=...`) → THAT
+    model is used, coherently. Rotation only fires when nothing is specified.
+  - constrain the form factor with `stealth_persona=laptop|desktop|server`.
+
+GUEST-SIDE: a guest_setup script is generated (lspci/lsmod wrappers, Firefox
+stealth profile, DMI checks). YOU must run it inside the guest — it is not
+automatic. If the operator doesn't run it, the guest-visible masking is absent.
+
+RANK (single-VM, honest): commodity ~9.5 · intermediate ~8.5 · advanced ~3-4
+(VMEXIT-timing red-pill is inherent, not closable). Longitudinal ~8 (rotation).
+The one remaining intermediate tell is the GPU's /sys PCI id (VMware 15ad) —
+closable ONLY via GPU passthrough (section 2).
+
+GOTCHAS:
+  - never set smm=off — OVMF needs SMM or the guest KVM-crashes ~15s in.
+  - stealth output is randomized; two bare-stealth VMs are never identical.
+
+
+2. GPU PASSTHROUGH   (passthrough_pci=<BDF>)             [needs HOST prep]
+────────────────────────────────────────────────────────────────────────────
+The only way to defeat the /sys "VMware SVGA" GPU tell — gives the guest a
+REAL GPU with its real PCI ids.
+
+The value is a PCI address in BDF form  Bus:Device.Function :
+     01:00.0   →  bus 01, device 00, function 0   (implicit domain 0000:)
+Find yours on the HOST:   lspci | grep -i vga   →  "01:00.0 VGA ... NVIDIA ..."
+
+A discrete GPU is usually TWO functions: .0 (video) + .1 (HDMI audio), same
+IOMMU group. Behaviour:
+  - passthrough_pci=01:00.0            → auto-adds the .1 audio companion
+  - passthrough_pci=01:00.0,01:00.1,.. → explicit list, used as-is
+The FIRST address gets x-vga=on (primary); the rest are plain vfio-pci.
+Emits: -device vfio-pci,host=... [+x-vga=on]  and  -display none (headless;
+the passed GPU drives the guest's own output).
+
+REQUIRED HOST PREP (the flag alone is NOT enough — launch fails without this):
+  - IOMMU on:  intel_iommu=on  /  amd_iommu=on  on the host kernel cmdline
+  - the GPU unbound from its driver and BOUND to vfio-pci, in its own IOMMU group
+  - the GPU DEDICATED to the VM — the host cannot use it meanwhile
+Status: command generation is implemented + verified; a real passthrough needs
+a spare GPU to dedicate (not testable without one).
+
+
+3. UNATTENDED WINDOWS INSTALL   (unattended=true)   [DESTRUCTIVE, Windows-only]
+────────────────────────────────────────────────────────────────────────────
+Installs Windows fully hands-off — no OOBE, no Microsoft-account gate, no
+clicking. This is the answer to Windows being teeth-pulling to set up.
+
+HOW: create_vm generates an autounattend.xml (from the template
+executor/api/assets/autounattend.xml.template, filled from the VM config +
+the `unattended_windows` config block) and packs it onto TWO media in the VM
+dir: a small ISO (autounattend.iso, attached as a second CD) AND a 16 MB FAT16
+image (autounattend.img, attached as a removable USB stick). Windows Setup
+auto-detects the answer file on either and does: disk partition, hardware-check
+bypass (LabConfig Bypass* reg keys), language-screen skip (WinPE
+International-Core), OOBE skip (local admin account, HideOnlineAccountScreens),
+and autologon.
+
+WHY BOTH MEDIA (the auto-boot trick): OVMF will NOT mount a plain ISO9660 as a
+filesystem, so the UEFI shell can't auto-run a startup.nsh from the answer CD.
+OVMF DOES mount FAT, so autounattend.img also carries a startup.nsh that the
+shell auto-runs to launch the Windows installer — making the whole install boot
+hands-off even if the early "press any key" window is missed. (The image is
+built with mtools; the ISO alone still applies the answer file but needs a
+manual boot nudge.)
+
+OPT-IN + CONFIRMATION: because it WIPES the target disk and creates a fixed
+local admin, preflight returns a Yes/No confirmation:
+    "Unattended Windows install will WIPE this VM's disk and auto-create local
+     admin 'user'. Proceed?"  [Yes, wipe and install / No, cancel]
+On "Yes" the client re-runs with force=true (force=true skips the prompt).
+
+CONFIG / OVERRIDES (unattended_windows block in executor/api/config.json;
+per-VM overrides as create_vm args):
+    unattended_username, unattended_password, unattended_locale,
+    unattended_autologon      (defaults: user / Passw0rd! / en-US / autologon on)
+Computer name = the VM name.
+
+FIRST-BOOT: launch_vm spawns a thread that auto-presses Enter (via the HMP
+monitor) to clear the Windows "Press any key to boot from CD or DVD" prompt —
+otherwise it times out to the UEFI shell and setup never starts. Fires ONCE (a
+.unattended_booted sentinel in the VM dir), so it never touches a booted desktop.
+  The burst runs for `unattended_boot_keys` seconds (config.json timeouts,
+default 25). IMPORTANT: do NOT raise this much — once Windows Setup's UI renders
+(~35s), a stray Enter activates Setup's on-screen "Support" hyperlink and pops a
+recurring "Unable to open link" modal that BLOCKS the unattended auto-advance.
+25s clears cdboot (which appears ~5-20s) but stops before the UI.
+  The keypress daemon lives in the launching process, so whatever calls
+launch_vm must stay alive ≥25s. Screendumps share the single-connection monitor,
+so take them AFTER the keypress window.
+
+NEEDS on the executor: genisoimage (answer ISO) + mtools (the FAT boot image) +
+swtpm (TPM 2.0 for Win11). All are in complementary/install_executor.sh.
+
+PROVEN end-to-end (Win11 25H2, 2026-07-10): fresh create_vm unattended=true →
+launch, untouched → Installing 5% by 30s, 100% hands-off, reboots itself to the
+desktop with autologon and a local account. Zero clicks, zero dialogs.
+
+NOT this feature (1.1 idea): pre-made "golden" disks already installed up to
+the last step (just create the user on boot) — a sysprep/template-image
+approach, different from autounattend.
+
+
+4. HARDWARE FINGERPRINT / SMBIOS ARGS                    [non-destructive]
+────────────────────────────────────────────────────────────────────────────
+Set an explicit identity (used by stealth, or standalone):
+    manufacturer, product_name, serial_number, board_product,
+    bios_vendor, bios_version, chassis_type ("laptop"|"desktop"|...)
+Providing serial_number / bios_vendor / chassis_type / smbios_type is treated
+as "manual identity" and SUPPRESSES profile auto-matching (so a profile can't
+override your chosen machine_type/cpu/etc.). Coherence: a Dell gets a Dell
+BIOS, an Apple an Apple BIOS — the orchestrator preflight infers a coherent
+bios_vendor from product_name and verifies the product online (when connected;
+degrades gracefully offline — fine for an air-gapped lab).
+
+
+5. OTHER OPT-INS (brief)
+────────────────────────────────────────────────────────────────────────────
+    hardened=true     seccomp + CPU masking + NAT, no identity spoof (stealth
+                      is hardened + identity). q35 forced.
+    tpm=true          swtpm TPM 2.0 (auto-enabled for Windows).
+    disk_bus=...      nvme|sata|virtio|scsi  (stealth defaults to sata+model).
+    network_mode=...  nat|bridge|none  (slirp_subnet overrides the NAT range).
+    battery=true      forces a laptop battery even on a non-laptop persona.
+    gpu=...           virtio|qxl|vmware|vga|none  (stealth overrides to disguise).
+
+
+6. UNIQUE INTERACTIONS / GOTCHAS  (the consolidated cheat-sheet)
+────────────────────────────────────────────────────────────────────────────
+  - Only the EXECUTOR needs Linux (KVM). Orchestrator + client are cross-platform
+    (proven: Win11 orchestrator/client → Linux executor). Windows client needs
+    windows-curses (in requirements.txt, sys_platform=="win32").
+  - stealth  ⇒  hardened  ⇒  machine_type=q35.  Never smm=off.
+  - stealth + no identity  ⇒  random persona; stealth + identity/profile ⇒ that
+    model. Rotation gives unique serial/MAC/BIOS/RAM/CPU each time.
+  - GPU /sys tell is ONLY closable with passthrough (needs host IOMMU/vfio prep).
+  - unattended is Windows-only, DESTRUCTIVE (wipes disk), and confirms first
+    (force=true skips). Answer file ships on BOTH an ISO and a FAT USB image;
+    the FAT's startup.nsh + a 25s Enter-burst make it boot hands-off (don't raise
+    unattended_boot_keys — Enter into Setup's UI pops a blocking "link" modal).
+    Needs mtools + genisoimage + swtpm on the executor.
+  - passthrough_pci auto-adds the .1 audio function for a lone GPU .0.
+  - manual SMBIOS fields (serial/bios_vendor/chassis_type) suppress profile match.
+  - Windows 11: TPM (swtpm) + UEFI + q35 are auto-set; unattended bypasses the
+    hardware checks anyway via LabConfig reg keys.

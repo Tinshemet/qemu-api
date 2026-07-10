@@ -20,13 +20,12 @@ import requests as _requests
 
 with open(os.path.join(os.path.dirname(__file__), "connection_config.json")) as _f:
     _CFG = json.load(_f)
-_SHARED_CFG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "executor", "api", "config.json"
-)
-with open(_SHARED_CFG_PATH) as _sf:
-    _SHARED_CFG = json.load(_sf)
-API_URL           = os.environ.get("API_URL",   _CFG.get("url",   "local"))
-_TOKEN            = os.environ.get("API_TOKEN", _CFG.get("token", ""))
+API_URL           = os.environ.get("API_URL",        _CFG.get("url",   "local"))
+# Deliberately NOT API_TOKEN — that env var is the orchestrator's own incoming
+# client-facing secret (see orchestrator/http/api_server.py). Reusing it here
+# would make the orchestrator send its client-facing token to the executor,
+# which almost never matches the executor's independently configured secret.
+_TOKEN            = os.environ.get("EXECUTOR_TOKEN", _CFG.get("token", ""))
 _TIMEOUT          = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))
 _CA_CERT          = os.environ.get("API_CA_CERT", _CFG.get("ca_cert") or None)
 _VERIFY           = (
@@ -36,7 +35,153 @@ _VERIFY           = (
 _ALLOWED_VMS:         list = _CFG.get("client_allowed_vms",      [])
 _ALLOWED_PROFILES:    list = _CFG.get("client_allowed_profiles", [])
 _ALLOWED_TOOLS:       set  = set(_CFG.get("allowed_remote_tools", []))
-_LOCAL_ONLY_DISPLAYS: set  = set(_SHARED_CFG.get("local_only_displays", ["sdl", "gtk"]))
+_LOCAL_ONLY_DISPLAYS: set  = set(_CFG.get("local_only_displays", ["sdl", "gtk"]))
+
+# ── Executor sync cache ───────────────────────────────────────────────────────
+_synced: dict = {}
+
+
+def sync() -> dict:
+    """Fetch profiles, OVMF info, and capabilities from the executor.
+
+    In local mode imports directly; in remote mode calls /profiles and
+    /capabilities. Called at orchestrator startup and on demand.
+
+    Returns:
+        Synced state dict (also stored in module-level ``_synced``).
+
+    Example::
+
+        sync()
+        get_ovmf()   # → {"available": True, "code": "/usr/share/OVMF/...", ...}
+        get_profiles()  # → [{"name": "dell_g15_5520", ...}, ...]
+    """
+    global _synced
+    if API_URL and API_URL != "local":
+        hdrs = {"Authorization": f"Bearer {_TOKEN}"}
+        try:
+            r = _requests.get(f"{API_URL}/profiles",     headers=hdrs, timeout=10, verify=_VERIFY)
+            profiles_data = r.json() if r.ok else {}
+        except Exception:
+            profiles_data = {}
+        try:
+            r = _requests.get(f"{API_URL}/capabilities", headers=hdrs, timeout=10, verify=_VERIFY)
+            caps_data = r.json() if r.ok else {}
+        except Exception:
+            caps_data = {}
+    else:
+        try:
+            from executor.api.qemu_config import (
+                get_all_profiles, list_profiles, OVMF, check_system_capabilities,
+            )
+            profiles_data = {
+                "profiles":      get_all_profiles(),
+                "profiles_list": list_profiles(),
+                "ovmf":          OVMF,
+            }
+            caps_data = check_system_capabilities()
+        except ImportError:
+            profiles_data = {}
+            caps_data     = {}
+
+    _synced = {
+        "profiles":      profiles_data.get("profiles", {}),
+        "profiles_list": profiles_data.get("profiles_list", []),
+        "ovmf":          profiles_data.get("ovmf", {"available": False, "code": "", "vars": ""}),
+        "capabilities":  caps_data,
+    }
+    return _synced
+
+
+def get_profiles() -> list:
+    """Return the profile list.
+
+    Returns the sync cache when populated (normal server path). Falls back to
+    a direct executor import in local mode so callers that haven't called
+    ``sync()`` (e.g. tests, CLI, preflight run before startup) still get live data.
+    """
+    cached = _synced.get("profiles_list", [])
+    if cached:
+        return cached
+    if not API_URL or API_URL == "local":
+        try:
+            from executor.api.qemu_config import list_profiles as _lp
+            return _lp()
+        except ImportError:
+            pass
+    return []
+
+
+def get_all_profiles() -> dict:
+    """Return the full profiles dict.
+
+    Returns the sync cache when populated (normal server path). Falls back to
+    a direct executor import in local mode so callers that haven't called
+    ``sync()`` (e.g. tests, CLI) still get live data.
+    """
+    cached = _synced.get("profiles", {})
+    if cached:
+        return cached
+    if not API_URL or API_URL == "local":
+        try:
+            from executor.api.qemu_config import get_all_profiles as _gp
+            return _gp()
+        except ImportError:
+            pass
+    return {}
+
+
+def get_ovmf() -> dict:
+    """Return the OVMF info dict.
+
+    Returns the sync cache when populated (normal server path). Falls back to
+    a direct executor import in local mode so callers that haven't called
+    ``sync()`` still get live data.
+    """
+    cached = _synced.get("ovmf", {})
+    if cached:
+        return cached
+    if not API_URL or API_URL == "local":
+        try:
+            from executor.api.qemu_config import OVMF as _ovmf
+            return _ovmf
+        except ImportError:
+            pass
+    return {"available": False, "code": "", "vars": ""}
+
+
+def get_capabilities() -> dict:
+    """Return the system capabilities dict.
+
+    Returns the sync cache when populated (normal server path). Falls back to
+    a direct executor import in local mode so callers that haven't called
+    ``sync()`` (e.g. tests, preflight before startup) still get live data.
+    """
+    cached = _synced.get("capabilities", {})
+    if cached:
+        return cached
+    if not API_URL or API_URL == "local":
+        try:
+            from executor.api.qemu_config import check_system_capabilities as _csc
+            return _csc()
+        except ImportError:
+            pass
+    return {}
+
+
+def check_profile_compatibility(profile_name: str) -> dict:
+    """Check whether a profile is compatible with the current executor host.
+
+    Delegates to the executor's ``check_profile_compatibility`` tool so the
+    orchestrator never needs to import executor code directly.
+
+    Args:
+        profile_name: Name of the hardware profile to check.
+
+    Returns:
+        ``{"compatible": bool, "issues": [...], "warnings": [...]}``
+    """
+    return execute_tool("check_profile_compatibility", {"profile_name": profile_name})
 
 _VM_TOOLS = {"launch_vm", "stop_vm", "delete_vm", "clone_vm", "resize_disk",
              "vm_status", "create_snapshot", "restore_snapshot", "delete_snapshot",
@@ -46,11 +191,10 @@ from orchestrator.event_log import log_event as _log_event  # noqa: E402
 
 
 def __getattr__(name: str):
-    # Lazily resolved so mock.patch("shared.executioner.tool_executor.execute_tool")
-    # and module deletion/reimport by tests always return the current binding.
+    # Lazily resolved so mock.patch targets always return the current binding.
     if name == "_execute_tool":
-        import shared.executioner.tool_executor as _te
-        return _te.execute_tool
+        from orchestrator.pipeline import execute_tool
+        return execute_tool
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -83,7 +227,8 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
         args = dict(args)
         if args.get("display", "sdl") in _LOCAL_ONLY_DISPLAYS or "display" not in args:
             args["display"] = "vnc"
-        args["vnc_bind_local"] = False
+        if "vnc_bind_local" not in args:
+            args["vnc_bind_local"] = False
 
     # Enforce VM allowlist — report as "not found" to avoid leaking existence
     if tool_name in _VM_TOOLS and _ALLOWED_VMS:
@@ -113,9 +258,15 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
         except _requests.RequestException as exc:
             result = {"success": False, "error": f"Executor unreachable: {exc}"}
     else:
-        import shared.executioner.tool_executor as _te
-        result = _te.execute_tool(tool_name, args, verbose)
+        from orchestrator.pipeline import execute_tool as _orch_execute
+        result = _orch_execute(tool_name, args, verbose)
     _log_event(tool_name, args, result, (time.monotonic() - _t0) * 1000)
+
+    # In remote mode, patch open_display results so the client knows the real host
+    if tool_name == "open_display" and API_URL and API_URL != "local":
+        if isinstance(result, dict) and result.get("host") == "localhost":
+            import urllib.parse as _up
+            result["host"] = _up.urlparse(API_URL).hostname or "localhost"
 
     if tool_name == "list_vms" and _ALLOWED_VMS:
         if isinstance(result, list):

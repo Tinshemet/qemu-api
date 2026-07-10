@@ -241,6 +241,7 @@ class NetworkConfig:
     hostname:          Optional[str] = None
     port_forwards:     List[tuple]   = field(default_factory=list)
     manufacturer_hint: Optional[str] = None
+    slirp_subnet:      Optional[str] = None   # stealth NAT: e.g. "192.168.1.0/24"
 
     # Generates or validates the MAC address on init.
     # In: self (post-construction) → Out: nothing (self-mutation)
@@ -313,8 +314,21 @@ class NetworkConfig:
             fwd = ""
             for hport, gport, proto in self.port_forwards:
                 fwd += f",hostfwd={proto}::{hport}-:{gport}"
+            slirp = ""
+            if self.slirp_subnet:
+                # Replace QEMU's tell-tale default 10.0.2.0/24 (gateway .2, guest
+                # .15) with a home-router-looking subnet so the guest's own IP
+                # config doesn't betray user-mode NAT. gateway=.1, DHCP pool=.100.
+                try:
+                    import ipaddress
+                    _net  = ipaddress.ip_network(self.slirp_subnet, strict=False)
+                    _gw   = _net.network_address + 1
+                    _dhcp = _net.network_address + 100
+                    slirp = f",net={_net.with_prefixlen},host={_gw},dhcpstart={_dhcp}"
+                except ValueError:
+                    slirp = ""
             args += [
-                "-netdev", f"user,id=net0{fwd}",
+                "-netdev", f"user,id=net0{fwd}{slirp}",
                 "-device", f"{self.model},netdev=net0,mac={self.mac}",
             ]
         elif self.mode == "bridge":
@@ -351,6 +365,7 @@ class MachineConfig:
     hugepages:       bool          = _MC["hugepages"]
     balloon:         bool          = _MC["balloon"]
     gpu:             str           = _MC["gpu"]
+    gpu_passthrough_pci: str       = ""   # host PCI addr (e.g. "01:00.0") for vfio-pci passthrough
     display:         str           = _MC["display"]
     vnc_port:        Optional[int] = None
     vnc_bind_local:  bool          = False   # True → bind to 127.0.0.1 + require password (remote mode)
@@ -363,6 +378,11 @@ class MachineConfig:
     os_type:         str           = _MC["os_type"]
     os_name:         str           = ""
     iso_path:        Optional[str] = None
+    unattended:      bool          = False   # Windows: attach autounattend.xml CD (opt-in)
+    unattended_username: str       = ""
+    unattended_password: str       = ""
+    unattended_locale:   str       = ""
+    unattended_autologon: bool     = True
     boot_order:      str           = _MC["boot_order"]
     smbios_type:     str           = _MC["smbios_type"]
     product_name:    str           = _MC["product_name"]

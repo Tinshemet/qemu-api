@@ -76,10 +76,14 @@ class _VmOperationsMixin:
     # ------------------------------------------------------------------
 
     def snapshot_create(self, name: str, snap_name: str) -> Dict[str, Any]:
-        """Send ``savevm`` to a running VM via QMP.
+        """Create an internal qcow2 snapshot — live via QMP or offline via qemu-img.
+
+        Live mode (VM running): uses ``blockdev-snapshot-internal-sync`` on each
+        data disk, which works on UEFI/pflash VMs unlike the legacy ``savevm``
+        HMP command.  Offline mode (VM stopped): uses ``qemu-img snapshot -c``.
 
         Args:
-            name:      VM name (must be running).
+            name:      VM name.
             snap_name: Tag for the new snapshot.
 
         Returns:
@@ -87,30 +91,69 @@ class _VmOperationsMixin:
 
         Example::
             >>> mgr.snapshot_create("my-linux", "pre-update")
-            {"success": True, "message": "Snapshot 'pre-update' created."}
+            {"success": True, "message": "Snapshot 'pre-update' created on 1 disk(s)."}
         """
-        if not self._is_running(name):
-            return {"success": False,
-                    "error": f"VM '{name}' must be running for a live snapshot."}
         try:
             cfg = MachineConfig.load(name)
-            qmp = QMPClient(cfg.get_qmp_socket())
-            qmp.connect()
-            qmp.execute("savevm", {"tag": snap_name})
-            qmp.close()
-            return {"success": True, "message": f"Snapshot '{snap_name}' created."}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        except FileNotFoundError:
+            return {"success": False, "error": f"VM '{name}' does not exist."}
+        if self._is_running(name):
+            try:
+                qmp = QMPClient(cfg.get_qmp_socket())
+                qmp.connect()
+                r       = qmp.execute("query-block")
+                created = 0
+                errors  = []
+                for dev in r.get("return", []):
+                    dev_name = dev.get("device", "")
+                    # Skip pflash (OVMF vars/code), CD-ROMs, and read-only drives
+                    if dev_name.startswith("pflash") or dev_name.startswith("cdrom"):
+                        continue
+                    inserted = dev.get("inserted")
+                    if not inserted or inserted.get("ro", True):
+                        continue
+                    resp = qmp.execute("blockdev-snapshot-internal-sync",
+                                       {"device": dev_name, "name": snap_name})
+                    if "error" in resp:
+                        errors.append(f"{dev_name}: {resp['error'].get('desc','?')}")
+                    else:
+                        created += 1
+                qmp.close()
+                if errors:
+                    return {"success": False, "error": "; ".join(errors)}
+                if created == 0:
+                    return {"success": False, "error": "No writable data disks found to snapshot."}
+                return {"success": True,
+                        "message": f"Snapshot '{snap_name}' created on {created} disk(s)."}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        else:
+            errors = []
+            created = 0
+            for disk in cfg.disks:
+                disk_path = os.path.expanduser(disk.path)
+                result = subprocess.run(
+                    ["qemu-img", "snapshot", "-c", snap_name, disk_path],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    errors.append(result.stderr.strip())
+                else:
+                    created += 1
+            if errors:
+                return {"success": False, "error": "; ".join(errors)}
+            return {"success": True,
+                    "message": f"Snapshot '{snap_name}' created (offline) on {created} disk(s)."}
 
     def snapshot_list(self, name: str) -> Dict[str, Any]:
-        """List all snapshots for a VM by inspecting the first disk image.
+        """List all snapshots for a VM — live via QMP or offline via qemu-img.
 
         Args:
             name: VM name.
 
         Returns:
             ``{"success": True, "snapshots": list, "raw": str}`` or error dict.
-            Each snapshot dict has ``id``, ``tag``, ``vm_size``, ``date``.
+            Each snapshot dict has ``id``, ``tag``, ``date``, ``vm_state_size``.
 
         Example::
             >>> mgr.snapshot_list("my-linux")
@@ -120,22 +163,42 @@ class _VmOperationsMixin:
             cfg = MachineConfig.load(name)
             if not cfg.disks:
                 return {"success": False, "error": "No disks."}
-            disk_path = os.path.expanduser(cfg.disks[0].path)
-            result    = subprocess.run(
-                ["qemu-img", "snapshot", "-l", disk_path],
-                capture_output=True, text=True,
-            )
-            snaps = []
-            for line in result.stdout.splitlines()[2:]:  # skip header lines
-                parts = line.split()
-                if len(parts) >= 4:
-                    snaps.append({
-                        "id":      parts[0],
-                        "tag":     parts[1],
-                        "vm_size": parts[2],
-                        "date":    parts[3],
-                    })
-            return {"success": True, "snapshots": snaps, "raw": result.stdout}
+            if self._is_running(name):
+                qmp  = QMPClient(cfg.get_qmp_socket())
+                qmp.connect()
+                r    = qmp.execute("query-block")
+                qmp.close()
+                snaps = []
+                seen  = set()
+                for dev in r.get("return", []):
+                    for s in dev.get("inserted", {}).get("image", {}).get("snapshots", []):
+                        tag = s.get("name", "")
+                        if tag and tag not in seen:
+                            seen.add(tag)
+                            snaps.append({
+                                "id":            s.get("id", ""),
+                                "tag":           tag,
+                                "date":          str(s.get("date-sec", "")),
+                                "vm_state_size": s.get("vm-state-size", 0),
+                            })
+                return {"success": True, "snapshots": snaps, "raw": ""}
+            else:
+                disk_path = os.path.expanduser(cfg.disks[0].path)
+                result    = subprocess.run(
+                    ["qemu-img", "snapshot", "-l", disk_path],
+                    capture_output=True, text=True,
+                )
+                snaps = []
+                for line in result.stdout.splitlines()[2:]:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        snaps.append({
+                            "id":            parts[0],
+                            "tag":           parts[1],
+                            "date":          parts[3],
+                            "vm_state_size": parts[2],
+                        })
+                return {"success": True, "snapshots": snaps, "raw": result.stdout}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -156,11 +219,16 @@ class _VmOperationsMixin:
         """
         if self._is_running(name):
             try:
-                cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.get_qmp_socket())
+                cfg  = MachineConfig.load(name)
+                qmp  = QMPClient(cfg.get_qmp_socket())
                 qmp.connect()
-                qmp.execute("loadvm", {"tag": snap_name})
+                resp = qmp.execute("human-monitor-command",
+                                   {"command-line": f"loadvm {snap_name}"})
                 qmp.close()
+                # HMP loadvm returns empty string on success; any text is an error
+                hmp_out = resp.get("return", "").strip()
+                if hmp_out:
+                    return {"success": False, "error": hmp_out}
                 return {"success": True,
                         "message": f"Snapshot '{snap_name}' restored (live)."}
             except Exception as e:
@@ -181,7 +249,7 @@ class _VmOperationsMixin:
                 return {"success": False, "error": str(e)}
 
     def snapshot_delete(self, name: str, snap_name: str) -> Dict[str, Any]:
-        """Delete a snapshot from the VM's first disk image.
+        """Delete a snapshot — live via QMP or offline via qemu-img.
 
         Args:
             name:      VM name.
@@ -194,18 +262,49 @@ class _VmOperationsMixin:
             >>> mgr.snapshot_delete("my-linux", "old-snap")
             {"success": True, "message": "Snapshot 'old-snap' deleted."}
         """
-        try:
-            cfg       = MachineConfig.load(name)
-            disk_path = os.path.expanduser(cfg.disks[0].path)
-            result    = subprocess.run(
-                ["qemu-img", "snapshot", "-d", snap_name, disk_path],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                return {"success": False, "error": result.stderr}
+        cfg = MachineConfig.load(name)
+        if self._is_running(name):
+            try:
+                qmp = QMPClient(cfg.get_qmp_socket())
+                qmp.connect()
+                r   = qmp.execute("query-block")
+                deleted = 0
+                errors  = []
+                for dev in r.get("return", []):
+                    dev_name = dev.get("device", "")
+                    snaps    = dev.get("inserted", {}).get("image", {}).get("snapshots", [])
+                    if not any(s.get("name") == snap_name for s in snaps):
+                        continue
+                    resp = qmp.execute("blockdev-snapshot-delete-internal-sync",
+                                       {"device": dev_name, "name": snap_name})
+                    if "error" in resp:
+                        errors.append(f"{dev_name}: {resp['error'].get('desc','?')}")
+                    else:
+                        deleted += 1
+                qmp.close()
+                if errors:
+                    return {"success": False, "error": "; ".join(errors)}
+                if deleted == 0:
+                    return {"success": False, "error": f"Snapshot '{snap_name}' not found."}
+                return {"success": True, "message": f"Snapshot '{snap_name}' deleted."}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        else:
+            errors  = []
+            deleted = 0
+            for disk in cfg.disks:
+                disk_path = os.path.expanduser(disk.path)
+                result = subprocess.run(
+                    ["qemu-img", "snapshot", "-d", snap_name, disk_path],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    errors.append(result.stderr.strip())
+                else:
+                    deleted += 1
+            if deleted == 0:
+                return {"success": False, "error": "; ".join(errors) or f"Snapshot '{snap_name}' not found."}
             return {"success": True, "message": f"Snapshot '{snap_name}' deleted."}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
 
     # ------------------------------------------------------------------
     # Resource limits

@@ -36,22 +36,36 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-from shared.display import (
-    console,
-    render_vm_list,
-    render_status,
-    render_monitor,
-    render_profiles,
-    render_compat,
-    render_snapshots,
-    render_system,
-)
+try:
+    # shared/ isn't part of a true client-only checkout (see README's client
+    # sparse checkout) — fall back to plain rich output instead of crashing
+    # the whole direct-CLI module (even "qemu-api help" needs this import).
+    from shared.display import (
+        console,
+        render_vm_list,
+        render_status,
+        render_monitor,
+        render_profiles,
+        render_compat,
+        render_snapshots,
+        render_system,
+    )
+except ImportError:
+    from rich.console import Console
+    console = Console()
 
-_CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
-_API_CFG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    "executor", "api", "config.json",
-)
+    def _render_json(data, *_a, **_kw):
+        console.print_json(data=data, default=str)
+
+    render_vm_list   = _render_json
+    render_status    = _render_json
+    render_monitor    = _render_json
+    render_profiles  = _render_json
+    render_compat    = _render_json
+    render_snapshots = _render_json
+    render_system    = _render_json
+
+_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 try:
     _CONN      = json.load(open(_CFG_PATH))
     _SERVER    = os.environ.get("SERVER_URL", _CONN.get("server_url", "http://localhost:8080"))
@@ -60,15 +74,11 @@ try:
     _CA_CERT   = os.environ.get("API_CA_CERT", _CONN.get("ca_cert") or None)
     _VERIFY    = False if os.environ.get("API_VERIFY_SSL", "1") == "0" else (_CA_CERT or _CONN.get("verify_ssl", True))
     _HEADERS   = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}
+    _VNC_VIEWERS = _CONN.get("vnc_viewer_candidates", ["vncviewer", "tigervnc", "xtigervncviewer"])
+    _IO_CHUNK    = _CONN.get("io_chunk_bytes", 4 * 1024 * 1024)
 except Exception:
     _SERVER, _TOKEN, _TIMEOUT, _VERIFY, _HEADERS = "http://localhost:8080", "", 120, True, {}
-try:
-    _API_CFG      = json.load(open(_API_CFG_PATH))
-    _VNC_VIEWERS  = _API_CFG.get("vnc_viewer_candidates", [])
-    _IO_CHUNK     = _API_CFG.get("io_chunk_bytes", 4 * 1024 * 1024)
-except Exception:
-    _VNC_VIEWERS  = []
-    _IO_CHUNK     = 4 * 1024 * 1024
+    _VNC_VIEWERS, _IO_CHUNK = [], 4 * 1024 * 1024
 
 try:
     from executor.api.qemu_config import (
@@ -96,6 +106,77 @@ def _require_manager():
             "  → Run [bold]setup_client.sh[/bold] to install QEMU, or use the AI chat to manage remote VMs."
         )
         raise SystemExit(1)
+
+
+def _remote_execute(tool_name: str, args: dict) -> dict:
+    """POST a tool call to the configured server's /execute endpoint (no local QEMU needed)."""
+    try:
+        r = requests.post(
+            f"{_SERVER}/execute", headers=_HEADERS,
+            json={"tool_name": tool_name, "args": args},
+            timeout=_TIMEOUT, verify=_VERIFY,
+        )
+        if not r.ok:
+            try:
+                body = r.json()
+                msg = body.get("result", {}).get("error") or body.get("detail") or r.text
+            except Exception:
+                msg = r.text
+            return {"success": False, "error": f"Server error {r.status_code}: {msg}"}
+        result = r.json().get("result", {})
+        return result if isinstance(result, dict) else {"success": True, "value": result}
+    except Exception as e:
+        return {"success": False, "error": f"Could not reach server: {e}"}
+
+
+def set_custom_mode_flag(enabled: bool) -> None:
+    """-cu — disable product-name verification. Local orchestrator install if
+    present, otherwise toggled server-side via POST /custom-mode."""
+    try:
+        from orchestrator.preflight.validator import set_custom_mode
+        set_custom_mode(enabled)
+        console.print(f"[dim]Custom mode {'enabled' if enabled else 'disabled'} (local)[/dim]")
+        return
+    except ImportError:
+        pass
+    if _SERVER and _TOKEN:
+        try:
+            r = requests.post(f"{_SERVER}/custom-mode", headers=_HEADERS,
+                               json={"enabled": enabled}, timeout=_TIMEOUT, verify=_VERIFY)
+            if r.ok:
+                console.print(f"[dim]Custom mode {'enabled' if enabled else 'disabled'} on server[/dim]")
+            else:
+                console.print(f"[bold red]Failed to set custom mode on server: {r.status_code}[/bold red]")
+        except Exception as e:
+            console.print(f"[bold red]Could not reach server to set custom mode: {e}[/bold red]")
+    else:
+        console.print("[bold yellow]Custom mode requires either a local orchestrator install "
+                       "or a configured server connection (SERVER_URL/API_TOKEN).[/bold yellow]")
+
+
+def fingerprint_report(vm_name: str) -> None:
+    """-tf <name> — inxi-style fingerprint report. Local QEMU if present,
+    otherwise routed through the configured server's /execute endpoint."""
+    if manager is not None:
+        from executor.fingerprint import tf_report
+        result = tf_report(vm_name)
+        console.print(result.get("report") or result.get("error") or result)
+        return
+    if _SERVER and _TOKEN:
+        result = _remote_execute("fingerprint_vm", {"name": vm_name})
+        console.print(result.get("report") or result.get("error") or result)
+    else:
+        console.print("[bold yellow]Fingerprint report requires either local QEMU "
+                       "or a configured server connection (SERVER_URL/API_TOKEN).[/bold yellow]")
+
+
+def clear_session_flag() -> None:
+    """-cs — clear the saved chat session before starting (local file; server
+    session is naturally abandoned since a fresh session_id will be generated)."""
+    session_file = os.path.expanduser("~/.qemu_vms/.chat_session_id")
+    if os.path.exists(session_file):
+        os.remove(session_file)
+    console.print("[dim]Session cleared.[/dim]")
 
 
 def _show_stealth_popup(vm_name: str, setup_cmd: str):
@@ -189,10 +270,11 @@ def run(args: List[str], verbose: bool = False):
         if local_exists and _SERVER and _TOKEN:
             try:
                 resp = requests.post(f"{_SERVER}/execute", headers=_HEADERS,
-                                     json={"tool": "list_vms", "args": {}},
+                                     json={"tool_name": "list_vms", "args": {}},
                                      timeout=10, verify=_VERIFY)
                 if resp.ok:
-                    remote_vms = resp.json().get("result", {}).get("vms", [])
+                    remote_result = resp.json().get("result", [])
+                    remote_vms = remote_result if isinstance(remote_result, list) else remote_result.get("vms", [])
                     remote_exists = any(v.get("name") == vm_name for v in remote_vms)
             except Exception:
                 pass
@@ -210,7 +292,7 @@ def run(args: List[str], verbose: bool = False):
         if use_remote:
             try:
                 resp = requests.post(f"{_SERVER}/execute", headers=_HEADERS,
-                                     json={"tool": "launch_vm", "args": {"name": vm_name, "display": display or "vnc"}},
+                                     json={"tool_name": "launch_vm", "args": {"name": vm_name, "display": display or "vnc"}},
                                      timeout=_TIMEOUT, verify=_VERIFY)
                 r = resp.json().get("result", {}) if resp.ok else {"error": resp.text}
             except Exception as e:

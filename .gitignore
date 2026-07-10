@@ -4,4 +4,10 @@ __pycache__/
 
 # Per-machine configs — never commit these
 files/client/connection_config.json
-files/server/connection_config.json
+files/orchestrator/connection_config.json
+
+# Generated test artifact
+files/tests/test_report.json
+
+# iasl build artifact (.hex C-include form); battery.aml is the committed prebuilt fallback
+files/executor/api/acpi/battery.hex

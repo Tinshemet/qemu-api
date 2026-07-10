@@ -12,31 +12,11 @@ from typing import Any, Dict, List, Optional
 
 import psutil
 
-from ._vm_constants import _LINUX_DISTROS, VM_BASE_DIR
+from ._vm_constants import VM_BASE_DIR, infer_os_name
 from .qemu_config import MachineConfig
 from .qmp_client import QMPClient
 
 
-def _infer_distro(iso_path: Optional[str], os_type: str) -> str:
-    """Derive a human-readable distro name from an ISO filename.
-
-    Args:
-        iso_path: Path to the attached ISO, or ``None``.
-        os_type:  Fallback value if the ISO name gives no hint.
-
-    Returns:
-        Distro name (e.g. ``"ubuntu"``), or ``os_type`` when no match.
-
-    Example::
-        >>> _infer_distro("/home/user/Downloads/ubuntu-24.04.iso", "linux")
-        "ubuntu"
-    """
-    if iso_path:
-        needle = os.path.basename(iso_path).lower()
-        for distro in _LINUX_DISTROS:
-            if distro in needle:
-                return "mint" if distro == "linuxmint" else distro
-    return os_type
 
 
 class _VmMonitoringMixin:
@@ -77,7 +57,7 @@ class _VmMonitoringMixin:
                 "name":        name,
                 "id":          cfg.vm_id,
                 "description": cfg.description,
-                "os":          cfg.os_name or _infer_distro(cfg.iso_path, cfg.os_type),
+                "os":          cfg.os_name or infer_os_name(cfg.iso_path, cfg.os_type),
                 "cpu_cores":   cfg.cpu_cores,
                 "memory_mb":   cfg.memory_mb,
                 "disks":       len(cfg.disks),
@@ -244,40 +224,44 @@ class _VmMonitoringMixin:
 
         if cfg.display == "spice":
             port = cfg.spice_port or 5930
+            conn = {"protocol": "spice", "host": "localhost", "port": port,
+                    "connect": f"spice://localhost:{port}"}
             for viewer in ["remote-viewer", "spicy"]:
                 if shutil.which(viewer):
                     subprocess.Popen([viewer, f"spice://localhost:{port}"])
-                    return {"success": True,
-                            "message": f"Opened SPICE display on port {port}."}
+                    return {"success": True, "message": f"Opened SPICE display on port {port}.",
+                            **conn}
             if sys.platform == "darwin":
                 subprocess.Popen(["open", f"spice://localhost:{port}"])
-                return {"success": True,
-                        "message": (f"SPICE on port {port}. Install virt-viewer "
-                                    "for full support: brew install virt-viewer")}
-            return {"success": False,
-                    "error": "Install virt-viewer: sudo apt install virt-viewer"}
+                return {"success": True, "message": f"SPICE on port {port}.", **conn}
+            return {"success": True,
+                    "message": f"SPICE display on port {port} — connect with: spice://localhost:{port}",
+                    **conn}
 
         if cfg.display == "vnc":
             port = cfg.vnc_port or 5900
+            conn = {"protocol": "vnc", "host": "localhost", "port": port,
+                    "connect": f"localhost:{port}"}
             for viewer in ["vncviewer", "tigervnc", "xtigervncviewer"]:
                 if shutil.which(viewer):
                     subprocess.Popen([viewer, f"localhost:{port}"])
-                    return {"success": True,
-                            "message": f"Opened VNC display on port {port}."}
+                    return {"success": True, "message": f"Opened VNC display on port {port}.",
+                            **conn}
             if sys.platform == "darwin":
                 subprocess.Popen(["open", f"vnc://localhost:{port}"])
-                return {"success": True,
-                        "message": f"Opening VNC in Screen Sharing on port {port}."}
+                return {"success": True, "message": f"Opening VNC in Screen Sharing on port {port}.",
+                        **conn}
             if sys.platform == "win32":
                 for viewer in ["tvnviewer", "vncviewer"]:
                     if shutil.which(viewer):
                         subprocess.Popen([viewer, f"localhost:{port}"])
-                        return {"success": True,
-                                "message": f"Opened VNC display on port {port}."}
-            return {"success": False,
-                    "error": "Install VNC viewer: sudo apt install tigervnc-viewer"}
+                        return {"success": True, "message": f"Opened VNC display on port {port}.",
+                                **conn}
+            return {"success": True,
+                    "message": f"VNC display on port {port} — connect with: vncviewer localhost:{port}",
+                    **conn}
 
-        return {"success": True,
+        return {"success": True, "protocol": cfg.display,
                 "message": f"VM uses {cfg.display} — window should already be open."}
 
     def open_shell(self, name: str) -> Dict[str, Any]:
@@ -308,17 +292,20 @@ class _VmMonitoringMixin:
                 return {"success": False,
                         "error": "Serial TCP port not configured — launch the VM first."}
             subprocess.Popen(["cmd", "/c", "start", "telnet", "127.0.0.1", str(port)])
-            return {"success": True,
+            return {"success": True, "serial_port": port,
                     "message": f"Opened serial console via telnet on port {port}."}
 
         serial_sock = os.path.join(cfg.get_vm_dir(), "serial.sock")
+        conn = {"serial_sock": serial_sock,
+                "connect": f"socat - UNIX-CONNECT:{serial_sock}"}
         if not os.path.exists(serial_sock):
-            return {"success": False, "error": f"Serial socket not found: {serial_sock}"}
+            return {"success": False, "error": f"Serial socket not found: {serial_sock}",
+                    **conn}
 
         if sys.platform == "darwin":
             script = f'tell app "Terminal" to do script "socat - UNIX-CONNECT:{serial_sock}"'
             subprocess.Popen(["osascript", "-e", script])
-            return {"success": True, "message": "Opened serial console in Terminal.app."}
+            return {"success": True, "message": "Opened serial console in Terminal.app.", **conn}
 
         for term in ["gnome-terminal", "xterm", "konsole", "lxterminal", "xfce4-terminal"]:
             if shutil.which(term):
@@ -328,7 +315,7 @@ class _VmMonitoringMixin:
                     else [term, "-e", f"socat - UNIX-CONNECT:{serial_sock}"]
                 )
                 subprocess.Popen(cmd)
-                return {"success": True,
-                        "message": f"Opened serial console in {term}."}
-        return {"success": False,
-                "error": "No terminal emulator found. Install: sudo apt install xterm"}
+                return {"success": True, "message": f"Opened serial console in {term}.", **conn}
+        return {"success": True,
+                "message": f"Serial socket: {serial_sock} — run: socat - UNIX-CONNECT:{serial_sock}",
+                **conn}

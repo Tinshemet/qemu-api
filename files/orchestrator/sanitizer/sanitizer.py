@@ -12,10 +12,7 @@ import re
 import tempfile
 from typing import Any, Dict, List, Optional
 
-try:
-    from executor.api.qemu_config import get_all_profiles
-except ImportError:
-    def get_all_profiles() -> Dict[str, Any]: return {}                       # type: ignore[misc]
+from orchestrator.executor_client import get_all_profiles
 
 with open(os.path.join(os.path.dirname(__file__), "config.json")) as _f:
     _CFG = json.load(_f)
@@ -359,6 +356,16 @@ def _sanitise_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             args["cpu_cores"] = max(1, min(args["cpu_cores"], psutil.cpu_count(logical=True)))
         except Exception:
             args["cpu_cores"] = max(1, args["cpu_cores"])
+
+    # CPU threads-per-core: floor at 1, cap at host logical count. Mirrors cpu_cores
+    # above — was previously unclamped, so a negative/zero cpu_threads (e.g. -1) slipped
+    # through into a broken "-smp ...,threads=-1".
+    if "cpu_threads" in args and args["cpu_threads"] is not None:
+        try:
+            import psutil
+            args["cpu_threads"] = max(1, min(args["cpu_threads"], psutil.cpu_count(logical=True)))
+        except Exception:
+            args["cpu_threads"] = max(1, args["cpu_threads"])
 
     # Disk size: bounded by config (explicit None check — 0 is invalid)
     if "disk_size_gb" in args and args["disk_size_gb"] is not None:

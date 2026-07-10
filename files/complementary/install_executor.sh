@@ -54,6 +54,7 @@ PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_
 PKGS=(
     qemu-system-x86 qemu-kvm qemu-utils qemu-system-arm
     ovmf socat python3-venv "python${PY_VER}-venv" python3-pip
+    acpica-tools genisoimage mtools swtpm
     cpu-checker bridge-utils curl
 )
 if [[ "$IS_WSL" == false ]]; then
@@ -89,6 +90,21 @@ for p in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
     if [[ -f "$p" ]]; then ok "OVMF found: $p"; OVMF_FOUND=true; break; fi
 done
 [[ "$OVMF_FOUND" == false ]] && warn "OVMF not found — UEFI/Windows 11 VMs will not work"
+
+header "Stealth ACPI Battery"
+BAT_DSL="$FILES_DIR/executor/api/acpi/battery.dsl"
+BAT_AML="$FILES_DIR/executor/api/acpi/battery.aml"
+if command -v iasl >/dev/null 2>&1 && [[ -f "$BAT_DSL" ]]; then
+    if ( cd "$(dirname "$BAT_DSL")" && iasl -tc "$(basename "$BAT_DSL")" >/dev/null 2>&1 ); then
+        ok "Compiled battery SSDT — laptop-persona stealth VMs get an ACPI battery"
+    else
+        warn "battery SSDT compile failed — laptop stealth VMs will have no battery"
+    fi
+elif [[ -f "$BAT_AML" ]]; then
+    ok "Battery SSDT already present (prebuilt battery.aml)"
+else
+    warn "iasl (acpica-tools) missing — laptop stealth VMs will have no ACPI battery"
+fi
 
 header "Bridge Networking"
 if [[ "$IS_WSL" == false ]]; then

@@ -17,7 +17,7 @@ AI-driven QEMU/KVM virtual machine manager with an Ollama chat loop, remote spli
 6. [AI Chat Reference](#ai-chat-reference)
 7. [VM Configuration Fields](#vm-configuration-fields)
 8. [Hardware Profiles](#hardware-profiles)
-9. [Flags: -cu and -tf](#flags--cu-and--tf)
+9. [Flags: -cu, -tf, -cs](#flags--cu--tf--cs)
 10. [Stealth Mode](#stealth-mode)
 11. [SMBIOS / Hardware Fingerprint](#smbios--hardware-fingerprint)
 12. [Guest Setup Scripts](#guest-setup-scripts)
@@ -204,10 +204,9 @@ files/
 │   ├── preflight/
 │   │   ├── validator.py             _preflight_check(), internet validator, profile check
 │   │   └── config.json              Preflight config (timeout, caps)
-│   ├── executor_client.py           Dispatches tool calls: local in-process or HTTP to executor
+│   ├── pipeline.py                  execute_tool() — sanitize → gate → name resolution → dispatch (full local-mode pipeline)
+│   ├── executor_client.py           Dispatches tool calls: local in-process (via pipeline.py) or HTTP to executor
 │   ├── event_log.py                 Structured event log (JSON-lines, 10 MB rotation → ~/.qemu_vms/events.log)
-│   ├── admin_tui.py                 Curses fullscreen orchestrator admin TUI (qemu-api-admin)
-│   ├── admin_config.json            Admin TUI appearance (text_color hex, font_size)
 │   └── connection_config.json       Orchestrator connection settings (url, token, timeout)
 │
 ├── executor/                        Executor machine (QEMU engine)
@@ -233,13 +232,18 @@ files/
 │   │   └── chat_client.py           Curses fullscreen chat TUI — POSTs to orchestrator /chat
 │   ├── cli/
 │   │   └── commands.py              Direct local QEMU commands (no AI)
-│   ├── client_wrapper.py            Entry point: chat UI or local commands; reads CLI_config.json
+│   ├── client_wrapper.py            Entry point: chat UI, local commands, or -cu/-tf/-cs; reads CLI_config.json
 │   ├── CLI_config.json              Client TUI appearance (text_color hex, font_size)
 │   └── connection_config.json       Client settings (server_url, token, ca_cert)
 │
+├── admin/                           Any machine that can reach the orchestrator over HTTP
+│   ├── admin_tui.py                 Curses fullscreen admin dashboard (qemu-api-admin) — HTTP-only, no local QEMU needed
+│   ├── admin_config.json            Admin TUI appearance (text_color hex, font_size, refresh rate)
+│   └── connection_config.json       Admin connection settings (orchestrator_url, token)
+│
 ├── shared/                          Bridge code (used by both sides in local mode)
 │   ├── executioner/
-│   │   ├── tool_executor.py         dispatch_tool() + execute_tool() — hard guards, QemuManager dispatch
+│   │   ├── tool_executor.py         dispatch_tool() + _run() — executor-only, no orchestrator imports
 │   │   └── config.json              Executor config (VM base dir, timeouts, ISO keywords)
 │   └── display.py                   Rich console rendering (tables, panels, VNC panel)
 │
@@ -262,6 +266,7 @@ files/
     ├── install_orchestrator.sh  Orchestrator machine setup (Ollama + API server)
     ├── install_executor.sh      Executor machine setup (QEMU + executor server)
     ├── setup_client.sh          Client setup (your laptop — thin UI only)
+    ├── install_admin.sh         Admin dashboard setup (any machine, HTTP-only)
     ├── setup_wsl2.ps1           Windows-side WSL2 port forwarding (run as Admin)
     ├── requirements.txt         Python dependencies
     ├── GUIDE.txt                Complete reference guide
@@ -337,6 +342,7 @@ Session state (conversation history) lives on the server, keyed by `session_id`.
 | `install_orchestrator.sh` | Orchestrator machine | Ollama + HTTP API (uvicorn on port 8080); no QEMU needed |
 | `install_executor.sh` | Executor machine | QEMU + executor server (uvicorn on port 8001); no Ollama needed |
 | `setup_client.sh` | Your laptop | Thin client only — Python + Rich + connection config |
+| `install_admin.sh` | Any machine (optional) | Admin dashboard — HTTP-only, no QEMU/Ollama needed |
 | `setup_wsl2.ps1` | Windows (as Admin) | Port forwarding + firewall for WSL2 setup |
 
 Typical three-machine scenario:
@@ -355,13 +361,18 @@ bash files/complementary/install_executor.sh
 bash files/complementary/setup_client.sh
 ```
 
+`install_orchestrator.sh` asks for the executor's URL and token (`EXECUTOR_URL`/`EXECUTOR_TOKEN`) partway through, so it can be a chicken-and-egg problem if you run it before `install_executor.sh` has generated a token — just press Enter to skip and edit `orchestrator/connection_config.json`'s `url`/`token` fields by hand once the executor is set up (the script tells you exactly which fields).
+
 Pre-seed to skip prompts:
 
 ```bash
 API_TOKEN=mysecret bash install_orchestrator.sh
-EXECUTOR_TOKEN=mysecret bash install_executor.sh
+EXECUTOR_URL=http://192.168.1.20:8001 EXECUTOR_TOKEN=executorsecret bash install_orchestrator.sh
+EXECUTOR_TOKEN=executorsecret bash install_executor.sh
 SERVER_URL=http://192.168.1.10:8080 API_TOKEN=mysecret bash setup_client.sh
 ```
+
+Note `API_TOKEN` (client→orchestrator) and `EXECUTOR_TOKEN` (orchestrator→executor) are two separate secrets — don't reuse one for the other.
 
 ### Starting Remote Mode
 
@@ -376,10 +387,11 @@ source ~/qemu-env/bin/activate
 cd ~/qemu-api
 PYTHONPATH=files uvicorn executor.server:app --host 0.0.0.0 --port 8001
 
-# Or use the alias created by setup_server.sh:
+# Or use the alias created by install_orchestrator.sh:
 qemu-api-serve
 
-# Admin TUI (server-only — not available on client):
+# Admin TUI — runs on any machine that can reach the orchestrator over HTTP
+# (install separately: bash files/complementary/install_admin.sh):
 qemu-api-admin
 
 # On your laptop — open SSH tunnel (if connecting over the internet)
@@ -597,7 +609,9 @@ Custom profiles stored at `~/.qemu_vms/_profiles/<name>.json`. Validated against
 
 ---
 
-## Flags: -cu and -tf
+## Flags: -cu, -tf, -cs
+
+All three work from the real `qemu-api` client entry point in both local and split mode — `client/client_wrapper.py` uses a local orchestrator/executor install when present, and otherwise falls back to the configured `SERVER_URL`/`API_TOKEN` over HTTP.
 
 ### `-cu` — Custom Machine Mode
 
@@ -615,6 +629,16 @@ Starts the AI chat with product verification disabled. Allows any `manufacturer`
 
 Use cases: fictional hardware names, research VMs, air-gapped environments.
 
+In split mode this calls `POST /custom-mode` on the orchestrator (see [API Endpoints](#api-endpoints)). It's a **process-global** toggle — it affects every client talking to that orchestrator, not just the one that set it.
+
+### `-cs` — Clear Session
+
+```bash
+qemu-api -cs
+```
+
+Clears the saved chat session (`~/.qemu_vms/.chat_session_id`) before starting, so the AI begins with no prior conversation history.
+
 ### `-tf` — Fingerprint Report
 
 ```bash
@@ -622,6 +646,8 @@ qemu-api -tf <vmname>
 ```
 
 Read-only analysis of a VM's configuration. Simulates what `inxi -M -N -C -D -A -G` would report from inside the guest OS, then checks each field against known VM fingerprint signatures.
+
+In split mode, the full per-field breakdown table is only rendered where the executor tool actually runs — a remote `-tf` call gets back the structured score/tell counts, not the rendered table (that only appears when run directly on a machine with local QEMU).
 
 **What it simulates:**
 
@@ -958,7 +984,53 @@ qemu-api
 # Then: vncviewer localhost:5901
 ```
 
-For TLS direct (no SSH): generate certs with openssl, forward port 8443 on router, set `API_URL=https://...` and `API_CA_CERT` on provider.
+### TLS Direct (no SSH tunnel)
+
+For a truly remote setup without an SSH tunnel, run the orchestrator over HTTPS directly.
+
+**1. Generate a cert on the orchestrator machine** (self-signed is fine for a single client/friend setup — use a real CA-issued cert for anything public-facing):
+
+```bash
+mkdir -p ~/tls
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ~/tls/orchestrator.key -out ~/tls/orchestrator.crt -days 365 \
+  -subj "/CN=orchestrator" \
+  -addext "subjectAltName=IP:<orchestrator-ip>,DNS:localhost"
+```
+
+Include every hostname/IP clients will actually connect through in `subjectAltName` — TLS verification fails if the cert doesn't cover the address in the URL, even if the cert is otherwise valid.
+
+**2. Start the orchestrator with the cert:**
+
+```bash
+API_TOKEN=mysecrettoken PYTHONPATH=files uvicorn orchestrator.http.api_server:app \
+  --host 0.0.0.0 --port 8080 \
+  --ssl-keyfile ~/tls/orchestrator.key --ssl-certfile ~/tls/orchestrator.crt
+```
+
+**3. Copy the `.crt` (never the `.key`) to the client, and configure it to trust it** — either via env vars:
+
+```bash
+export SERVER_URL=https://<orchestrator-ip>:8080
+export API_TOKEN=mysecrettoken
+export API_CA_CERT=/path/to/orchestrator.crt
+```
+
+or in `files/client/connection_config.json`:
+
+```json
+{
+  "server_url": "https://<orchestrator-ip>:8080",
+  "token":      "mysecrettoken",
+  "ca_cert":    "/path/to/orchestrator.crt",
+  "verify_ssl": true
+}
+```
+
+**Dev-only bypass** (skip certificate verification entirely — never use this over an untrusted network): `API_VERIFY_SSL=0`, or `"verify_ssl": false` in the client's `connection_config.json`.
+
+**What actually gets verified:** with `ca_cert` set and `verify_ssl: true` (the default), a client connecting to a self-signed or mismatched certificate gets a clear `SSLCertVerificationError` — the connection fails closed, not open. Forgetting to set `ca_cert` on a self-signed setup also fails closed (since the cert isn't in the system's default trust store), so a misconfigured client can't accidentally connect insecurely without the explicit `API_VERIFY_SSL=0` opt-out.
+
+For port forwarding: forward port 8443 (or whatever port you choose) on your router to the orchestrator machine, and use that in `server_url` instead of the internal IP.
 
 ---
 
@@ -999,48 +1071,58 @@ Edit `files/client/CLI_config.json`:
 
 ---
 
-## Server Monitoring (Admin TUI)
+## Admin Dashboard (Admin TUI)
 
-The server ships with a fullscreen curses-based admin TUI, available only on the server machine.
+`files/admin/` is its own role, separate from `client/`, `orchestrator/`, and `executor/` — it's a fullscreen curses dashboard that talks to the orchestrator purely over HTTP (`/execute`, `/events`, `/health`). It can run on the orchestrator machine itself, on your laptop, or on any other machine that can reach the orchestrator's port.
 
 ```bash
+bash files/complementary/install_admin.sh   # one-time setup — prompts for orchestrator URL + token
 qemu-api-admin
 ```
 
-Displays a live dashboard (refreshes every second):
-- **Header bar** — uptime, VM count, event count, server PID
+Displays a live dashboard (refreshes every second, per `admin_config.json`'s `refresh_rate_s`):
+- **Header bar** — uptime, VM count, event count
 - **VM table** — name, status (●/○), CPU, RAM, OS
-- **Event feed** — timestamped log of every tool call with outcome and duration
+- **Event feed** — timestamped log of every tool call with outcome and duration (from `GET /events`)
 - **Command line** — type commands directly; `help` shows a full overlay
 
 ### Admin Commands
 
 | Command | Action |
 |---|---|
-| `launch <vm>` | Start a VM |
+| `launch <vm>` / `start <vm>` | Start a VM |
 | `stop <vm>` | Graceful stop |
 | `kill <vm>` | Force-kill (SIGKILL) |
 | `stopall` | Stop all running VMs |
 | `list` | Print all VM names in the status line |
-| `start-server` | Start the API server (uvicorn, background) |
-| `status` | Show server PID, VM count, running count |
-| `clearlog` | Wipe the event log |
-| `shutdown` | Send SIGTERM to the api_server process |
-| `kill-server` | Send SIGKILL to the api_server process |
+| `status` | Show orchestrator reachability, VM count, running count |
+| `start-server` | Start `orchestrator.http.api_server` locally (only works when run **on** the orchestrator machine) |
+| `shutdown` | Send SIGTERM to the local orchestrator process (same machine only) |
+| `kill-server` | Send SIGKILL to the local orchestrator process (same machine only) |
 | `help` | Show all commands (overlay, any key dismisses) |
 | `q` / Esc / Ctrl-C | Quit the TUI |
 
-### Admin appearance
+`start-server`/`shutdown`/`kill-server` look for a locally-running orchestrator process by PID — when the admin TUI runs on a different machine than the orchestrator, these report "orchestrator not found on this machine" instead of acting remotely.
 
-Edit `files/orchestrator/admin_config.json`:
+### Admin connection + appearance
+
+`files/admin/connection_config.json` (written by `install_admin.sh`):
 ```json
 {
-  "text_color": "#aaaaaa",
-  "font_size": 13
+  "orchestrator_url": "http://localhost:8080",
+  "token": ""
 }
 ```
 
-> The admin TUI is **server-only**. It is not present in the client sparse checkout and has no `--remote` mode.
+`files/admin/admin_config.json`:
+```json
+{
+  "text_color": "#aaaaaa",
+  "font_size": 13,
+  "refresh_rate_s": 1.0,
+  "events_display_limit": 200
+}
+```
 
 ---
 
@@ -1058,6 +1140,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 | `/vms/{vm_name}/bundle` | GET | Yes | Stream entire VM folder (disk + config + OVMF vars) as `.tar.gz` |
 | `/events` | GET | Yes | Return recent event log entries. Query: `?limit=N&since=<iso-ts>` |
 | `/rotate-token` | POST | Yes | Replace token (min 16 chars) and persist to `~/.qemu-api.token` |
+| `/custom-mode` | POST | Yes | Toggle `-cu` custom-machine mode. Body: `{enabled: bool}`. **Process-global** — affects every client on this orchestrator, not just the caller |
 
 ### /execute request flow
 
@@ -1066,7 +1149,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 3. Override SDL/GTK display → VNC + `vnc_bind_local=True` for `launch_vm`
 4. Run `orchestrator/preflight/validator.py` (full, `stateless_only=False`)
 5. Apply `auto_fix` correction if preflight returns it
-6. Call `shared/executioner/tool_executor.execute_tool()`
+6. Call `orchestrator/executor_client.execute_tool()` — dispatches in-process via `orchestrator/pipeline.py` in local mode, or forwards to the executor's `POST /execute` in remote mode
 7. Return `{"ok": true, "result": {...}}`
 
 Preflight `abort` → HTTP 200, body contains `{"success": false, "error": "..."}` (structured error, not an HTTP error).
@@ -1103,8 +1186,9 @@ Enforcement happens at two levels:
 
 | Variable | Default | Description |
 |---|---|---|
-| `API_URL` | `"local"` | Remote client URL, or `"local"` for same-machine |
-| `API_TOKEN` | `""` | Shared secret for API authentication |
+| `API_URL` | `"local"` | Orchestrator→executor URL, or `"local"` for same-machine |
+| `API_TOKEN` | `""` | Client→orchestrator secret. **Not** used for the orchestrator→executor hop — see `EXECUTOR_TOKEN` |
+| `EXECUTOR_TOKEN` | `""` | Orchestrator→executor secret (overrides `orchestrator/connection_config.json`'s `token` field). Deliberately separate from `API_TOKEN` — they're different secrets in split mode |
 | `API_TIMEOUT` | `120` | HTTP request timeout in seconds |
 | `API_CA_CERT` | `None` | Path to custom CA certificate for TLS |
 | `API_VERIFY_SSL` | `"1"` | Set to `"0"` to skip TLS verification (dev only) |
@@ -1113,7 +1197,7 @@ Enforcement happens at two levels:
 
 ### connection_config.json (two files — one per side)
 
-**`files/orchestrator/connection_config.json`** — read by the AI/Ollama machine:
+**`files/orchestrator/connection_config.json`** — read by the orchestrator machine, governs how it reaches the **executor**:
 ```json
 {
   "url":                    "local",
@@ -1122,23 +1206,35 @@ Enforcement happens at two levels:
   "verify_ssl":             true,
   "ca_cert":                "",
   "client_allowed_vms":      [],
-  "client_allowed_profiles": []
+  "client_allowed_profiles": [],
+  "allowed_remote_tools":    []
 }
 ```
 
 `client_allowed_vms` and `client_allowed_profiles` are optional. Empty arrays (default) mean all VMs and profiles are accessible. Add names to restrict access — hidden resources appear non-existent to clients.
 
-Set `url` to `"local"` for same-machine mode or `"http://10.0.2.2:8080"` for remote.
+Set `url` to `"local"` for same-machine mode (executor code runs in-process) or `"http://<executor-host>:8001"` for remote. `token` must match the executor's own token (see `executor/config.json` / `EXECUTOR_TOKEN` below) — it is a **different secret** from the `API_TOKEN` clients use to reach this orchestrator. `install_orchestrator.sh` prompts for both `url` and `token` interactively (or accepts `EXECUTOR_URL`/`EXECUTOR_TOKEN` env vars).
 
-**`files/client/connection_config.json`** — read by the QEMU machine's API server:
+**`files/client/connection_config.json`** — read by the client machine, governs how it reaches the **orchestrator**:
 ```json
 {
-  "port":    8080,
-  "token":   "",
-  "timeout": 120,
-  "allowed_remote_tools": ["create_vm", "launch_vm", "stop_vm", ...]
+  "server_url": "http://localhost:8080",
+  "token":      "",
+  "timeout":    120,
+  "verify_ssl": true,
+  "ca_cert":    null
 }
 ```
+
+**`files/executor/config.json`** — read by the executor machine's own HTTP server (`executor/server.py`):
+```json
+{
+  "host":  "0.0.0.0",
+  "port":  8001,
+  "token": ""
+}
+```
+`allowed_remote_tools` lives in `orchestrator/connection_config.json` (above) — the executor itself doesn't filter by tool name, since the orchestrator has already checked the allowlist before forwarding.
 
 ### Token persistence (client server)
 

@@ -18,18 +18,12 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
-try:
-    from executor.api.qemu_config import (  # noqa: E402
-        _MC, OVMF, check_profile_compatibility,
-        check_system_capabilities, get_all_profiles, list_profiles,
-    )
-except ImportError:
-    _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
-    OVMF = {"available": False, "code": "", "vars": ""}
-    def list_profiles(): return []                                            # type: ignore[misc]
-    def get_all_profiles(): return {}                                         # type: ignore[misc]
-    def check_profile_compatibility(*a, **kw): return {"compatible": True, "issues": [], "warnings": []}  # type: ignore[misc]
-    def check_system_capabilities(): return {}                                # type: ignore[misc]
+_MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
+from orchestrator.executor_client import (  # noqa: E402
+    get_ovmf as _get_ovmf, get_profiles as list_profiles,
+    get_all_profiles, get_capabilities as check_system_capabilities,
+    check_profile_compatibility,
+)
 from .session import (
     AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session,
     save_session, set_auto_clear, set_loop_max, get_loop_max,
@@ -39,7 +33,9 @@ from shared.display import (
     print_banner, render_compat, render_monitor, render_profiles,
     render_snapshots, render_status, render_system, render_vm_list, render_vm_specs,
 )
-from executor.fingerprint import tf_report
+def tf_report(vm_name: str) -> None:
+    result = execute_tool("fingerprint_vm", {"name": vm_name})
+    console.print(result.get("report") or result.get("error") or result)
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots
 from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
@@ -66,7 +62,12 @@ _SHARED_API_CFG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "executor", "api", "config.json",
 )
-_SHARED_API_CFG  = json.load(open(_SHARED_API_CFG_PATH))
+try:
+    # executor/api/config.json is absent on an orchestrator-only checkout
+    # (files/executor/ isn't part of that sparse checkout) — fall back to defaults.
+    _SHARED_API_CFG = json.load(open(_SHARED_API_CFG_PATH))
+except (FileNotFoundError, json.JSONDecodeError):
+    _SHARED_API_CFG = {}
 _QEMU_HOST_IP    = _SHARED_API_CFG.get("qemu_user_net_gateway", "10.0.2.2")
 _IO_CHUNK        = _SHARED_API_CFG.get("io_chunk_bytes", 4 * 1024 * 1024)
 
@@ -563,8 +564,8 @@ def chat_loop(verbose: bool = False):
         verbose=verbose,
         ollama_url=OLLAMA_URL,
         ollama_model=OLLAMA_MODEL,
-        ovmf_available=OVMF["available"],
-        ovmf_code=OVMF.get("code", ""),
+        ovmf_available=_get_ovmf().get("available", False),
+        ovmf_code=_get_ovmf().get("code", ""),
         api_url=API_URL,
     )
     if AUTO_CLEAR_SESSION:
@@ -1472,7 +1473,7 @@ def cli_direct(args: List[str], verbose: bool = False):
 
     elif cmd == "system":
         caps = check_system_capabilities()
-        caps["ovmf_paths"] = OVMF
+        caps["ovmf_paths"] = _get_ovmf()
         render_system(caps)
 
     elif cmd == "isos":

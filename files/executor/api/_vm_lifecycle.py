@@ -10,7 +10,7 @@ import subprocess
 import uuid as _uuid
 from typing import Any, Dict, List
 
-from ._vm_constants import _MACOS_OVMF, _WIN_OVMF, VM_BASE_DIR
+from ._vm_constants import _MACOS_OVMF, _WIN_OVMF, VM_BASE_DIR, infer_os_name
 from .qemu_config import DiskConfig, MachineConfig, NetworkConfig, OVMF, apply_os_hints
 from .qemu_arg_builder import SPICE_PORT_START, VNC_PORT_START, next_free_port, build_iso_search_dirs
 
@@ -168,6 +168,10 @@ class _VmLifecycleMixin:
             if matches and matches[0]["match_score"] > 0:
                 config.iso_path   = matches[0]["path"]
                 config.boot_order = "dc"
+
+        # Infer os_name from ISO filename when not explicitly provided
+        if config.iso_path and not config.os_name:
+            config.os_name = infer_os_name(config.iso_path, config.os_type)
 
         config.save()
         _iso_basename = os.path.basename(config.iso_path) if config.iso_path else ""

@@ -19,7 +19,8 @@
     "disk_size_gb": 60,
     "disk_format": "qcow2",
     "network_mode": "nat",
-    "bridge": "virbr0"
+    "bridge": "virbr0",
+    "stealth_slirp_subnet": "192.168.1.0/24"
   },
   "tool_defaults": {
     "snap_name": "snap1",

@@ -153,6 +153,51 @@ else
     ok "$ORC_CFG already exists — skipping"
 fi
 
+header "Executor Connection"
+echo ""
+echo "  This orchestrator needs to know how to reach the executor machine's"
+echo "  QEMU engine (executor/server.py, uvicorn on port 8001 by default)."
+echo ""
+
+if [[ -n "${EXECUTOR_URL:-}" ]]; then
+    EXEC_URL="$EXECUTOR_URL"
+    ok "Using EXECUTOR_URL from environment: $EXEC_URL"
+else
+    read -r -p "  Executor URL (e.g. http://192.168.1.20:8001, blank to skip for now): " EXEC_URL
+fi
+
+if [[ -n "${EXECUTOR_TOKEN:-}" ]]; then
+    EXEC_TOKEN="$EXECUTOR_TOKEN"
+    ok "Using EXECUTOR_TOKEN from environment"
+elif [[ -n "$EXEC_URL" ]]; then
+    echo "  This must match the token shown at the end of install_executor.sh"
+    echo "  (saved on the executor machine at ~/.qemu-api-executor.token)."
+    read -r -p "  Executor token: " EXEC_TOKEN
+else
+    EXEC_TOKEN=""
+fi
+
+if [[ -n "$EXEC_URL" ]]; then
+    python3 -c "
+import json, sys
+path, url, token = sys.argv[1], sys.argv[2], sys.argv[3]
+c = json.load(open(path))
+c['url'] = url
+c['token'] = token
+json.dump(c, open(path, 'w'), indent=2)
+" "$ORC_CFG" "$EXEC_URL" "$EXEC_TOKEN"
+    ok "Wrote executor url + token to $ORC_CFG"
+    if [[ -z "$EXEC_TOKEN" ]]; then
+        warn "No executor token set — orchestrator→executor calls will be rejected (401)."
+        warn "Set it later: edit \"token\" in $ORC_CFG"
+    fi
+else
+    warn "Skipped — $ORC_CFG still has \"url\": \"local\" (works only if executor/ is also installed on this machine)."
+    warn "Before running in split mode, edit $ORC_CFG and set:"
+    warn "  \"url\":   \"http://<executor-host>:8001\""
+    warn "  \"token\": \"<token from install_executor.sh>\""
+fi
+
 AI_CFG="$FILES_DIR/orchestrator/ai/config.json"
 if [[ -f "$AI_CFG" ]]; then
     python3 -c "
@@ -177,7 +222,8 @@ elif [[ -f "$TOKEN_FILE" ]]; then
     ok "Using existing token from $TOKEN_FILE"
 else
     echo ""
-    echo "  The API token is shared with clients and the executor. Press Enter to auto-generate:"
+    echo "  This is the token clients use to authenticate to this orchestrator"
+    echo "  (separate from the executor's own token, configured above). Press Enter to auto-generate:"
     read -r -p "  API token: " INPUT_TOKEN
     if [[ -z "$INPUT_TOKEN" ]]; then
         TOKEN="$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")"
@@ -223,10 +269,10 @@ source "$VENV_DIR/bin/activate"
 export PATH="\$HOME/.local/bin:\$PATH"
 alias qemu-api-serve='$START_SCRIPT'
 alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
-alias qemu-api-admin='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/orchestrator/admin_tui.py'
 # qemu-api orchestrator end
 SHELLEOF
 ok "Added aliases to $SHELL_RC"
+info "For the admin dashboard, run: bash files/complementary/install_admin.sh"
 
 header "Systemd Service"
 if [[ "$IS_WSL" == false ]]; then
@@ -270,11 +316,18 @@ echo -e "${BOLD}${GREEN}╔═════════════════�
 echo -e "${BOLD}${GREEN}║   Orchestrator setup complete!               ║${RESET}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
-echo -e "  API_TOKEN  = ${BOLD}$TOKEN${RESET}"
+echo -e "  API_TOKEN  = ${BOLD}$TOKEN${RESET}  (client-facing — give this to setup_client.sh)"
 echo -e "  Local IP   = ${BOLD}$LOCAL_IP${RESET}"
 echo -e "  HTTP API   = ${BOLD}http://$LOCAL_IP:8080${RESET}"
+if [[ -n "$EXEC_URL" ]]; then
+    echo -e "  Executor   = ${BOLD}$EXEC_URL${RESET} (configured)"
+else
+    echo -e "  Executor   = ${YELLOW}not configured yet${RESET} — edit $ORC_CFG once install_executor.sh has run"
+fi
 echo ""
 echo -e "  Next: on the executor machine run ${BOLD}install_executor.sh${RESET}"
-echo -e "  Then: point clients at ${BOLD}http://$LOCAL_IP:8080${RESET} with the same token"
+echo -e "  Then: point clients at ${BOLD}http://$LOCAL_IP:8080${RESET} with the API_TOKEN above"
+echo -e "  ${YELLOW}Note:${RESET} the client token and the executor token are separate secrets —"
+echo -e "  the client token above is NOT the same as the executor's own token."
 echo -e "  Reload shell: ${BOLD}source $SHELL_RC${RESET}"
 echo ""

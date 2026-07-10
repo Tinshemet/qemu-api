@@ -1,39 +1,64 @@
 {
   "dirs": {
-    "vm_base":     "~/.qemu_vms",
-    "profiles":    "~/.qemu_vms/_profiles",
+    "vm_base": "~/.qemu_vms",
+    "profiles": "~/.qemu_vms/_profiles",
     "isolated_net": "_networks",
-    "state_file":  ".state.json"
+    "state_file": ".state.json"
   },
   "network": {
     "mcast_addr": "230.0.0.1",
     "start_port": 1234
   },
   "ports": {
-    "vnc_start":         5900,
-    "spice_start":       5930,
-    "port_range":        50,
-    "qmp_port_start":    9000,
+    "vnc_start": 5900,
+    "spice_start": 5930,
+    "port_range": 50,
+    "qmp_port_start": 9000,
     "monitor_port_start": 9100,
     "serial_port_start": 9200
   },
   "timeouts": {
-    "qemu_version":    5,
-    "qmp_connect":     5,
-    "gl_check":        3,
-    "stop_graceful":   30,
+    "qemu_version": 5,
+    "qmp_connect": 5,
+    "gl_check": 3,
+    "stop_graceful": 30,
     "cpu_pinning_delay": 1,
-    "monitor_recv_sleep": 0.3
+    "monitor_recv_sleep": 0.3,
+    "launch_liveness_check": 0.3,
+    "unattended_boot_keys": 25
   },
   "buffers": {
-    "qmp":          4096,
+    "qmp": 4096,
     "monitor_recv": 8192,
     "monitor_send": 4096
   },
-  "iso_desktop_subdirs": ["images", "iso", "isos", "vms", "vm"],
-  "iso_home_subdirs":    ["Downloads", "downloads", "Desktop", "iso", "ISO", "ISOs", "isos",
-                          "images", "Images", "vm", "VMs", "Documents"],
-  "iso_mount_roots":     ["/media", "/mnt", "/run/media", "/Volumes"],
+  "iso_desktop_subdirs": [
+    "images",
+    "iso",
+    "isos",
+    "vms",
+    "vm"
+  ],
+  "iso_home_subdirs": [
+    "Downloads",
+    "downloads",
+    "Desktop",
+    "iso",
+    "ISO",
+    "ISOs",
+    "isos",
+    "images",
+    "Images",
+    "vm",
+    "VMs",
+    "Documents"
+  ],
+  "iso_mount_roots": [
+    "/media",
+    "/mnt",
+    "/run/media",
+    "/Volumes"
+  ],
   "ovmf_search_paths": [
     "/usr/share/OVMF/OVMF_CODE.fd",
     "/usr/share/OVMF/OVMF_CODE_4M.fd",
@@ -79,102 +104,125 @@
     "C:/Program Files/qemu/share/edk2-x86_64-secure-vars.fd"
   ],
   "machine_types": {
-    "pc":      "i440FX + PIIX (legacy BIOS)",
-    "q35":     "Q35 + ICH9 (modern, PCIe, recommended)",
+    "pc": "i440FX + PIIX (legacy BIOS)",
+    "q35": "Q35 + ICH9 (modern, PCIe, recommended)",
     "microvm": "Minimal microvm (containers/cloud)",
-    "virt":    "ARM virt platform (aarch64)"
+    "virt": "ARM virt platform (aarch64)"
   },
   "cpu_presets": {
-    "host":        "-cpu host",
-    "kvm64":       "-cpu kvm64",
-    "Haswell":     "-cpu Haswell,+avx2",
-    "Broadwell":   "-cpu Broadwell,+avx2",
+    "host": "-cpu host",
+    "kvm64": "-cpu kvm64",
+    "Haswell": "-cpu Haswell,+avx2",
+    "Broadwell": "-cpu Broadwell,+avx2",
     "SandyBridge": "-cpu SandyBridge",
-    "Skylake":     "-cpu Skylake-Client,+avx512f",
-    "IceLake":     "-cpu Icelake-Client,+avx512f",
-    "EPYC":        "-cpu EPYC",
-    "Opteron_G5":  "-cpu Opteron_G5",
-    "cortex-a72":  "-cpu cortex-a72",
-    "cortex-a53":  "-cpu cortex-a53"
+    "Skylake": "-cpu Skylake-Client,+avx512f",
+    "IceLake": "-cpu Icelake-Client,+avx512f",
+    "EPYC": "-cpu EPYC",
+    "Opteron_G5": "-cpu Opteron_G5",
+    "cortex-a72": "-cpu cortex-a72",
+    "cortex-a53": "-cpu cortex-a53"
   },
   "gpu_presets": {
     "virtio": "virtio-vga-gl",
-    "qxl":    "qxl-vga",
-    "vga":    "VGA",
+    "qxl": "qxl-vga",
+    "vga": "VGA",
     "vmware": "vmware-svga",
-    "none":   null,
+    "none": null,
     "gt1030": "vfio-pci"
   },
   "audio_presets": {
     "none": null,
     "ac97": "ac97",
-    "hda":  "intel-hda",
+    "hda": "intel-hda",
     "ich9": "ich9-intel-hda",
-    "usb":  "usb-audio"
+    "usb": "usb-audio"
   },
-  "network_models": ["virtio-net-pci", "e1000", "e1000e", "rtl8139", "vmxnet3"],
+  "network_models": [
+    "virtio-net-pci",
+    "e1000",
+    "e1000e",
+    "rtl8139",
+    "vmxnet3"
+  ],
   "disk_config_defaults": {
-    "size_gb":  60,
-    "format":   "qcow2",
-    "bus":      "virtio",
-    "cache":    "writeback",
-    "discard":  true,
-    "ssd":      false,
-    "boot":     false
+    "size_gb": 60,
+    "format": "qcow2",
+    "bus": "virtio",
+    "cache": "writeback",
+    "discard": true,
+    "ssd": false,
+    "boot": false
   },
   "network_config_defaults": {
-    "mode":   "nat",
-    "model":  "e1000e",
+    "mode": "nat",
+    "model": "e1000e",
     "bridge": "virbr0"
   },
   "machine_config_defaults": {
-    "name":             "vm-default",
-    "hostname":         "localhost",
-    "machine_class":    "desktop",
-    "machine_type":     "q35",
-    "bios":             "ovmf",
-    "uefi":             true,
-    "cpu_model":        "host",
-    "cpu_cores":        4,
-    "cpu_threads":      2,
-    "cpu_sockets":      1,
-    "kvm":              true,
-    "memory_mb":        8192,
-    "hugepages":        false,
-    "balloon":          true,
-    "gpu":              "virtio",
-    "display":          "sdl",
-    "opengl":           true,
-    "resolution":       "1920x1080",
-    "audio":            "hda",
-    "os_type":          "linux",
-    "boot_order":       "cd",
-    "smbios_type":      "",
-    "product_name":     "",
-    "manufacturer":     "",
-    "serial_number":    "",
-    "board_product":    "",
-    "bios_version":     "",
-    "bios_vendor":      "",
-    "kernel_cmdline":   "",
-    "battery":          false,
-    "tablet":           true,
-    "iommu":            false,
-    "nested_virt":      false,
-    "hpet":             false,
-    "rtc_clock":        "host",
+    "name": "vm-default",
+    "hostname": "localhost",
+    "machine_class": "desktop",
+    "machine_type": "q35",
+    "bios": "ovmf",
+    "uefi": true,
+    "cpu_model": "host",
+    "cpu_cores": 4,
+    "cpu_threads": 2,
+    "cpu_sockets": 1,
+    "kvm": true,
+    "memory_mb": 8192,
+    "hugepages": false,
+    "balloon": true,
+    "gpu": "virtio",
+    "display": "sdl",
+    "opengl": true,
+    "resolution": "1920x1080",
+    "audio": "hda",
+    "os_type": "linux",
+    "boot_order": "cd",
+    "smbios_type": "",
+    "product_name": "",
+    "manufacturer": "",
+    "serial_number": "",
+    "board_product": "",
+    "bios_version": "",
+    "bios_vendor": "",
+    "kernel_cmdline": "",
+    "battery": false,
+    "tablet": true,
+    "iommu": false,
+    "nested_virt": false,
+    "hpet": false,
+    "rtc_clock": "host",
     "rtc_base_fallback": "utc",
-    "tsc_deadline":     true,
-    "kvm_pv_features":  true,
-    "hugepages_path":   "/dev/hugepages",
-    "qemu_binary":      "qemu-system-x86_64",
-    "machine_arch":     "x86_64",
-    "hardened":         false,
-    "stealth":          false,
-    "tpm":              false
+    "tsc_deadline": true,
+    "kvm_pv_features": true,
+    "hugepages_path": "/dev/hugepages",
+    "qemu_binary": "qemu-system-x86_64",
+    "machine_arch": "x86_64",
+    "hardened": false,
+    "stealth": false,
+    "tpm": false
   },
   "log_default_lines": 50,
-  "valid_machine_types": ["q35", "pc", "pc-i440fx", "microvm", "virt", "raspi3b", "raspi2b", "raspi0"],
+  "unattended_windows": {
+    "username": "user",
+    "password": "Passw0rd!",
+    "organization": "",
+    "locale": "en-US",
+    "product_key": "W269N-WFGWX-YVC9B-4J6C9-T83GX",
+    "autologon": true
+  },
+  "valid_machine_types": [
+    "q35",
+    "pc",
+    "pc-i440fx",
+    "microvm",
+    "virt",
+    "raspi3b",
+    "raspi2b",
+    "raspi0"
+  ],
   "ovmf_macos_vars_paths": [
     "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
     "/usr/local/share/qemu/edk2-x86_64-vars.fd"
@@ -184,184 +232,1011 @@
     "C:/Program Files (x86)/QEMU/share/edk2-x86_64-vars.fd"
   ],
   "linux_distros": [
-    "ubuntu", "debian", "fedora", "mint", "linuxmint", "arch", "manjaro",
-    "opensuse", "suse", "kali", "parrot", "tails", "centos", "rocky", "alma",
-    "pop", "elementary", "zorin", "rhel", "void", "gentoo", "slackware",
-    "deepin", "mx", "antiX", "antix"
+    "ubuntu",
+    "debian",
+    "fedora",
+    "mint",
+    "linuxmint",
+    "arch",
+    "manjaro",
+    "opensuse",
+    "suse",
+    "kali",
+    "parrot",
+    "tails",
+    "centos",
+    "rocky",
+    "alma",
+    "pop",
+    "elementary",
+    "zorin",
+    "rhel",
+    "void",
+    "gentoo",
+    "slackware",
+    "deepin",
+    "mx",
+    "antiX",
+    "antix"
   ],
-  "generic_os_names": ["linux", "windows", "macos", "other", ""],
+  "generic_os_names": [
+    "linux",
+    "windows",
+    "macos",
+    "other",
+    ""
+  ],
   "update_allowed_fields": [
-    "memory_mb", "cpu_cores", "cpu_threads", "cpu_model", "cpu_features",
-    "display", "audio", "kvm", "iommu", "balloon", "hugepages",
-    "machine_type", "machine_arch", "rtc_clock", "hpet", "kvm_pv_features",
-    "manufacturer", "product_name", "serial_number", "bios_vendor", "bios_version",
-    "hostname", "os_type", "os_name", "hardened", "stealth", "tpm",
-    "extra_args", "vnc_port", "spice_port", "vnc_bind_local",
-    "battery", "board_product", "chassis_type", "description",
-    "uefi", "bios", "iso_path", "disk_bus", "network_mode", "bridge_iface",
-    "mac_address", "vnc_password", "cpu_pinning", "cpu_smt"
+    "memory_mb",
+    "cpu_cores",
+    "cpu_threads",
+    "cpu_model",
+    "cpu_features",
+    "display",
+    "audio",
+    "kvm",
+    "iommu",
+    "balloon",
+    "hugepages",
+    "machine_type",
+    "machine_arch",
+    "rtc_clock",
+    "hpet",
+    "kvm_pv_features",
+    "manufacturer",
+    "product_name",
+    "serial_number",
+    "bios_vendor",
+    "bios_version",
+    "hostname",
+    "os_type",
+    "os_name",
+    "hardened",
+    "stealth",
+    "tpm",
+    "extra_args",
+    "vnc_port",
+    "spice_port",
+    "vnc_bind_local",
+    "battery",
+    "board_product",
+    "chassis_type",
+    "description",
+    "uefi",
+    "bios",
+    "iso_path",
+    "disk_bus",
+    "network_mode",
+    "bridge_iface",
+    "mac_address",
+    "vnc_password",
+    "cpu_pinning",
+    "cpu_smt"
   ],
   "monitor_allowed_cmds": [
-    "info ", "system_powerdown", "system_reset", "system_wakeup",
-    "screendump ", "savevm ", "loadvm ", "delvm ",
-    "device_add ", "device_del ",
-    "balloon ", "migrate_cancel", "stop", "cont",
-    "qmp_capabilities", "change ", "eject "
+    "info ",
+    "system_powerdown",
+    "system_reset",
+    "system_wakeup",
+    "screendump ",
+    "savevm ",
+    "loadvm ",
+    "delvm ",
+    "device_add ",
+    "device_del ",
+    "balloon ",
+    "migrate_cancel",
+    "stop",
+    "cont",
+    "qmp_capabilities",
+    "change ",
+    "eject "
   ],
   "log_error_patterns": [
-    ["qemu: could not load",        "Boot image or kernel file not found"],
-    ["no bootable device",           "No bootable disk — check ISO/disk image path"],
-    ["failed to open",               "Could not open a file — check paths in config"],
-    ["permission denied",            "Permission denied — check file permissions"],
-    ["address already in use",       "Port conflict — VNC/SPICE port already in use"],
-    ["kvm: permission denied",       "KVM permission denied — run: sudo usermod -aG kvm $USER"],
-    ["kvm: no such file",            "KVM not available — check BIOS VT-x/AMD-V setting"],
-    ["could not initialize kvm",     "KVM init failed — may conflict with another hypervisor"],
-    ["unsupported machine type",     "Invalid machine type for this QEMU binary"],
-    ["invalid accelerator",          "Accelerator not supported — KVM on wrong arch"],
-    ["accel=kvm not supported",      "KVM not supported for this guest architecture"],
-    ["cannot set up guest memory",   "Not enough RAM — reduce memory_mb or free host RAM"],
-    ["hugepages",                    "Hugepages not allocated — run: sudo sysctl vm.nr_hugepages=2048"],
-    ["no such file or directory",    "A required file is missing — check disk/ISO/firmware paths"],
-    ["invalid parameter",            "Invalid QEMU argument — check machine type and CPU flags"],
-    ["unknown cpu model",            "CPU model not supported by this QEMU version"],
-    ["pflash",                       "OVMF/UEFI firmware file not found or wrong format"],
-    ["virtio",                       "Virtio device error — may be incompatible with machine type"],
-    ["sdl_init failed",              "SDL display init failed — check DISPLAY env var"],
-    ["gtk_init_check failed",        "GTK display init failed — check DISPLAY env var"],
-    ["socket",                       "Socket error — another instance may be running"],
-    ["address family not supported", "Network config error — check bridge/network settings"],
-    ["tap: failed to connect",       "TAP network error — bridge may not exist"],
-    ["if=sd",                        "SD card interface error — check disk image format"],
-    ["raspi",                        "Raspberry Pi machine error — needs kernel8.img + dtb file"],
-    ["arm",                          "ARM machine error — check qemu-system-aarch64 is installed"],
-    ["out of memory",                "Host is out of memory — reduce VM memory_mb"],
-    ["segfault",                     "QEMU crashed (segfault) — try updating qemu-system"],
-    ["aborted",                      "QEMU aborted — likely an incompatible argument combination"]
+    [
+      "qemu: could not load",
+      "Boot image or kernel file not found"
+    ],
+    [
+      "no bootable device",
+      "No bootable disk — check ISO/disk image path"
+    ],
+    [
+      "failed to open",
+      "Could not open a file — check paths in config"
+    ],
+    [
+      "permission denied",
+      "Permission denied — check file permissions"
+    ],
+    [
+      "address already in use",
+      "Port conflict — VNC/SPICE port already in use"
+    ],
+    [
+      "kvm: permission denied",
+      "KVM permission denied — run: sudo usermod -aG kvm $USER"
+    ],
+    [
+      "kvm: no such file",
+      "KVM not available — check BIOS VT-x/AMD-V setting"
+    ],
+    [
+      "could not initialize kvm",
+      "KVM init failed — may conflict with another hypervisor"
+    ],
+    [
+      "unsupported machine type",
+      "Invalid machine type for this QEMU binary"
+    ],
+    [
+      "invalid accelerator",
+      "Accelerator not supported — KVM on wrong arch"
+    ],
+    [
+      "accel=kvm not supported",
+      "KVM not supported for this guest architecture"
+    ],
+    [
+      "cannot set up guest memory",
+      "Not enough RAM — reduce memory_mb or free host RAM"
+    ],
+    [
+      "hugepages",
+      "Hugepages not allocated — run: sudo sysctl vm.nr_hugepages=2048"
+    ],
+    [
+      "no such file or directory",
+      "A required file is missing — check disk/ISO/firmware paths"
+    ],
+    [
+      "invalid parameter",
+      "Invalid QEMU argument — check machine type and CPU flags"
+    ],
+    [
+      "unknown cpu model",
+      "CPU model not supported by this QEMU version"
+    ],
+    [
+      "pflash",
+      "OVMF/UEFI firmware file not found or wrong format"
+    ],
+    [
+      "virtio",
+      "Virtio device error — may be incompatible with machine type"
+    ],
+    [
+      "sdl_init failed",
+      "SDL display init failed — check DISPLAY env var"
+    ],
+    [
+      "gtk_init_check failed",
+      "GTK display init failed — check DISPLAY env var"
+    ],
+    [
+      "socket",
+      "Socket error — another instance may be running"
+    ],
+    [
+      "address family not supported",
+      "Network config error — check bridge/network settings"
+    ],
+    [
+      "tap: failed to connect",
+      "TAP network error — bridge may not exist"
+    ],
+    [
+      "if=sd",
+      "SD card interface error — check disk image format"
+    ],
+    [
+      "raspi",
+      "Raspberry Pi machine error — needs kernel8.img + dtb file"
+    ],
+    [
+      "arm",
+      "ARM machine error — check qemu-system-aarch64 is installed"
+    ],
+    [
+      "out of memory",
+      "Host is out of memory — reduce VM memory_mb"
+    ],
+    [
+      "segfault",
+      "QEMU crashed (segfault) — try updating qemu-system"
+    ],
+    [
+      "aborted",
+      "QEMU aborted — likely an incompatible argument combination"
+    ]
   ],
   "compatibility_thresholds": {
-    "memory_ratio":    0.8,
+    "memory_ratio": 0.8,
     "min_disk_free_gb": 20
   },
-  "local_only_displays": ["sdl", "gtk"],
+  "local_only_displays": [
+    "sdl",
+    "gtk"
+  ],
   "min_token_length": 16,
   "qemu_user_net_gateway": "10.0.2.2",
   "io_chunk_bytes": 4194304,
-  "vnc_viewer_candidates": ["vncviewer", "tigervncviewer", "xtigervncviewer", "gvncviewer", "vinagre"],
+  "vnc_viewer_candidates": [
+    "vncviewer",
+    "tigervncviewer",
+    "xtigervncviewer",
+    "gvncviewer",
+    "vinagre"
+  ],
   "smbios_chassis_type_map": {
-    "notebook": 9, "laptop": 9, "portable": 8,
-    "desktop": 3, "server": 17, "tower": 7, "tablet": 30
+    "notebook": 9,
+    "laptop": 9,
+    "portable": 8,
+    "desktop": 3,
+    "server": 17,
+    "tower": 7,
+    "tablet": 30
   },
   "cdrom_model": "HL-DT-ST DVDRAM GU90N",
   "audio_socket_globs": {
     "pulse_unix": "/run/user/*/pulse/native",
-    "pulse_tmp":  "pulse-*/native",
-    "pipewire":   "/run/user/*/pipewire-0"
+    "pulse_tmp": "pulse-*/native",
+    "pipewire": "/run/user/*/pipewire-0"
   },
   "stealth": {
     "webgl_renderer": "Intel(R) Iris(R) Xe Graphics",
-    "webgl_vendor":   "Intel"
+    "webgl_vendor": "Intel"
   },
   "os_cpu_features": {
     "windows": [
-      "hv_relaxed", "hv_spinlocks=0x1fff", "hv_vapic",
-      "hv_time", "hv_vendor_id=GenuineIntel",
-      "hv_synic", "hv_stimer", "hv_vpindex"
+      "hv_relaxed",
+      "hv_spinlocks=0x1fff",
+      "hv_vapic",
+      "hv_time",
+      "hv_vendor_id=GenuineIntel",
+      "hv_synic",
+      "hv_stimer",
+      "hv_vpindex"
     ],
-    "macos": ["-hypervisor", "+invtsc", "vendor=GenuineIntel"]
+    "macos": [
+      "-hypervisor",
+      "+invtsc",
+      "vendor=GenuineIntel"
+    ]
   },
   "vendor_oui_map": {
-    "intel":    ["00:1B:21","10:02:B5","18:66:DA","28:D2:44","2C:44:FD","3C:FD:FE","40:A3:6B","48:51:B7","54:BF:64","60:57:18","70:85:C2","74:D0:2B","78:2B:CB","8C:8D:28","90:E2:BA","A0:36:9F","B0:83:FE","C8:5B:76","E4:B9:7A","F0:1F:AF"],
-    "hp":       ["00:1A:2B","00:17:A4","00:1C:C4","1C:1B:0D","38:EA:A7","3C:D9:2B","98:4B:E1","98:E7:F4","C4:34:6B","D0:BF:9C"],
-    "hewlett":  ["00:1A:2B","00:17:A4","00:1C:C4","1C:1B:0D","38:EA:A7","3C:D9:2B","98:4B:E1","98:E7:F4","C4:34:6B","D0:BF:9C"],
-    "dell":     ["00:14:22","00:15:C5","00:1A:A0","00:21:70","14:18:77","18:03:73","18:60:24","34:17:EB","44:A8:42","B8:AC:6F","F8:DB:88","F8:BC:12","00:22:19"],
-    "lenovo":   ["00:23:AE","04:7D:7B","28:D2:44","40:74:E0","54:EE:75","70:5A:0F","88:70:8C","98:FA:9B","C8:D3:FF","E8:6A:64"],
-    "thinkpad": ["00:23:AE","04:7D:7B","54:EE:75","88:70:8C","98:FA:9B","C8:D3:FF","E8:6A:64"],
-    "asus":     ["00:26:18","04:42:1A","10:BF:48","2C:FD:A1","70:8B:CD","BC:EE:7B","C8:60:00","E0:3F:49","F8:32:E4"],
-    "acer":     ["00:1E:68","40:B0:34","A4:C3:F0","E4:D5:3D","74:29:AF","6C:88:14","00:27:10"],
-    "toshiba":  ["00:00:39","00:1C:7E","98:4F:EE","D0:DF:9A","00:0C:F1","00:1C:BE","98:FD:B4"],
-    "samsung":  ["00:12:FB","00:15:B9","00:1A:8A","00:26:37","50:85:69","8C:71:F8","CC:07:AB","F4:42:8F","00:21:D1"],
-    "apple":    ["00:1C:B3","00:25:BC","28:CF:E9","3C:07:54","68:5B:35","A4:83:E7","AC:BC:32","F0:18:98","8C:85:90","D4:61:9D"],
-    "sony":     ["00:01:4A","00:13:A9","00:1D:BA","00:24:BE","30:17:C8","58:48:22","A8:26:D9"],
-    "vaio":     ["00:01:4A","00:13:A9","00:1D:BA","00:24:BE","58:48:22"],
-    "msi":      ["00:D8:61","A4:C3:F0","C0:25:A5","00:26:6C","7C:8B:CA"],
-    "micro-star":["00:D8:61","C0:25:A5","00:26:6C","7C:8B:CA"],
-    "gigabyte": ["00:1A:4B","1C:AF:F7","C8:9C:DC","50:46:5D","68:1D:EF"],
-    "giga-byte":["00:1A:4B","1C:AF:F7","C8:9C:DC","50:46:5D","68:1D:EF"],
-    "fujitsu":  ["00:26:FB","28:09:86","38:90:A5","90:1B:0E","00:00:49"],
-    "panasonic":["00:00:DA","00:0B:BF","00:14:C2","00:80:45","18:E7:F4"],
-    "toughbook":["00:00:DA","00:0B:BF","00:14:C2","18:E7:F4"],
-    "lg":       ["00:1E:75","00:24:E8","00:26:E2","C8:08:73","CC:FA:00"],
-    "huawei":   ["00:18:82","00:46:4B","28:6E:D4","40:4D:8E","54:89:98","70:72:3C","AC:E2:D3","C4:07:2F"],
-    "microsoft":["00:03:FF","28:18:78","7C:ED:8D","00:15:5D","60:45:BD"],
-    "surface":  ["00:03:FF","28:18:78","7C:ED:8D"],
-    "razer":    ["00:1D:0F","7C:83:34","D0:73:D5","1C:75:08"],
-    "nec":      ["00:00:4C","00:0B:38","00:22:97","A4:1F:72"],
-    "clevo":    ["00:23:8B","00:26:2D","54:04:A6"],
-    "sager":    ["00:23:8B","00:26:2D","54:04:A6"],
-    "realtek":  ["00:E0:4C","00:13:46","4C:79:6E","D0:50:99","E0:CB:4E"],
-    "broadcom": ["00:10:18","00:16:CF","00:90:4C","BC:30:5B","00:1A:73"],
-    "qualcomm": ["00:02:A5","00:03:7F","00:1D:E0","00:23:14","00:26:58","4C:BC:A5","5C:93:A2"],
-    "atheros":  ["00:03:7F","00:1D:E0","00:23:14","00:26:58","4C:BC:A5"],
-    "xiaomi":   ["00:9E:C8","28:6C:07","34:CE:00","64:09:80","F4:8B:32"],
-    "honor":    ["00:1E:42","04:25:C5","28:D1:27","5C:C3:07"],
-    "medion":   ["00:0C:6E","44:87:FC","C0:25:A5"],
-    "packard bell":["40:B0:34","00:1E:68","A4:C3:F0"],
-    "gateway":  ["00:1B:9E","00:24:54","00:25:64"]
+    "intel": [
+      "00:1B:21",
+      "10:02:B5",
+      "18:66:DA",
+      "28:D2:44",
+      "2C:44:FD",
+      "3C:FD:FE",
+      "40:A3:6B",
+      "48:51:B7",
+      "54:BF:64",
+      "60:57:18",
+      "70:85:C2",
+      "74:D0:2B",
+      "78:2B:CB",
+      "8C:8D:28",
+      "90:E2:BA",
+      "A0:36:9F",
+      "B0:83:FE",
+      "C8:5B:76",
+      "E4:B9:7A",
+      "F0:1F:AF"
+    ],
+    "hp": [
+      "00:1A:2B",
+      "00:17:A4",
+      "00:1C:C4",
+      "1C:1B:0D",
+      "38:EA:A7",
+      "3C:D9:2B",
+      "98:4B:E1",
+      "98:E7:F4",
+      "C4:34:6B",
+      "D0:BF:9C"
+    ],
+    "hewlett": [
+      "00:1A:2B",
+      "00:17:A4",
+      "00:1C:C4",
+      "1C:1B:0D",
+      "38:EA:A7",
+      "3C:D9:2B",
+      "98:4B:E1",
+      "98:E7:F4",
+      "C4:34:6B",
+      "D0:BF:9C"
+    ],
+    "dell": [
+      "00:14:22",
+      "00:15:C5",
+      "00:1A:A0",
+      "00:21:70",
+      "14:18:77",
+      "18:03:73",
+      "18:60:24",
+      "34:17:EB",
+      "44:A8:42",
+      "B8:AC:6F",
+      "F8:DB:88",
+      "F8:BC:12",
+      "00:22:19"
+    ],
+    "lenovo": [
+      "00:23:AE",
+      "04:7D:7B",
+      "28:D2:44",
+      "40:74:E0",
+      "54:EE:75",
+      "70:5A:0F",
+      "88:70:8C",
+      "98:FA:9B",
+      "C8:D3:FF",
+      "E8:6A:64"
+    ],
+    "thinkpad": [
+      "00:23:AE",
+      "04:7D:7B",
+      "54:EE:75",
+      "88:70:8C",
+      "98:FA:9B",
+      "C8:D3:FF",
+      "E8:6A:64"
+    ],
+    "asus": [
+      "00:26:18",
+      "04:42:1A",
+      "10:BF:48",
+      "2C:FD:A1",
+      "70:8B:CD",
+      "BC:EE:7B",
+      "C8:60:00",
+      "E0:3F:49",
+      "F8:32:E4"
+    ],
+    "acer": [
+      "00:1E:68",
+      "40:B0:34",
+      "A4:C3:F0",
+      "E4:D5:3D",
+      "74:29:AF",
+      "6C:88:14",
+      "00:27:10"
+    ],
+    "toshiba": [
+      "00:00:39",
+      "00:1C:7E",
+      "98:4F:EE",
+      "D0:DF:9A",
+      "00:0C:F1",
+      "00:1C:BE",
+      "98:FD:B4"
+    ],
+    "samsung": [
+      "00:12:FB",
+      "00:15:B9",
+      "00:1A:8A",
+      "00:26:37",
+      "50:85:69",
+      "8C:71:F8",
+      "CC:07:AB",
+      "F4:42:8F",
+      "00:21:D1"
+    ],
+    "hpe": [
+      "3C:D9:2B",
+      "38:63:BB",
+      "80:C1:6E",
+      "94:18:82",
+      "F0:92:1C"
+    ],
+    "supermicro": [
+      "00:25:90",
+      "0C:C4:7A",
+      "3C:EC:EF",
+      "AC:1F:6B"
+    ],
+    "apple": [
+      "00:1C:B3",
+      "00:25:BC",
+      "28:CF:E9",
+      "3C:07:54",
+      "68:5B:35",
+      "A4:83:E7",
+      "AC:BC:32",
+      "F0:18:98",
+      "8C:85:90",
+      "D4:61:9D"
+    ],
+    "sony": [
+      "00:01:4A",
+      "00:13:A9",
+      "00:1D:BA",
+      "00:24:BE",
+      "30:17:C8",
+      "58:48:22",
+      "A8:26:D9"
+    ],
+    "vaio": [
+      "00:01:4A",
+      "00:13:A9",
+      "00:1D:BA",
+      "00:24:BE",
+      "58:48:22"
+    ],
+    "msi": [
+      "00:D8:61",
+      "A4:C3:F0",
+      "C0:25:A5",
+      "00:26:6C",
+      "7C:8B:CA"
+    ],
+    "micro-star": [
+      "00:D8:61",
+      "C0:25:A5",
+      "00:26:6C",
+      "7C:8B:CA"
+    ],
+    "gigabyte": [
+      "00:1A:4B",
+      "1C:AF:F7",
+      "C8:9C:DC",
+      "50:46:5D",
+      "68:1D:EF"
+    ],
+    "giga-byte": [
+      "00:1A:4B",
+      "1C:AF:F7",
+      "C8:9C:DC",
+      "50:46:5D",
+      "68:1D:EF"
+    ],
+    "fujitsu": [
+      "00:26:FB",
+      "28:09:86",
+      "38:90:A5",
+      "90:1B:0E",
+      "00:00:49"
+    ],
+    "panasonic": [
+      "00:00:DA",
+      "00:0B:BF",
+      "00:14:C2",
+      "00:80:45",
+      "18:E7:F4"
+    ],
+    "toughbook": [
+      "00:00:DA",
+      "00:0B:BF",
+      "00:14:C2",
+      "18:E7:F4"
+    ],
+    "lg": [
+      "00:1E:75",
+      "00:24:E8",
+      "00:26:E2",
+      "C8:08:73",
+      "CC:FA:00"
+    ],
+    "huawei": [
+      "00:18:82",
+      "00:46:4B",
+      "28:6E:D4",
+      "40:4D:8E",
+      "54:89:98",
+      "70:72:3C",
+      "AC:E2:D3",
+      "C4:07:2F"
+    ],
+    "microsoft": [
+      "00:03:FF",
+      "28:18:78",
+      "7C:ED:8D",
+      "00:15:5D",
+      "60:45:BD"
+    ],
+    "surface": [
+      "00:03:FF",
+      "28:18:78",
+      "7C:ED:8D"
+    ],
+    "razer": [
+      "00:1D:0F",
+      "7C:83:34",
+      "D0:73:D5",
+      "1C:75:08"
+    ],
+    "nec": [
+      "00:00:4C",
+      "00:0B:38",
+      "00:22:97",
+      "A4:1F:72"
+    ],
+    "clevo": [
+      "00:23:8B",
+      "00:26:2D",
+      "54:04:A6"
+    ],
+    "sager": [
+      "00:23:8B",
+      "00:26:2D",
+      "54:04:A6"
+    ],
+    "realtek": [
+      "00:E0:4C",
+      "00:13:46",
+      "4C:79:6E",
+      "D0:50:99",
+      "E0:CB:4E"
+    ],
+    "broadcom": [
+      "00:10:18",
+      "00:16:CF",
+      "00:90:4C",
+      "BC:30:5B",
+      "00:1A:73"
+    ],
+    "qualcomm": [
+      "00:02:A5",
+      "00:03:7F",
+      "00:1D:E0",
+      "00:23:14",
+      "00:26:58",
+      "4C:BC:A5",
+      "5C:93:A2"
+    ],
+    "atheros": [
+      "00:03:7F",
+      "00:1D:E0",
+      "00:23:14",
+      "00:26:58",
+      "4C:BC:A5"
+    ],
+    "xiaomi": [
+      "00:9E:C8",
+      "28:6C:07",
+      "34:CE:00",
+      "64:09:80",
+      "F4:8B:32"
+    ],
+    "honor": [
+      "00:1E:42",
+      "04:25:C5",
+      "28:D1:27",
+      "5C:C3:07"
+    ],
+    "medion": [
+      "00:0C:6E",
+      "44:87:FC",
+      "C0:25:A5"
+    ],
+    "packard bell": [
+      "40:B0:34",
+      "00:1E:68",
+      "A4:C3:F0"
+    ],
+    "gateway": [
+      "00:1B:9E",
+      "00:24:54",
+      "00:25:64"
+    ]
   },
   "iso_os_keywords": {
-    "windows": ["windows", "win11", "win10", "win"],
-    "linux":   ["linux", "ubuntu", "debian", "fedora", "mint", "arch",
-                "opensuse", "manjaro", "pop", "elementary", "zorin",
-                "kali", "parrot", "tails", "centos", "rocky", "alma"],
-    "macos":   ["macos", "mac", "osx", "darwin", "ventura", "sonoma",
-                "monterey", "sequoia"]
+    "windows": [
+      "windows",
+      "win11",
+      "win10",
+      "win"
+    ],
+    "linux": [
+      "linux",
+      "ubuntu",
+      "debian",
+      "fedora",
+      "mint",
+      "arch",
+      "opensuse",
+      "manjaro",
+      "pop",
+      "elementary",
+      "zorin",
+      "kali",
+      "parrot",
+      "tails",
+      "centos",
+      "rocky",
+      "alma"
+    ],
+    "macos": [
+      "macos",
+      "mac",
+      "osx",
+      "darwin",
+      "ventura",
+      "sonoma",
+      "monterey",
+      "sequoia"
+    ]
   },
-  "iso_arm_markers": ["arm64", "aarch64", "_arm_", "-arm-", "arm_v"],
-  "iso_x86_markers": ["amd64", "x86_64", "x64", "i386", "i686", "64bit", "64-bit"],
+  "iso_arm_markers": [
+    "arm64",
+    "aarch64",
+    "_arm_",
+    "-arm-",
+    "arm_v"
+  ],
+  "iso_x86_markers": [
+    "amd64",
+    "x86_64",
+    "x64",
+    "i386",
+    "i686",
+    "64bit",
+    "64-bit"
+  ],
   "hardware_profiles": {
     "dell_g15_5520": {
-      "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
-      "cpu_model": "host", "cpu_cores": 6, "cpu_threads": 12, "memory_mb": 16384,
-      "gpu": "virtio", "audio": "hda", "battery": true,
-      "manufacturer": "Dell Inc.", "product_name": "G15 5520",
-      "bios_vendor": "Dell Inc.", "bios_version": "1.14.0",
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "Dell Inc.",
+      "product_name": "G15 5520",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.14.0",
       "description": "Dell G15 Gaming Laptop (2022) — i5-12500H profile",
-      "kvm_pv_features": true, "opengl": true, "tablet": true
+      "kvm_pv_features": true,
+      "opengl": true,
+      "tablet": true,
+      "bios_versions": [
+        "1.11.0",
+        "1.14.0",
+        "1.18.0",
+        "1.22.0",
+        "1.27.0"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ]
+    },
+    "dell_latitude_7430": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "Dell Inc.",
+      "product_name": "Latitude 7430",
+      "board_product": "0K1WM9",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.21.0",
+      "description": "Dell Latitude 7430 business laptop — i7-1265U profile",
+      "kvm_pv_features": true,
+      "opengl": true,
+      "tablet": true,
+      "bios_versions": [
+        "1.9.0",
+        "1.14.1",
+        "1.21.0",
+        "1.28.6"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ]
+      ]
+    },
+    "hp_elitebook_840": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "HP",
+      "product_name": "EliteBook 840 G9",
+      "board_product": "8B9F",
+      "bios_vendor": "HP",
+      "bios_version": "U70 Ver. 01.08.00",
+      "description": "HP EliteBook 840 G9 business laptop — i5-1245U profile",
+      "kvm_pv_features": true,
+      "opengl": true,
+      "tablet": true,
+      "bios_versions": [
+        "U70 Ver. 01.05.01",
+        "U70 Ver. 01.08.00",
+        "U70 Ver. 01.10.02"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ]
+      ]
+    },
+    "dell_optiplex_7010": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "manufacturer": "Dell Inc.",
+      "product_name": "OptiPlex 7010",
+      "board_product": "0MH6CG",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.5.3",
+      "description": "Dell OptiPlex 7010 business desktop — i5-13500 profile",
+      "opengl": true,
+      "bios_versions": [
+        "1.2.1",
+        "1.5.3",
+        "1.8.0"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          10,
+          16
+        ]
+      ]
+    },
+    "hpe_proliant_dl380": {
+      "machine_class": "server",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 16,
+      "cpu_threads": 32,
+      "memory_mb": 65536,
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
+      "battery": false,
+      "manufacturer": "HPE",
+      "product_name": "ProLiant DL380 Gen10",
+      "board_product": "ProLiant DL380 Gen10",
+      "bios_vendor": "HPE",
+      "bios_version": "U30 v2.78",
+      "description": "HPE ProLiant DL380 Gen10 rack server — headless",
+      "hugepages": true,
+      "iommu": true,
+      "bios_versions": [
+        "U30 v2.56",
+        "U30 v2.66",
+        "U30 v2.78"
+      ],
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          16,
+          32
+        ],
+        [
+          20,
+          40
+        ]
+      ]
     },
     "gaming_desktop": {
-      "machine_class": "desktop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
-      "cpu_model": "host", "cpu_cores": 8, "cpu_threads": 16, "memory_mb": 32768,
-      "gpu": "virtio", "audio": "ich9", "battery": false,
-      "manufacturer": "Custom Build", "product_name": "Gaming Desktop",
-      "description": "High-performance gaming desktop profile", "opengl": true
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 32768,
+      "gpu": "virtio",
+      "audio": "ich9",
+      "battery": false,
+      "manufacturer": "ASUS",
+      "product_name": "System Product Name",
+      "board_product": "ROG STRIX B650-A GAMING WIFI",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "2410",
+      "description": "ASUS DIY gaming desktop — default OEM DMI strings",
+      "opengl": true,
+      "bios_versions": [
+        "1601",
+        "2010",
+        "2410",
+        "2604"
+      ],
+      "memory_options_mb": [
+        16384,
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ],
+        [
+          12,
+          24
+        ]
+      ]
     },
     "office_laptop": {
-      "machine_class": "laptop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
-      "cpu_model": "host", "cpu_cores": 4, "cpu_threads": 8, "memory_mb": 8192,
-      "gpu": "qxl", "audio": "hda", "battery": true,
-      "manufacturer": "Lenovo", "product_name": "ThinkPad E14",
-      "description": "Lenovo ThinkPad-style office laptop"
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "gpu": "qxl",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "Lenovo",
+      "product_name": "ThinkPad E14",
+      "description": "Lenovo ThinkPad-style office laptop",
+      "bios_versions": [
+        "R0UET40W (1.24)",
+        "R0UET48W (1.30)",
+        "R0UET55W (1.37)"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          8
+        ]
+      ]
     },
     "server": {
-      "machine_class": "server", "machine_type": "q35", "bios": "ovmf", "uefi": true,
-      "cpu_model": "EPYC", "cpu_cores": 16, "cpu_threads": 32, "memory_mb": 65536,
-      "gpu": "none", "display": "none", "audio": "none", "battery": false,
-      "manufacturer": "Supermicro", "product_name": "AS-1124US-TNRP",
+      "machine_class": "server",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "EPYC",
+      "cpu_cores": 16,
+      "cpu_threads": 32,
+      "memory_mb": 65536,
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
+      "battery": false,
+      "manufacturer": "Supermicro",
+      "product_name": "AS-1124US-TNRP",
       "description": "EPYC server profile — headless",
-      "hugepages": true, "iommu": true
+      "hugepages": true,
+      "iommu": true,
+      "bios_versions": [
+        "1.4",
+        "1.6b",
+        "2.1"
+      ],
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          16,
+          32
+        ],
+        [
+          24,
+          48
+        ]
+      ]
     },
     "mac_mini": {
-      "machine_class": "desktop", "machine_type": "q35", "bios": "ovmf", "uefi": true,
-      "cpu_model": "host", "cpu_cores": 4, "cpu_threads": 8, "memory_mb": 8192,
-      "os_type": "macos", "manufacturer": "Apple Inc.", "product_name": "Mac mini",
-      "bios_vendor": "Apple Inc.", "description": "macOS-style Mac Mini profile",
-      "gpu": "vmware", "audio": "hda"
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "os_type": "macos",
+      "manufacturer": "Apple Inc.",
+      "product_name": "Mac mini",
+      "bios_vendor": "Apple Inc.",
+      "description": "macOS-style Mac Mini profile",
+      "gpu": "vmware",
+      "audio": "hda",
+      "memory_options_mb": [
+        8192,
+        16384
+      ]
     },
     "minimal": {
-      "machine_class": "custom", "machine_type": "q35", "cpu_model": "kvm64",
-      "cpu_cores": 2, "cpu_threads": 2, "memory_mb": 2048,
-      "gpu": "none", "display": "none", "audio": "none",
+      "machine_class": "custom",
+      "machine_type": "q35",
+      "cpu_model": "kvm64",
+      "cpu_cores": 2,
+      "cpu_threads": 2,
+      "memory_mb": 2048,
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
       "description": "Minimal headless VM for CI/testing"
     },
     "raspberry_pi_4": {
@@ -372,13 +1247,18 @@
       "bios": "seabios",
       "uefi": false,
       "cpu_model": "cortex-a72",
-      "cpu_cores": 4, "cpu_threads": 1,
+      "cpu_cores": 4,
+      "cpu_threads": 1,
       "memory_mb": 4096,
-      "gpu": "none", "display": "sdl", "audio": "none",
+      "gpu": "none",
+      "display": "sdl",
+      "audio": "none",
       "manufacturer": "Raspberry Pi Foundation",
       "product_name": "Raspberry Pi 4 Model B",
       "description": "Emulated Raspberry Pi 4 (aarch64) — requires qemu-system-aarch64",
-      "_requires": {"qemu_arm_installed": true},
+      "_requires": {
+        "qemu_arm_installed": true
+      },
       "_notes": "Pi 4 emulation is slow. For bare-metal Pi use, flash an SD card instead."
     },
     "raspberry_pi_3b": {
@@ -392,7 +1272,8 @@
       "hugepages": false,
       "balloon": false,
       "cpu_model": "cortex-a53",
-      "cpu_cores": 4, "cpu_threads": 1,
+      "cpu_cores": 4,
+      "cpu_threads": 1,
       "memory_mb": 1024,
       "gpu": "none",
       "display": "none",
@@ -403,8 +1284,1348 @@
       "product_name": "Raspberry Pi 3 Model B Rev 1.2",
       "kernel_cmdline": "console=ttyAMA0 root=/dev/mmcblk0p2 rw rootfstype=ext4 fsck.repair=yes",
       "description": "Emulated Raspberry Pi 3B — serial console only, requires Pi OS image + kernel8.img",
-      "_requires": {"qemu_arm_installed": true},
+      "_requires": {
+        "qemu_arm_installed": true
+      },
       "_notes": "raspi3b has NO display output in QEMU. Connect via serial console. KVM not available on x86. Needs kernel8.img + bcm2710-rpi-3-b.dtb extracted from Pi OS image."
+    },
+    "dell_xps_15_9520": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "Dell Inc.",
+      "product_name": "XPS 15 9520",
+      "board_product": "0R8G3W",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.14.0",
+      "description": "Dell XPS 15 9520 premium laptop",
+      "kvm_pv_features": true,
+      "opengl": true,
+      "tablet": true,
+      "bios_versions": [
+        "1.7.0",
+        "1.14.0",
+        "1.20.0",
+        "1.28.0"
+      ],
+      "memory_options_mb": [
+        16384,
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ]
+    },
+    "lenovo_thinkpad_x1c": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "Lenovo",
+      "product_name": "ThinkPad X1 Carbon Gen 11",
+      "board_product": "21HM",
+      "bios_vendor": "Lenovo",
+      "bios_version": "N40ET35W (1.22)",
+      "description": "Lenovo ThinkPad X1 Carbon Gen 11 ultrabook",
+      "kvm_pv_features": true,
+      "opengl": true,
+      "tablet": true,
+      "bios_versions": [
+        "N40ET30W (1.17)",
+        "N40ET35W (1.22)",
+        "N40ET40W (1.28)"
+      ],
+      "memory_options_mb": [
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ]
+      ]
+    },
+    "hp_probook_450": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "manufacturer": "HP",
+      "product_name": "ProBook 450 G10",
+      "board_product": "8A70",
+      "bios_vendor": "HP",
+      "bios_version": "U89 Ver. 01.04.00",
+      "description": "HP ProBook 450 G10 business laptop",
+      "kvm_pv_features": true,
+      "opengl": true,
+      "tablet": true,
+      "bios_versions": [
+        "U89 Ver. 01.02.00",
+        "U89 Ver. 01.04.00",
+        "U89 Ver. 01.06.01"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ]
+      ]
+    },
+    "lenovo_thinkcentre_m70q": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "manufacturer": "Lenovo",
+      "product_name": "ThinkCentre M70q Gen 4",
+      "board_product": "3742",
+      "bios_vendor": "Lenovo",
+      "bios_version": "S0BKT2AA",
+      "description": "Lenovo ThinkCentre M70q Gen 4 tiny desktop",
+      "opengl": true,
+      "bios_versions": [
+        "S0BKT1AA",
+        "S0BKT2AA",
+        "S0BKT4AA"
+      ],
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          10,
+          16
+        ]
+      ]
+    },
+    "dell_precision_3660": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 32768,
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "manufacturer": "Dell Inc.",
+      "product_name": "Precision 3660",
+      "board_product": "0RCPWM",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "2.4.1",
+      "description": "Dell Precision 3660 tower workstation",
+      "opengl": true,
+      "bios_versions": [
+        "1.9.0",
+        "2.4.1",
+        "2.8.0"
+      ],
+      "memory_options_mb": [
+        16384,
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          8,
+          16
+        ],
+        [
+          12,
+          24
+        ],
+        [
+          16,
+          24
+        ]
+      ]
+    },
+    "dell_xps_13_9315": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "Dell Inc.",
+      "product_name": "XPS 13 9315",
+      "board_product": "0F1TTG",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.4.2",
+      "bios_versions": [
+        "1.4.2",
+        "1.9.0",
+        "1.14.0"
+      ],
+      "description": "Dell Inc. XPS 13 9315"
+    },
+    "dell_latitude_5540": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "Dell Inc.",
+      "product_name": "Latitude 5540",
+      "board_product": "0P8WM2",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.5.0",
+      "bios_versions": [
+        "1.5.0",
+        "1.11.0",
+        "1.18.2"
+      ],
+      "description": "Dell Inc. Latitude 5540"
+    },
+    "dell_inspiron_16": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "manufacturer": "Dell Inc.",
+      "product_name": "Inspiron 16 5620",
+      "board_product": "0KM9YV",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.6.0",
+      "bios_versions": [
+        "1.6.0",
+        "1.12.0",
+        "1.19.0"
+      ],
+      "description": "Dell Inc. Inspiron 16 5620"
+    },
+    "lenovo_thinkpad_t14": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "Lenovo",
+      "product_name": "ThinkPad T14 Gen 4",
+      "board_product": "21HD",
+      "bios_vendor": "Lenovo",
+      "bios_version": "R23ET40W (1.19)",
+      "bios_versions": [
+        "R23ET40W (1.19)",
+        "R23ET52W (1.30)"
+      ],
+      "description": "Lenovo ThinkPad T14 Gen 4"
+    },
+    "lenovo_ideapad_5": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "manufacturer": "Lenovo",
+      "product_name": "IdeaPad 5 15IAL7",
+      "board_product": "LNVNB161216",
+      "bios_vendor": "Lenovo",
+      "bios_version": "H3CN35WW",
+      "bios_versions": [
+        "H3CN35WW",
+        "H3CN42WW"
+      ],
+      "description": "Lenovo IdeaPad 5 15IAL7"
+    },
+    "lenovo_legion_5": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          8,
+          16
+        ],
+        [
+          14,
+          20
+        ]
+      ],
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 16384,
+      "manufacturer": "Lenovo",
+      "product_name": "Legion 5 15ARH7H",
+      "board_product": "LNVNB161216",
+      "bios_vendor": "Lenovo",
+      "bios_version": "J2CN38WW",
+      "bios_versions": [
+        "J2CN38WW",
+        "J2CN45WW"
+      ],
+      "description": "Lenovo Legion 5 15ARH7H"
+    },
+    "hp_spectre_x360": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "manufacturer": "HP",
+      "product_name": "Spectre x360 14-ef",
+      "board_product": "8B45",
+      "bios_vendor": "HP",
+      "bios_version": "F.10",
+      "bios_versions": [
+        "F.10",
+        "F.15",
+        "F.22"
+      ],
+      "description": "HP Spectre x360 14-ef"
+    },
+    "hp_pavilion_15": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "manufacturer": "HP",
+      "product_name": "Pavilion 15-eg",
+      "board_product": "8A0F",
+      "bios_vendor": "HP",
+      "bios_version": "F.06",
+      "bios_versions": [
+        "F.06",
+        "F.12",
+        "F.20"
+      ],
+      "description": "HP Pavilion 15-eg"
+    },
+    "hp_zbook_firefly": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "HP",
+      "product_name": "ZBook Firefly 14 G10",
+      "board_product": "8B90",
+      "bios_vendor": "HP",
+      "bios_version": "V90 Ver. 01.03.00",
+      "bios_versions": [
+        "V90 Ver. 01.03.00",
+        "V90 Ver. 01.06.02"
+      ],
+      "description": "HP ZBook Firefly 14 G10"
+    },
+    "asus_zenbook_14": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "manufacturer": "ASUSTeK COMPUTER INC.",
+      "product_name": "Zenbook 14 UX3402VA",
+      "board_product": "UX3402VA",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "UX3402VA.300",
+      "bios_versions": [
+        "UX3402VA.300",
+        "UX3402VA.312"
+      ],
+      "description": "ASUSTeK COMPUTER INC. Zenbook 14 UX3402VA"
+    },
+    "asus_rog_zephyrus": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          8,
+          16
+        ],
+        [
+          12,
+          24
+        ]
+      ],
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 16384,
+      "manufacturer": "ASUSTeK COMPUTER INC.",
+      "product_name": "ROG Zephyrus G14 GA402",
+      "board_product": "GA402XY",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "GA402XY.318",
+      "bios_versions": [
+        "GA402XY.318",
+        "GA402XY.325"
+      ],
+      "description": "ASUSTeK COMPUTER INC. ROG Zephyrus G14 GA402"
+    },
+    "acer_aspire_5": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 8192,
+      "manufacturer": "Acer",
+      "product_name": "Aspire A515-57",
+      "board_product": "Aspire A515-57",
+      "bios_vendor": "Insyde Corp.",
+      "bios_version": "V1.15",
+      "bios_versions": [
+        "V1.15",
+        "V1.22",
+        "V1.28"
+      ],
+      "description": "Acer Aspire A515-57"
+    },
+    "acer_swift_go": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "Acer",
+      "product_name": "Swift Go SFG14-71",
+      "board_product": "Swift SFG14-71",
+      "bios_vendor": "Insyde Corp.",
+      "bios_version": "V1.03",
+      "bios_versions": [
+        "V1.03",
+        "V1.09"
+      ],
+      "description": "Acer Swift Go SFG14-71"
+    },
+    "msi_prestige_14": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "Micro-Star International Co., Ltd.",
+      "product_name": "Prestige 14 A12UC",
+      "board_product": "MS-14C1",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "E14C1IMS.109",
+      "bios_versions": [
+        "E14C1IMS.109",
+        "E14C1IMS.113"
+      ],
+      "description": "Micro-Star International Co. Prestige 14 A12UC"
+    },
+    "microsoft_surface_laptop5": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "manufacturer": "Microsoft Corporation",
+      "product_name": "Surface Laptop 5",
+      "board_product": "Surface Laptop 5",
+      "bios_vendor": "Microsoft Corporation",
+      "bios_version": "10.0.148",
+      "bios_versions": [
+        "10.0.148",
+        "10.0.155"
+      ],
+      "description": "Microsoft Corporation Surface Laptop 5"
+    },
+    "framework_13": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 4,
+      "cpu_threads": 8,
+      "memory_mb": 16384,
+      "manufacturer": "Framework",
+      "product_name": "Laptop 13 (12th Gen Intel)",
+      "board_product": "FRANMZCP0A",
+      "bios_vendor": "INSYDE Corp.",
+      "bios_version": "03.04",
+      "bios_versions": [
+        "03.04",
+        "03.06",
+        "03.19"
+      ],
+      "description": "Framework Laptop 13 (12th Gen Intel)"
+    },
+    "samsung_galaxybook3": {
+      "machine_class": "laptop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": true,
+      "tablet": true,
+      "opengl": true,
+      "kvm_pv_features": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "cpu_cores": 6,
+      "cpu_threads": 12,
+      "memory_mb": 16384,
+      "manufacturer": "Samsung Electronics Co., Ltd.",
+      "product_name": "Galaxy Book3 Pro",
+      "board_product": "NP960XFG",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "P08RGF.041",
+      "bios_versions": [
+        "P08RGF.041",
+        "P08RGF.055"
+      ],
+      "description": "Samsung Electronics Co. Galaxy Book3 Pro"
+    },
+    "dell_xps_8960": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "opengl": true,
+      "memory_options_mb": [
+        16384,
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ],
+        [
+          12,
+          24
+        ]
+      ],
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 32768,
+      "manufacturer": "Dell Inc.",
+      "product_name": "XPS 8960",
+      "board_product": "0T2HR0",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.5.0",
+      "bios_versions": [
+        "1.5.0",
+        "1.9.0",
+        "2.1.0"
+      ],
+      "description": "Dell Inc. XPS 8960"
+    },
+    "hp_elitedesk_800": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "opengl": true,
+      "memory_options_mb": [
+        16384,
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ],
+        [
+          12,
+          24
+        ]
+      ],
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 16384,
+      "manufacturer": "HP",
+      "product_name": "EliteDesk 800 G9",
+      "board_product": "8859",
+      "bios_vendor": "HP",
+      "bios_version": "U60 Ver. 01.04.00",
+      "bios_versions": [
+        "U60 Ver. 01.04.00",
+        "U60 Ver. 01.08.01"
+      ],
+      "description": "HP EliteDesk 800 G9"
+    },
+    "hp_omen_45l": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "opengl": true,
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          8,
+          16
+        ],
+        [
+          16,
+          24
+        ]
+      ],
+      "cpu_cores": 16,
+      "cpu_threads": 24,
+      "memory_mb": 32768,
+      "manufacturer": "HP",
+      "product_name": "OMEN 45L GT22",
+      "board_product": "8A42",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "F.10",
+      "bios_versions": [
+        "F.10",
+        "F.18"
+      ],
+      "description": "HP OMEN 45L GT22"
+    },
+    "lenovo_thinkcentre_neo": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "opengl": true,
+      "memory_options_mb": [
+        16384,
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          8,
+          16
+        ],
+        [
+          12,
+          24
+        ]
+      ],
+      "cpu_cores": 8,
+      "cpu_threads": 16,
+      "memory_mb": 16384,
+      "manufacturer": "Lenovo",
+      "product_name": "ThinkCentre neo 50t Gen 4",
+      "board_product": "3752",
+      "bios_vendor": "Lenovo",
+      "bios_version": "S0IKT2AA",
+      "bios_versions": [
+        "S0IKT2AA",
+        "S0IKT4AA"
+      ],
+      "description": "Lenovo ThinkCentre neo 50t Gen 4"
+    },
+    "asus_rog_strix_gt15": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "opengl": true,
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          8,
+          16
+        ],
+        [
+          16,
+          24
+        ]
+      ],
+      "cpu_cores": 16,
+      "cpu_threads": 24,
+      "memory_mb": 32768,
+      "manufacturer": "ASUSTeK COMPUTER INC.",
+      "product_name": "ROG Strix G15CF",
+      "board_product": "G15CF",
+      "bios_vendor": "American Megatrends International, LLC.",
+      "bios_version": "G15CF.1401",
+      "bios_versions": [
+        "G15CF.1401",
+        "G15CF.1602"
+      ],
+      "description": "ASUSTeK COMPUTER INC. ROG Strix G15CF"
+    },
+    "intel_nuc_13": {
+      "machine_class": "desktop",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "virtio",
+      "audio": "hda",
+      "battery": false,
+      "opengl": true,
+      "memory_options_mb": [
+        8192,
+        16384,
+        32768
+      ],
+      "cpu_variants": [
+        [
+          6,
+          12
+        ],
+        [
+          10,
+          16
+        ]
+      ],
+      "cpu_cores": 10,
+      "cpu_threads": 16,
+      "memory_mb": 16384,
+      "manufacturer": "Intel Corporation",
+      "product_name": "NUC13ANHi7",
+      "board_product": "NUC13ANBi7",
+      "bios_vendor": "Intel Corp.",
+      "bios_version": "ANRPL357.0026",
+      "bios_versions": [
+        "ANRPL357.0026",
+        "ANRPL357.0031"
+      ],
+      "description": "Intel Corporation NUC13ANHi7"
+    },
+    "dell_poweredge_r750": {
+      "machine_class": "server",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
+      "battery": false,
+      "hugepages": true,
+      "iommu": true,
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          16,
+          32
+        ],
+        [
+          24,
+          48
+        ]
+      ],
+      "cpu_cores": 24,
+      "cpu_threads": 48,
+      "memory_mb": 65536,
+      "manufacturer": "Dell Inc.",
+      "product_name": "PowerEdge R750",
+      "board_product": "0HYNTG",
+      "bios_vendor": "Dell Inc.",
+      "bios_version": "1.6.5",
+      "bios_versions": [
+        "1.6.5",
+        "1.10.2",
+        "2.8.0"
+      ],
+      "description": "Dell Inc. PowerEdge R750"
+    },
+    "hpe_proliant_dl360": {
+      "machine_class": "server",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
+      "battery": false,
+      "hugepages": true,
+      "iommu": true,
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          16,
+          32
+        ],
+        [
+          24,
+          48
+        ]
+      ],
+      "cpu_cores": 24,
+      "cpu_threads": 48,
+      "memory_mb": 65536,
+      "manufacturer": "HPE",
+      "product_name": "ProLiant DL360 Gen11",
+      "board_product": "ProLiant DL360 Gen11",
+      "bios_vendor": "HPE",
+      "bios_version": "U46 v1.48",
+      "bios_versions": [
+        "U46 v1.48",
+        "U46 v1.58"
+      ],
+      "description": "HPE ProLiant DL360 Gen11"
+    },
+    "lenovo_thinksystem_sr650": {
+      "machine_class": "server",
+      "machine_type": "q35",
+      "bios": "ovmf",
+      "uefi": true,
+      "cpu_model": "host",
+      "gpu": "none",
+      "display": "none",
+      "audio": "none",
+      "battery": false,
+      "hugepages": true,
+      "iommu": true,
+      "memory_options_mb": [
+        32768,
+        65536
+      ],
+      "cpu_variants": [
+        [
+          16,
+          32
+        ],
+        [
+          24,
+          48
+        ]
+      ],
+      "cpu_cores": 16,
+      "cpu_threads": 32,
+      "memory_mb": 65536,
+      "manufacturer": "Lenovo",
+      "product_name": "ThinkSystem SR650 V3",
+      "board_product": "7D75",
+      "bios_vendor": "Lenovo",
+      "bios_version": "ESE108T",
+      "bios_versions": [
+        "ESE108T",
+        "ESE114U"
+      ],
+      "description": "Lenovo ThinkSystem SR650 V3"
     }
   }
 }

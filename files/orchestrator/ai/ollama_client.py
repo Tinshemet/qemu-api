@@ -13,11 +13,7 @@ from typing import Dict, List
 
 import requests
 
-try:
-    from executor.api.qemu_config import OVMF, list_profiles
-except ImportError:
-    OVMF = {"available": False, "code": "", "vars": ""}
-    def list_profiles(): return []                                            # type: ignore[misc]
+from orchestrator.executor_client import get_ovmf as _get_ovmf, get_profiles as list_profiles
 from .tools        import TOOLS
 from shared.display import console
 import orchestrator.preflight.validator as _validator
@@ -33,7 +29,7 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", _OLLAMA["model"])
 # In: nothing → Out: str
 def _build_system_prompt() -> str:
     profiles    = [p["name"] for p in list_profiles()]
-    ovmf_status = "AVAILABLE" if OVMF["available"] else "NOT FOUND (SeaBIOS fallback active)"
+    ovmf_status = "AVAILABLE" if _get_ovmf().get("available") else "NOT FOUND (SeaBIOS fallback active)"
     custom_note = (
         "\nCUSTOM MODE ACTIVE (-cu): product_name and manufacturer can be any fictional values. "
         "Skip all warnings about unverifiable hardware."

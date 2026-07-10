@@ -6,9 +6,8 @@ dispatch: local QEMU capability queries, DuckDuckGo product lookup,
 CPU architecture consistency, and a pre-flight gate that can auto-fix
 or ask the user before a destructive operation runs.
 
-Note: _preflight_check and _show_preflight_warning are fully implemented
-but not yet wired into the chat loop. They are ready to be called from
-tool_executor.execute_tool when integrated.
+_preflight_check and _show_preflight_warning are called from
+orchestrator.pipeline.execute_tool via _run() in the tool dispatch layer.
 """
 
 import hashlib
@@ -21,12 +20,9 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-try:
-    from executor.api.qemu_config import OVMF, check_system_capabilities, get_all_profiles
-except ImportError:
-    OVMF = {"available": False, "code": "", "vars": ""}
-    def check_system_capabilities(): return {}                                # type: ignore[misc]
-    def get_all_profiles(): return {}                                         # type: ignore[misc]
+from orchestrator.executor_client import (
+    get_ovmf as _get_ovmf, get_capabilities as check_system_capabilities, get_all_profiles,
+)
 from orchestrator.sanitizer.sanitizer import PLACEHOLDER_VM_NAMES, REAL_HOME, VALID_MACHINE_TYPES, _resolve_iso
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
@@ -333,7 +329,7 @@ def _validate_profile_for_host(profile_name: str, profile_data: Optional[Dict[st
     if profile.get("kvm", True) and arch in ("aarch64","arm") and caps.get("host_arch","x86_64") == "x86_64":
         issues.append({"severity":"warning","message":f"Profile '{profile_name}' has kvm=True but ARM guests can't use KVM on x86","fix":"kvm will be forced to False automatically","auto_fix":True,"fix_field":"kvm","fix_value":False})
 
-    if profile.get("uefi") and not OVMF["available"] and profile.get("bios","ovmf") in ("ovmf","ovmf_ms"):
+    if profile.get("uefi") and not _get_ovmf().get("available") and profile.get("bios","ovmf") in ("ovmf","ovmf_ms"):
         issues.append({"severity":"warning","message":f"Profile '{profile_name}' requires UEFI but OVMF not found","fix":"sudo apt install ovmf","auto_fix":True,"fix_field":"bios","fix_value":"seabios"})
 
     if profile.get("hugepages"):
@@ -518,20 +514,19 @@ def _validate_stealth_args(args: Dict[str, Any]) -> List[Dict]:
 
     # virtio-vga / virtio-vga-gl carries PCI vendor 0x1af4 (Red Hat/QEMU).
     # lspci inside the guest shows this; it is one of the most common VM detection
-    # vectors. 'gpu' defaults to "virtio" if not set — both cases are errors.
+    # vectors. create_vm auto-sets gpu="none" for stealth VMs that don't request a
+    # specific GPU (qemu_arg_builder then picks vmware-svga on Linux / VGA on
+    # Windows) — so this is informational only, not a blocking ask_user prompt.
     gpu = str(args.get("gpu", "virtio")).lower()
-    if gpu == "virtio":
-        msg = (
-            "stealth VM GPU is 'virtio' (virtio-vga) — PCI vendor 0x1af4 (Red Hat/QEMU) "
-            "is trivially detectable via lspci"
-        ) if "gpu" in args else (
-            "stealth VM GPU not set — default is 'virtio' (virtio-vga) with detectable "
-            "Red Hat PCI vendor 0x1af4"
-        )
+    if gpu == "virtio" and "gpu" in args:
+        stealth_gpu_device = "VGA" if str(args.get("os_type", "")).lower() == "windows" else "vmware-svga"
         issues.append({
-            "severity":  "error",
-            "message":   msg,
-            "fix":       "Set gpu='none' (uses cirrus-vga, PCI vendor 0x1013 Cirrus Logic) or 'qxl' for better 2D",
+            "severity":  "warning",
+            "message":   (
+                "stealth VM GPU is 'virtio' (virtio-vga) — PCI vendor 0x1af4 (Red Hat/QEMU) "
+                "is trivially detectable via lspci"
+            ),
+            "fix":       f"Remove the explicit gpu='virtio' to get the stealth default ({stealth_gpu_device}), or set gpu='qxl'",
             "fix_field": "gpu",
         })
 
@@ -636,9 +631,19 @@ def _preflight_check(
             return {"action":"ask_user","reason":f"VM name is missing or looks invented (got: '{name}')","question":"What would you like to name this VM?","fix_field":"name","options":["my-windows-vm","dev-box","test-ubuntu"]}
 
         if not stateless_only:
-            vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
-            if os.path.exists(vm_dir):
+            try:
+                _known = {v.get("name") for v in (manager.list_vms() if manager else [])}
+            except Exception:
+                _known = set()
+            if name in _known:
                 return {"action":"ask_user","reason":f"A VM named '{name}' already exists","question":f"A VM called '{name}' already exists. Overwrite it, or use a different name?","fix_field":"name","original_name":name,"options":[f"{name}-2",f"{name}-new","overwrite"],"correction":"Use a different name or delete the existing VM first."}
+
+        # Destructive opt-in: unattended Windows install WIPES the disk + creates a
+        # local admin account — confirm first (bypassed by force=true, like delete_vm).
+        _is_win = "windows" in os_type or "windows" in str(args.get("os_name", "")).lower()
+        if args.get("unattended") and _is_win and not args.get("force"):
+            _acct = args.get("unattended_username") or "user"
+            return {"action":"ask_user","reason":"Unattended install wipes the target disk and auto-creates a local admin account","question":f"Unattended Windows install will WIPE this VM's disk and auto-create local admin '{_acct}'. Proceed?","fix_field":None,"options":["Yes, wipe and install","No, cancel"],"correction":"On 'Yes' the client re-runs with force=true; the disk is erased/repartitioned and a known-password admin account is created."}
 
         if mt and mt not in VALID_MACHINE_TYPES and not mt.startswith("pc-"):
             fixed = dict(args)
@@ -799,17 +804,26 @@ def _preflight_check(
                 }
 
     elif tool_name == "launch_vm" and not stateless_only:
-        name   = str(args.get("name", "")).strip()
-        vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
-        if name and not os.path.exists(vm_dir):
+        name = str(args.get("name", "")).strip()
+        if name:
+            # Check VM existence via manager (works in both local and split/remote mode)
+            vm_exists = False
             candidates = []
-            if hasattr(manager, "list_vms"):
-                candidates = [v["name"] for v in manager.list_vms() if name.lower() in v["name"].lower()]
-            if candidates:
-                return {"action":"abort","reason":f"VM '{name}' not found. Did you mean: {candidates}?","correction":f"Use one of these names: {candidates}"}
-            return {"action":"abort","reason":f"VM '{name}' doesn't exist. Create it first.","correction":"Call create_vm before launch_vm."}
+            try:
+                all_vms = manager.list_vms() if hasattr(manager, "list_vms") else []
+                vm_names = [v["name"] for v in all_vms if isinstance(v, dict) and "name" in v]
+                vm_exists = name in vm_names
+                if not vm_exists:
+                    candidates = [n for n in vm_names if name.lower() in n.lower()]
+            except Exception:
+                vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
+                vm_exists = os.path.exists(vm_dir)
+            if not vm_exists:
+                if candidates:
+                    return {"action":"abort","reason":f"VM '{name}' not found. Did you mean: {candidates}?","correction":f"Use one of these names: {candidates}"}
+                return {"action":"abort","reason":f"VM '{name}' doesn't exist. Create it first.","correction":"Call create_vm before launch_vm."}
         try:
-            from qemu_config import MachineConfig
+            from executor.api.qemu_config import MachineConfig
             cfg = MachineConfig.load(name)
             if cfg.iso_path and not os.path.exists(cfg.iso_path):
                 return {"action":"ask_user","reason":f"ISO file missing: {cfg.iso_path}","question":f"The ISO '{os.path.basename(cfg.iso_path)}' is missing. Launch without ISO, or fix the path?","fix_field":None,"options":["Launch anyway (no ISO)","Cancel"]}
@@ -818,25 +832,28 @@ def _preflight_check(
 
     elif tool_name == "delete_vm":
         name = str(args.get("name", "")).strip()
-        if name:
+        if name and not args.get("force"):
             return {"action":"ask_user","reason":f"Destructive operation: delete VM '{name}'","question":f"Are you sure you want to delete '{name}'?","fix_field":None,"options":["Yes, delete it","No, keep it"],"correction":"Deletion cannot be undone without recreating the VM."}
 
     elif tool_name == "resize_disk" and not stateless_only:
         name     = str(args.get("name", "")).strip()
         new_size = int(args.get("new_size_gb", 0))
         if name and new_size:
-            vm_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", name)
-            if not os.path.exists(vm_dir):
-                return {"action":"abort","reason":f"VM '{name}' does not exist — cannot resize disk","correction":"Create the VM first with create_vm, then resize."}
+            # Check VM existence via manager (works in both local and remote/split mode)
             try:
-                from qemu_config import MachineConfig
+                known_vms = {v.get("name") for v in (manager.list_vms() if manager else [])}
+                if name not in known_vms:
+                    return {"action":"abort","reason":f"VM '{name}' does not exist — cannot resize disk","correction":"Create the VM first with create_vm, then resize."}
+            except Exception:
+                pass
+            # Attempt to read disk size for shrink guard (local mode only; silently skipped in split mode)
+            try:
+                from executor.api.qemu_config import MachineConfig
                 cfg = MachineConfig.load(name)
                 if cfg.disks:
                     current = cfg.disks[0].size_gb
                     if new_size < current:
                         return {"action":"abort","reason":f"Cannot shrink disk from {current}GB to {new_size}GB — QEMU doesn't support shrinking","correction":f"new_size_gb must be >= current size ({current}GB)"}
-            except FileNotFoundError:
-                return {"action":"abort","reason":f"VM '{name}' config not found","correction":"Check the VM name with list_vms."}
             except Exception:
                 pass
 
@@ -848,8 +865,9 @@ def _preflight_check(
     elif tool_name in ("snapshot_restore", "snapshot_delete"):
         name      = str(args.get("name", "")).strip()
         snap_name = str(args.get("snap_name", "")).strip()
-        verb      = "restore" if tool_name == "snapshot_restore" else "delete"
-        return {"action":"ask_user","reason":f"Snapshot {verb}: '{snap_name}' on VM '{name}'","question":f"Confirm {verb} snapshot '{snap_name}' on '{name}'?","fix_field":None,"options":[f"Yes, {verb} it","No, cancel"],"correction":"Snapshot restore replaces current VM state. Snapshot delete is permanent."}
+        if not args.get("force"):
+            verb = "restore" if tool_name == "snapshot_restore" else "delete"
+            return {"action":"ask_user","reason":f"Snapshot {verb}: '{snap_name}' on VM '{name}'","question":f"Confirm {verb} snapshot '{snap_name}' on '{name}'?","fix_field":None,"options":[f"Yes, {verb} it","No, cancel"],"correction":"Snapshot restore replaces current VM state. Snapshot delete is permanent."}
 
     return ok
 

@@ -436,7 +436,12 @@ def _execute(tool_name: str, args: dict | None = None) -> dict:
             headers=_HEADERS, timeout=_TIMEOUT, verify=_VERIFY,
         )
         if not resp.ok:
-            return {"success": False, "error": f"Server error {resp.status_code}"}
+            try:
+                body = resp.json()
+                msg = body.get("result", {}).get("error") or body.get("detail") or f"Server error {resp.status_code}"
+            except Exception:
+                msg = f"Server error {resp.status_code}"
+            return {"success": False, "error": msg}
         return resp.json().get("result", {})
     except requests.ConnectionError:
         return {"success": False, "error": f"Cannot connect to {SERVER_URL}"}
