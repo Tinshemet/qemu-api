@@ -597,6 +597,107 @@ class TurnState:
         self.clarify_field    = ""
 
 
+def _maybe_enable_custom_mode(tool_name: str, user_input_lower: str,
+                              messages: List[dict]) -> None:
+    """Enable custom mode for create_profile when the user said 'custom'.
+
+    Custom mode disables the product-name verification HTTP check. Looks at the
+    current message plus the last few user messages for the word 'custom'.
+
+    Example::
+
+        _maybe_enable_custom_mode("create_profile", "custom dell box", msgs)
+        # → calls set_custom_mode(True)
+    """
+    if tool_name != "create_profile":
+        return
+    ctx = user_input_lower + " " + " ".join(
+        m.get("content", "").lower() for m in messages[-6:] if m.get("role") == "user"
+    )
+    if "custom" in ctx:
+        set_custom_mode(True)
+        console.print("[dim]Custom mode active — product verification disabled[/dim]")
+
+
+def _resolve_os_type(tool_name: str, raw_args: dict, user_input_lower: str,
+                     state: "TurnState") -> dict:
+    """Pin create_vm's os_type from an OS word the user actually typed, or strip
+    an AI-inferred one so the gate can ask.
+
+    When the user named an OS ("mint"), resolve it to the canonical type and mark
+    it clarified; when they didn't, drop any os_type the AI guessed. Returns the
+    (possibly new) raw_args.
+
+    Example::
+
+        _resolve_os_type("create_vm", {"name": "v"}, "make a mint vm", state)
+        # → {"name": "v", "os_type": "linux"}   (and state.clarified_fields += os_type)
+    """
+    if tool_name != "create_vm" or "os_type" in state.clarified_fields:
+        return raw_args
+    ui_tokens = {t.strip('.,!?;:') for t in user_input_lower.split()}
+    matched = next(iter(_OS_KEYWORDS & ui_tokens), None)
+    if matched:
+        canonical = OS_TYPE_ALIASES.get(matched, matched)
+        raw_args = dict(raw_args)
+        raw_args["os_type"] = canonical
+        state.clarified_fields.add("os_type")
+        state.clarified_values.add(("os_type", canonical))
+    elif "os_type" in raw_args:
+        raw_args.pop("os_type")
+    return raw_args
+
+
+def _build_pre_gate_result(tool_name: str, raw_args: dict, user_input: str,
+                           recent_context: str, state: "TurnState"):
+    """Return a clarify result if a gate-required field is missing from what the
+    user actually said, else None.
+
+    Checks required trackable fields against extract_slots(user_input) — not the
+    AI's args — so hallucinated values can't bypass the gate. A value the AI put
+    in args is accepted if it's grounded in recent conversation.
+
+    Example::
+
+        _build_pre_gate_result("create_vm", {"name": "v"}, "make a vm", "", state)
+        # → {"success": False, "clarify": True, "needs_clarification": "os_type", ...}
+    """
+    gate_required = _GATE_REQUIRED.get(tool_name, [])
+    if not gate_required or tool_name == "clarify":
+        return None
+    user_slots = extract_slots(user_input)
+    for clf in state.clarified_fields:
+        if clf in raw_args and raw_args[clf]:
+            user_slots[clf] = raw_args[clf]
+    missing = [
+        {"field": f, "question": q, "options": opts}
+        for f, q, opts in gate_required
+        if f in user_slots and user_slots[f] is None
+        and not (
+            raw_args.get(f)
+            and isinstance(raw_args.get(f), str)
+            and (
+                raw_args[f].lower() in recent_context
+                or raw_args[f].lower().replace(" ", "") in recent_context.replace(" ", "")
+            )
+        )
+    ]
+    if not missing:
+        return None
+    return {
+        "success":             False,
+        "clarify":             True,
+        "missing":             missing,
+        "question":            missing[0]["question"],
+        "options":             missing[0]["options"],
+        "needs_clarification": missing[0]["field"],
+        "error":               (
+            f"Missing required arguments for {tool_name}: "
+            f"{[m['field'] for m in missing]}"
+        ),
+    }
+
+
 def chat_loop(verbose: bool = False):
     global _LOOP_MAX
     print_banner(
@@ -795,14 +896,7 @@ def chat_loop(verbose: bool = False):
                     )
 
                 # ── Custom mode: "custom" in prompt disables HTTP check for profiles ──
-                if tool_name == "create_profile":
-                    _profile_ctx = _ui + " " + " ".join(
-                        m.get("content", "").lower() for m in messages[-6:]
-                        if m.get("role") == "user"
-                    )
-                    if "custom" in _profile_ctx:
-                        set_custom_mode(True)
-                        console.print("[dim]Custom mode active — product verification disabled[/dim]")
+                _maybe_enable_custom_mode(tool_name, _ui, messages)
 
                 # ── Context assistant ──────────────────────────────────────
                 # Only runs once per user turn — if it already fired and the
@@ -856,23 +950,7 @@ def chat_loop(verbose: bool = False):
                 # ──────────────────────────────────────────────────────────
 
                 # ── os_type guard ──────────────────────────────────────────
-                # When the user names an OS (e.g. "mint"), resolve it to the
-                # canonical type (e.g. "linux") and set it directly — don't
-                # let the AI guess from session history.  When no OS is
-                # mentioned, strip any AI-inferred value so the gate can ask.
-                if tool_name == "create_vm" \
-                        and "os_type" not in state.clarified_fields:
-                    _ui_tokens = {t.strip('.,!?;:') for t in _ui.split()}
-                    _matched_kw = next(iter(_OS_KEYWORDS & _ui_tokens), None)
-                    if _matched_kw:
-                        _canonical = OS_TYPE_ALIASES.get(_matched_kw, _matched_kw)
-                        raw_args = dict(raw_args)
-                        raw_args["os_type"] = _canonical
-                        state.clarified_fields.add("os_type")
-                        state.clarified_values.add(("os_type", _canonical))
-                    elif "os_type" in raw_args:
-                        raw_args.pop("os_type")
-                # ──────────────────────────────────────────────────────────
+                raw_args = _resolve_os_type(tool_name, raw_args, _ui, state)
 
                 # ── Pre-flight check ───────────────────────────────────────
                 # Both modes run preflight — but with different scope:
@@ -1050,50 +1128,9 @@ def chat_loop(verbose: bool = False):
                 # ──────────────────────────────────────────────────────────
 
                 # ── Pre-execution gate ─────────────────────────────────────────
-                # Check required trackable fields against what the user actually
-                # said — not what the AI put in args. If any gated field is
-                # absent from the user's message and hasn't been clarified this
-                # turn, jump straight to clarify without calling execute_tool.
-                # This prevents hallucinated args from bypassing the gate.
-                _gate_required = _GATE_REQUIRED.get(tool_name, [])
-                _pre_gate_result = None
-                if _gate_required and tool_name != "clarify":
-                    _user_slots = extract_slots(user_input)
-                    for _clf in state.clarified_fields:
-                        if _clf in raw_args and raw_args[_clf]:
-                            _user_slots[_clf] = raw_args[_clf]
-                    _missing_early = [
-                        {"field": f, "question": q, "options": opts}
-                        for f, q, opts in _gate_required
-                        if f in _user_slots and _user_slots[f] is None
-                        # Skip if the AI's value for this field is grounded in
-                        # recent conversation history — handles multi-turn flows
-                        # where the entity ("test1") was named in a prior turn
-                        # and the current message is only a confirmation ("yes").
-                        and not (
-                            raw_args.get(f)
-                            and isinstance(raw_args.get(f), str)
-                            and (
-                                raw_args[f].lower() in _recent_context
-                                # "test1" grounded in context even when user wrote "test 1"
-                                or raw_args[f].lower().replace(" ", "") in _recent_context.replace(" ", "")
-                            )
-                        )
-                    ]
-                    if _missing_early:
-                        _pre_gate_result = {
-                            "success":             False,
-                            "clarify":             True,
-                            "missing":             _missing_early,
-                            "question":            _missing_early[0]["question"],
-                            "options":             _missing_early[0]["options"],
-                            "needs_clarification": _missing_early[0]["field"],
-                            "error":               (
-                                f"Missing required arguments for {tool_name}: "
-                                f"{[m['field'] for m in _missing_early]}"
-                            ),
-                        }
-                # ──────────────────────────────────────────────────────────────
+                _pre_gate_result = _build_pre_gate_result(
+                    tool_name, raw_args, user_input, _recent_context, state
+                )
 
                 # ── Manual per-VM config prompt ────────────────────────────────
                 if tool_name == "create_vm" and raw_args.get("manual"):
