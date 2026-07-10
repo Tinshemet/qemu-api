@@ -73,7 +73,7 @@ class QemuManager(
                     if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
                         return True
                 except Exception:
-                    pass
+                    pass  # liveness probe raced a dying process — treat as not running
         pid = self._state.get_pid(name)
         if pid:
             try:
@@ -82,7 +82,7 @@ class QemuManager(
                     self._procs[name] = _PsutilProcWrapper(p)
                     return True
             except psutil.NoSuchProcess:
-                pass
+                pass  # pid vanished during adoption — treat as not running
         self._procs.pop(name, None)
         self._state.set_stopped(name)
         pid = self._find_qemu_pid(name)
@@ -94,7 +94,7 @@ class QemuManager(
                     self._state.set_running(name, pid)
                     return True
             except psutil.NoSuchProcess:
-                pass
+                pass  # pid vanished during adoption — treat as not running
         return False
 
     def _used_ports(self, kind: str) -> List[int]:
@@ -117,7 +117,7 @@ class QemuManager(
                     if kind == "spice" and data.get("spice_port"):
                         ports.append(data["spice_port"])
                 except Exception:
-                    pass
+                    pass  # unreadable/partial port file — skip it when collecting ports
         return ports
 
     def _apply_cpu_pinning(self, pid: int, cpus: List[int]) -> None:

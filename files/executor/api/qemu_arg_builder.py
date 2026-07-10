@@ -49,7 +49,7 @@ def _parse_qemu_version(binary: str = "qemu-system-x86_64") -> Tuple[int, int, i
         if m:
             return int(m.group(1)), int(m.group(2)), int(m.group(3))
     except Exception:
-        pass
+        pass  # qemu --version unparseable/absent — caller falls back to a default below
     return (0, 0, 0)
 
 
@@ -168,7 +168,7 @@ def build_iso_search_dirs() -> List[str]:
                 if os.path.isdir(full) and entry.lower() in _ISO_DESKTOP_SUBDIRS and full not in dirs:
                     dirs.append(full)
         except PermissionError:
-            pass
+            pass  # ISO search dir not readable — skip it
 
     # System-wide mount points: /media/<user>/<device>, /mnt/<device>, /run/media/<user>/<device>
     for mount_root in _CFG.get("iso_mount_roots", []):
@@ -190,7 +190,7 @@ def build_iso_search_dirs() -> List[str]:
                     if t not in dirs:
                         dirs.append(t)
         except PermissionError:
-            pass
+            pass  # ISO search dir not readable — skip it
 
     dirs.append(tempfile.gettempdir())
     return dirs

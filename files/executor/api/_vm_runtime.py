@@ -156,7 +156,7 @@ class _VmRuntimeMixin:
                 try:
                     open(_sentinel, "w").close()
                 except OSError:
-                    pass
+                    pass  # best-effort boot sentinel — failure only risks re-triggering unattended, not correctness
                 import socket as _sock
                 import threading as _thr
                 _mon  = config.get_monitor_socket()
@@ -193,7 +193,7 @@ class _VmRuntimeMixin:
                         try:
                             conn.recv(65536)
                         except Exception:
-                            pass
+                            pass  # draining the monitor socket during keypress injection — recv errors are non-fatal
                         _end = time.time() + _secs
                         while time.time() < _end:
                             try:
@@ -202,14 +202,14 @@ class _VmRuntimeMixin:
                                 try:
                                     conn.recv(65536)
                                 except Exception:
-                                    pass
+                                    pass  # draining the monitor socket after 'sendkey ret' — recv errors are non-fatal
                             except Exception:
                                 break
                     finally:
                         try:
                             conn.close()
                         except Exception:
-                            pass
+                            pass  # closing the monitor socket in finally — a close error can't affect teardown
 
                 _thr.Thread(target=_spam_boot_keys, daemon=True).start()
 
@@ -248,7 +248,7 @@ class _VmRuntimeMixin:
                         _qmp.execute("expire_password",
                                      {"protocol": "vnc", "time": str(_expire)})
                     except Exception:
-                        pass
+                        pass  # VNC password expiry is best-effort — a failure just leaves the password non-expiring
                     result["vnc_password"] = vnc_password
                 finally:
                     _qmp.close()
@@ -373,7 +373,7 @@ class _VmRuntimeMixin:
                         break
                     time.sleep(1)
             except Exception:
-                pass
+                pass  # graceful QMP shutdown failed — falls through to the forceful kill below
 
         proc = self._procs.get(name)
         if proc:
@@ -386,7 +386,7 @@ class _VmRuntimeMixin:
                 else:
                     proc.terminate()
             except Exception:
-                pass
+                pass  # terminate/kill raced an already-exited process — nothing left to do
 
         self._procs.pop(name, None)
         self._state.set_stopped(name)
@@ -481,18 +481,18 @@ class _VmRuntimeMixin:
             try:
                 os.kill(pid, _signal.SIGKILL)
             except OSError:
-                pass
+                pass  # SIGKILL raced an already-gone pid — treat as reaped
 
         if os.path.exists(tpm_pid):
             try:
                 with open(tpm_pid) as f:
                     _reap(int(f.read().strip()))
             except (ValueError, OSError):
-                pass
+                pass  # unreadable/garbage TPM pid file — skip reaping; the unlink below clears it
             try:
                 os.unlink(tpm_pid)
             except OSError:
-                pass
+                pass  # stale TPM pid file already gone or unremovable — non-fatal for teardown
 
         # Sweep strays whose --tpmstate dir is this VM's tpm dir (orphans from
         # relaunches/crashes where the pidfile no longer points at them).
@@ -503,7 +503,7 @@ class _VmRuntimeMixin:
                 ):
                     _reap(p.pid)
         except Exception:
-            pass
+            pass  # psutil swtpm sweep is best-effort cleanup — never block VM stop on it
 
     def _maybe_auto_detach_iso(self, config: MachineConfig) -> bool:
         """Detach ISO if disk already has a substantial OS install (> 2 GB data).
@@ -556,7 +556,7 @@ class _VmRuntimeMixin:
                 if f"process={name}" in cmdline and "qemu" in cmdline.lower():
                     return proc.info["pid"]
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                pass  # process vanished mid-scan (psutil race) — skip it and keep searching
         return None
 
     def _start_setup_server(self, name: str, script_path: str) -> int:

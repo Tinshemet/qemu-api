@@ -293,7 +293,7 @@ class _VmLifecycleMixin:
                         except OSError as e:
                             disk_errors.append(f"{p}: {e}")
             except FileNotFoundError:
-                pass
+                pass  # VM dir already gone — nothing left to remove
 
         shutil.rmtree(vm_dir)
         self._state.set_stopped(name)

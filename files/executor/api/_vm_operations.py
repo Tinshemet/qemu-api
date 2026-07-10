@@ -724,7 +724,7 @@ class _VmOperationsMixin:
                                            "run: sudo sysctl vm.nr_hugepages=2048",
                             })
                 except Exception:
-                    pass
+                    pass  # hugepages diagnostic is advisory — skip it if the host read fails
             if cfg.iso_path and not os.path.exists(cfg.iso_path):
                 result["errors"].append({
                     "line":    f"iso_path = {cfg.iso_path}",
@@ -753,7 +753,7 @@ class _VmOperationsMixin:
                                                "Attach an ISO and boot from it to install.",
                                 })
                     except Exception:
-                        pass
+                        pass  # disk-size diagnostic is advisory — skip it if the query fails
             if cfg.bios in ("ovmf", "ovmf_ms") and cfg.uefi:
                 from .qemu_config import OVMF as _OVMF
                 if not _OVMF["available"]:

@@ -108,7 +108,7 @@ def get_profiles() -> list:
             from executor.api.qemu_config import list_profiles as _lp
             return _lp()
         except ImportError:
-            pass
+            pass  # executor pkg absent (orchestrator-only checkout) — return the empty default below
     return []
 
 
@@ -127,7 +127,7 @@ def get_all_profiles() -> dict:
             from executor.api.qemu_config import get_all_profiles as _gp
             return _gp()
         except ImportError:
-            pass
+            pass  # executor pkg absent (orchestrator-only checkout) — return the empty default below
     return {}
 
 
@@ -146,7 +146,7 @@ def get_ovmf() -> dict:
             from executor.api.qemu_config import OVMF as _ovmf
             return _ovmf
         except ImportError:
-            pass
+            pass  # executor pkg absent (orchestrator-only checkout) — return the empty default below
     return {"available": False, "code": "", "vars": ""}
 
 
@@ -165,7 +165,7 @@ def get_capabilities() -> dict:
             from executor.api.qemu_config import check_system_capabilities as _csc
             return _csc()
         except ImportError:
-            pass
+            pass  # executor pkg absent (orchestrator-only checkout) — return the empty default below
     return {}
 
 

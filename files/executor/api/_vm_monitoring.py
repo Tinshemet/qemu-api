@@ -100,7 +100,7 @@ class _VmMonitoringMixin:
                 status["rss_mb"]   = round(mem.rss / 1024**2, 1)
                 status["uptime_s"] = int(time.time() - p.create_time())
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                pass  # process gone/denied mid-read — leave the cpu/mem fields out of status
             try:
                 cfg = MachineConfig.load(name)
                 qmp = QMPClient(cfg.get_qmp_socket())
@@ -109,7 +109,7 @@ class _VmMonitoringMixin:
                 status["qemu_status"] = info.get("return", {}).get("status", "unknown")
                 qmp.close()
             except Exception:
-                pass
+                pass  # QMP status query is best-effort — leave qemu_status as its default
 
         return status
 
@@ -152,11 +152,11 @@ class _VmMonitoringMixin:
                     "write_count": io.write_count,
                 }
             except psutil.AccessDenied:
-                pass
+                pass  # io counters denied by the OS — omit the io block
             try:
                 report["open_files"] = len(p.open_files())
             except psutil.AccessDenied:
-                pass
+                pass  # open-files count denied by the OS — omit it
         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
             report["error"] = str(e)
 
@@ -176,7 +176,7 @@ class _VmMonitoringMixin:
                 ]
             qmp.close()
         except Exception:
-            pass
+            pass  # QMP block-stats query is best-effort — omit disk io
 
         return report
 

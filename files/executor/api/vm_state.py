@@ -33,7 +33,7 @@ class VMState:
                 with open(STATE_FILE) as f:
                     return json.load(f)
             except Exception:
-                pass
+                pass  # corrupt/unreadable state file — start from empty rather than crash the server
         return {}
 
     # Writes current state to .state.json.
@@ -102,7 +102,7 @@ class _PsutilProcWrapper:
         try:
             self._proc.terminate()
         except psutil.NoSuchProcess:
-            pass
+            pass  # process already gone — terminate() is a no-op then
 
     # Sends SIGKILL; silently ignores if the process is already gone.
     # In: nothing → Out: nothing
@@ -110,7 +110,7 @@ class _PsutilProcWrapper:
         try:
             self._proc.kill()
         except psutil.NoSuchProcess:
-            pass
+            pass  # process already gone — kill() is a no-op then
 
     # Returns whether the wrapped process is still alive.
     # In: nothing → Out: bool

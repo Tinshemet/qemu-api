@@ -36,7 +36,7 @@ class IsolatedNetManager:
                 with open(self.NET_FILE) as f:
                     return json.load(f)
             except Exception:
-                pass
+                pass  # corrupt/unreadable network state — start from empty rather than crash
         return {}
 
     # Writes the current network state back to networks.json.

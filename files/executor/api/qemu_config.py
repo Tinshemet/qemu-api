@@ -509,7 +509,7 @@ def _load_custom_profiles() -> Dict[str, Dict[str, Any]]:
                 with open(os.path.join(PROFILES_DIR, fname)) as f:
                     profiles[key] = json.load(f)
             except Exception:
-                pass
+                pass  # one malformed profile file shouldn't block loading the rest — skip it
     return profiles
 
 
