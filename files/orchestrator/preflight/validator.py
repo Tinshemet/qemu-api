@@ -36,19 +36,7 @@ from .host_probe import (  # host/internet probing (extracted from this file)
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _THRESHOLDS = _CFG["thresholds"]
 
-# ── Global flags ───────────────────────────────────────────────────────────────
-
-
-# Cache for QEMU capability queries (expensive — run once per session)
-
-
-# ── Network utilities ──────────────────────────────────────────────────────────
-
-
-# ── Local QEMU capability queries ──────────────────────────────────────────────
-
-
-# ── CPU architecture classification ───────────────────────────────────────────
+# ── Pre-flight constants ───────────────────────────────────────────────────────
 
 _QEMU_CPU_MODELS        = set(_CFG["qemu_cpu_models"])
 _LAPTOP_TYPE_KEYWORDS   = tuple(_CFG["laptop_type_keywords"])
@@ -56,12 +44,6 @@ _PREFLIGHT_TOOLS        = set(_CFG["preflight_tools"])
 _PREFLIGHT_HW_FIELDS    = set(_CFG["preflight_hw_fields"])
 _DESTRUCTIVE_MON_CMDS   = _CFG["destructive_monitor_cmds"]
 _BAD_ISO_PATH_PATTERNS  = _CFG["bad_iso_path_patterns"]
-
-
-# ── DuckDuckGo product lookup ──────────────────────────────────────────────────
-
-
-# ── Internet / local QEMU validation ──────────────────────────────────────────
 
 
 # ── Pre-flight gate ────────────────────────────────────────────────────────────

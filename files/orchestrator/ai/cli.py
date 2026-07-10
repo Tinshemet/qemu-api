@@ -660,9 +660,6 @@ def chat_loop(verbose: bool = False):
             _runtime_drift_count = 0
 
 
-# ── Direct sub-command CLI ─────────────────────────────────────────────────────
-
-
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
