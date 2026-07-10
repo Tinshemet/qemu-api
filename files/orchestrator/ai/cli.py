@@ -712,6 +712,90 @@ def _safety_gate(tool_name: str, raw_args: dict, state: "TurnState",
     return GateOutcome.PROCEED
 
 
+def _preflight_gate(tool_name: str, raw_args: dict, state: "TurnState",
+                    messages: List[dict], verbose: bool):
+    """Run pre-flight validation and act on the result before execution.
+
+    Returns (raw_args, outcome): EXIT (Ctrl-C), REPLAN (abort — the AI is nudged
+    to re-plan), CANCELLED (ask_user declined), or PROCEED (ok / auto_fix /
+    ask_user-approved). Mutates raw_args for auto_fix, an ask_user fix_field, and
+    the create_profile force flag.
+
+    Example::
+
+        raw_args, out = _preflight_gate("create_vm", {"name": "v"}, st, msgs, False)
+        # out is GateOutcome.PROCEED when preflight returns action == "ok"
+    """
+    pf = _preflight_check(
+        tool_name, raw_args,
+        manager if API_URL == "local" else None,
+        verbose,
+        stateless_only=(API_URL != "local"),
+    )
+    action = pf.get("action", "ok")
+
+    if action == "abort":
+        messages.append({
+            "role":    "tool",
+            "content": json.dumps({"success": False, "error": pf["reason"]}, default=str),
+        })
+        messages.append({
+            "role":    "user",
+            "content": (
+                f"_INTERNAL_ {pf['reason']}. "
+                f"{pf.get('correction', '')} Do not retry this operation."
+            ),
+        })
+        return raw_args, GateOutcome.REPLAN
+
+    if action == "auto_fix":
+        raw_args = pf["fixed_args"]
+        if not verbose:
+            console.print(f"  [yellow]⚙  Pre-flight auto-fixed: {pf['correction']}[/yellow]")
+
+    elif action == "ask_user" and tool_name not in _CONFIRM_NAME:
+        _show_preflight_warning(pf, console)
+        fix_field = pf.get("fix_field")
+        opts      = pf.get("options", [])
+        try:
+            pf_answer = console.input("[bold cyan]Your choice:[/bold cyan] ").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled.[/dim]")
+            return raw_args, GateOutcome.EXIT
+        cancelled = (
+            not pf_answer
+            or (opts and pf_answer.lower() == opts[-1].lower())
+            or pf_answer.lower() in ("no", "cancel", "n")
+        )
+        if cancelled:
+            messages.append({
+                "role":    "tool",
+                "content": json.dumps(
+                    {"success": False, "error": "Operation cancelled by user."}, default=str),
+            })
+            messages.append({
+                "role":    "user",
+                "content": "_INTERNAL_ The user cancelled this operation. Ask what they would like to do instead.",
+            })
+            state.op_cancelled = True
+            return raw_args, GateOutcome.CANCELLED
+        if fix_field:
+            raw_args = dict(raw_args)
+            raw_args[fix_field] = pf_answer
+            state.clarified_fields.add(fix_field)
+        elif tool_name == "create_profile":
+            # User approved "Save anyway" — bypass the executor's duplicate preflight.
+            raw_args = dict(raw_args)
+            raw_args["force"] = True
+
+    # After the CLI handled preflight for create_profile (ok / auto_fix /
+    # ask_user-approved), mark force=True so the executor skips its own preflight.
+    if tool_name == "create_profile" and action in ("ok", "auto_fix"):
+        raw_args = dict(raw_args)
+        raw_args["force"] = True
+    return raw_args, GateOutcome.PROCEED
+
+
 def _maybe_enable_custom_mode(tool_name: str, user_input_lower: str,
                               messages: List[dict]) -> None:
     """Enable custom mode for create_profile when the user said 'custom'.
@@ -1068,88 +1152,11 @@ def chat_loop(verbose: bool = False):
                 raw_args = _resolve_os_type(tool_name, raw_args, _ui, state)
 
                 # ── Pre-flight check ───────────────────────────────────────
-                # Both modes run preflight — but with different scope:
-                # Local:  full check (real manager, real fs, real binaries).
-                # Remote: stateless-only (shape/logic/arg checks — no fs or manager
-                #         calls). The client machine runs the full stateful check
-                #         and returns structured preflight responses as tool results,
-                #         which the clarify/error handlers below already handle.
-                _pf = _preflight_check(
-                    tool_name, raw_args,
-                    manager if API_URL == "local" else None,
-                    verbose,
-                    stateless_only=(API_URL != "local"),
-                )
-                _pf_action = _pf.get("action", "ok")
-
-                if _pf_action == "abort":
-                    messages.append({
-                        "role":    "tool",
-                        "content": json.dumps(
-                            {"success": False, "error": _pf["reason"]}, default=str
-                        ),
-                    })
-                    messages.append({
-                        "role":    "user",
-                        "content": (
-                            f"_INTERNAL_ {_pf['reason']}. "
-                            f"{_pf.get('correction', '')} Do not retry this operation."
-                        ),
-                    })
+                raw_args, _pf_out = _preflight_gate(tool_name, raw_args, state, messages, verbose)
+                if _pf_out is GateOutcome.EXIT:
+                    return
+                if _pf_out is not GateOutcome.PROCEED:   # REPLAN (abort) or CANCELLED
                     break
-
-                elif _pf_action == "auto_fix":
-                    raw_args = _pf["fixed_args"]
-                    if not verbose:
-                        console.print(
-                            f"  [yellow]⚙  Pre-flight auto-fixed: {_pf['correction']}[/yellow]"
-                        )
-
-                elif _pf_action == "ask_user" and tool_name not in _CONFIRM_NAME:
-                    _show_preflight_warning(_pf, console)
-                    fix_field = _pf.get("fix_field")
-                    opts      = _pf.get("options", [])
-                    try:
-                        pf_answer = console.input("[bold cyan]Your choice:[/bold cyan] ").strip()
-                    except (KeyboardInterrupt, EOFError):
-                        console.print("\n[dim]Cancelled.[/dim]")
-                        return
-                    cancelled = (
-                        not pf_answer
-                        or (opts and pf_answer.lower() == opts[-1].lower())
-                        or pf_answer.lower() in ("no", "cancel", "n")
-                    )
-                    if cancelled:
-                        messages.append({
-                            "role":    "tool",
-                            "content": json.dumps(
-                                {"success": False, "error": "Operation cancelled by user."},
-                                default=str,
-                            ),
-                        })
-                        messages.append({
-                            "role":    "user",
-                            "content": "_INTERNAL_ The user cancelled this operation. Ask what they would like to do instead.",
-                        })
-                        state.op_cancelled = True
-                        break
-                    if fix_field:
-                        raw_args = dict(raw_args)
-                        raw_args[fix_field] = pf_answer
-                        state.clarified_fields.add(fix_field)
-                    elif tool_name == "create_profile":
-                        # User approved "Save anyway" — bypass the executor's
-                        # duplicate preflight so we don't double-prompt.
-                        raw_args = dict(raw_args)
-                        raw_args["force"] = True
-
-                # After the CLI has handled preflight for create_profile (ok,
-                # auto_fix, or ask_user-approved), always mark force=True so the
-                # executor skips its own duplicate preflight check entirely.
-                if tool_name == "create_profile" and _pf_action in ("ok", "auto_fix"):
-                    raw_args = dict(raw_args)
-                    raw_args["force"] = True
-                # ──────────────────────────────────────────────────────────
 
                 # ── Safety confirmation gate ───────────────────────────────
                 _sg = _safety_gate(tool_name, raw_args, state, messages)
