@@ -480,6 +480,47 @@ EXECUTOR_TESTS: List[ExecutorTest] = [
         expect_success=True,
         expect_cfg={"hardened": True, "balloon": False, "hugepages": False, "machine_type": "q35"},
     ),
+
+    # ── VM templates / golden images ──────────────────────────────────────────
+    ExecutorTest(
+        id="executor_mark_as_template_tags_source",
+        tags=["executor", "template"],
+        description="mark_as_template succeeds on a stopped VM and tags it with the 'template' label",
+        tool="mark_as_template",
+        input_args={},
+        setup={"os_type": "linux", "disk_size_gb": 1},
+        expect_success=True,
+        expect_result_keys=["template"],
+        expect_cfg={"labels": ["template"]},
+    ),
+    ExecutorTest(
+        id="executor_remove_label_refuses_template",
+        tags=["executor", "template", "label"],
+        description="remove_label refuses to strip the protected 'template' label, even from a VM that never had it",
+        tool="remove_label",
+        input_args={"name": "does-not-need-to-exist", "label": "template"},
+        expect_success=False,
+    ),
+    ExecutorTest(
+        id="executor_create_vm_from_missing_template",
+        tags=["executor", "template", "create_vm"],
+        description="create_vm with a nonexistent template name fails cleanly instead of creating blank disks",
+        tool="create_vm",
+        input_args={
+            "name":     f"tpl-missing-{_uid()}",
+            "os_type":  "linux",
+            "template": "no-such-template-xyz",
+        },
+        expect_success=False,
+    ),
+    ExecutorTest(
+        id="executor_list_templates_smoke",
+        tags=["executor", "template"],
+        description="list_templates runs cleanly and returns a list",
+        tool="list_templates",
+        input_args={},
+        expect_success=True,
+    ),
 ]
 
 
@@ -670,6 +711,9 @@ def run_executor_test(tc: ExecutorTest) -> TestResult:
         if _fixture_name:
             _fx_dir = os.path.join(os.path.expanduser("~"), ".qemu_vms", _fixture_name)
             _shutil.rmtree(_fx_dir, ignore_errors=True)
+            if tc.tool == "mark_as_template":
+                from executor.api._vm_constants import TEMPLATES_DIR
+                _shutil.rmtree(os.path.join(TEMPLATES_DIR, _fixture_name), ignore_errors=True)
 
     return TestResult(test_id=tc.id, layer=2, passed=len(issues)==0,
                       issues=issues, fixes_applied=fixes, duration_s=time.time()-start)

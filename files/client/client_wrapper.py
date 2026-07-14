@@ -1,24 +1,24 @@
 """
-client_wrapper.py — qemu-api Client Entry Point
+client_wrapper.py — gorgon Client Entry Point
 
 Usage:
-    qemu-api                        AI chat (connects to server)
-    qemu-api <cmd> [args...]        Direct local QEMU command (no AI)
-    qemu-api -v                     AI chat with verbose tool output
-    qemu-api -cu                    AI chat with product verification disabled
-    qemu-api -cs                    Clear saved session before starting
-    qemu-api -tf <name>             Fingerprint report for a VM
+    gorgon                        AI chat (connects to server)
+    gorgon <cmd> [args...]        Direct local QEMU command (no AI)
+    gorgon -v                     AI chat with verbose tool output
+    gorgon -cu                    AI chat with product verification disabled
+    gorgon -cs                    Clear saved session before starting
+    gorgon -tf <name>             Fingerprint report for a VM
 
 Appearance is configured via CLI_config.json (same directory as this file):
     text_color   Hex color for body text, e.g. "#aaaaaa"
     font_size    Terminal font size hint, e.g. 13
 
 Examples:
-    qemu-api                        Start AI chat session
-    qemu-api list                   List local VMs
-    qemu-api launch myvm sdl        Launch VM with SDL display
-    qemu-api help                   Show all direct commands
-    qemu-api -tf myvm               Fingerprint report for myvm
+    gorgon                        Start AI chat session
+    gorgon list                   List local VMs
+    gorgon launch myvm sdl        Launch VM with SDL display
+    gorgon help                   Show all direct commands
+    gorgon -tf myvm               Fingerprint report for myvm
 """
 
 import json
@@ -56,7 +56,7 @@ def main() -> None:
         vm_name = argv[idx + 1] if idx + 1 < len(argv) else None
         argv = argv[:idx] + argv[idx + 2:]
         if not vm_name:
-            print("Usage: qemu-api -tf <vm-name>")
+            print("Usage: gorgon -tf <vm-name>")
             sys.exit(1)
         from client.cli.commands import fingerprint_report
         fingerprint_report(vm_name)

@@ -60,6 +60,11 @@
             "list profiles",
             "show profiles"
         ],
+        "templates": [
+            "templates",
+            "list templates",
+            "show templates"
+        ],
         "clear_session": [
             "clear session",
             "forget"
@@ -116,6 +121,39 @@
         "snapshot",
         "update",
         "list"
+    ],
+    "state_query_words": [
+        "running",
+        "stopped",
+        "status",
+        "state",
+        "alive",
+        "up",
+        "which",
+        "show",
+        "logs",
+        "log",
+        "monitor",
+        "monitoring",
+        "snapshot",
+        "snapshots",
+        "profile",
+        "profiles",
+        "network",
+        "networks",
+        "info",
+        "details",
+        "config",
+        "configuration",
+        "resources",
+        "resource",
+        "exists",
+        "existing",
+        "current",
+        "currently",
+        "many",
+        "count",
+        "check"
     ],
     "confirm_yn": {
         "update_config": [

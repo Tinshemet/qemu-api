@@ -1,5 +1,5 @@
 """
-api_server.py — qemu-api Server HTTP Service
+api_server.py — gorgon Server HTTP Service
 
 Runs on the server machine alongside Ollama and the QEMU engine.
 Exposes /chat (AI loop), /execute (direct tool call), /health, /images,
@@ -10,7 +10,7 @@ Start with:
 
 Environment variables:
     API_TOKEN   shared secret — server refuses to start if not set
-                alternatively write the token to ~/.qemu-api.token
+                alternatively write the token to ~/.gorgon.token
 """
 
 import hashlib
@@ -21,7 +21,7 @@ import secrets
 import uuid
 
 from fastapi import FastAPI, HTTPException, Depends, Body, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from typing import Any, Dict, Iterator, List, Optional
@@ -48,8 +48,8 @@ def _filter_allowed(names: list, allowlist: list) -> list:
 
 
 # ── Token bootstrap ───────────────────────────────────────────────────────────
-# Precedence: env var → ~/.qemu-api.token file → refuse to start.
-_TOKEN_FILE = pathlib.Path.home() / ".qemu-api.token"
+# Precedence: env var → ~/.gorgon.token file → refuse to start.
+_TOKEN_FILE = pathlib.Path.home() / ".gorgon.token"
 
 def _load_token() -> str:
     """Load the API token from the environment variable or the token file."""
@@ -65,12 +65,12 @@ def _load_token() -> str:
 _TOKEN = _load_token()
 if not _TOKEN:
     print(
-        "[qemu-api] WARNING: No API token configured — remote connections will be refused.\n"
+        "[gorgon] WARNING: No API token configured — remote connections will be refused.\n"
         "  Localhost connections are always allowed without a token.\n"
-        "  To enable remote access set API_TOKEN or write to ~/.qemu-api.token"
+        "  To enable remote access set API_TOKEN or write to ~/.gorgon.token"
     )
 
-app   = FastAPI(title="qemu-api executor", version="1.0")
+app   = FastAPI(title="gorgon executor", version="1.0")
 _auth = HTTPBearer(auto_error=False)
 
 _LOCALHOST = {"127.0.0.1", "::1", "localhost"}
@@ -104,6 +104,7 @@ class ExecuteRequest(BaseModel):
     tool_name: str
     args:      Dict[str, Any] = {}
     verbose:   bool           = False
+    log:       bool           = True
 
 
 class ChatRequest(BaseModel):
@@ -203,9 +204,16 @@ def sync() -> Dict[str, Any]:
     vm_names      = [v.get("name") for v in vms]
     profile_names = [p.get("name") if isinstance(p, dict) else p for p in profiles]
 
+    try:
+        from executor.command_catalog import COMMAND_CATALOG
+        commands = COMMAND_CATALOG
+    except Exception:
+        commands = []
+
     return {
         "shortcut_commands":    ai_cfg.get("shortcut_commands", {}),
         "allowed_remote_tools": list(_ALLOWED_TOOLS),
+        "commands":             commands,
         "vms":      [{"name": n, "status": next((v.get("status") for v in vms if v.get("name") == n), None)}
                      for n in _filter_allowed(vm_names, _ALLOWED_VMS)],
         "profiles": _filter_allowed(profile_names, _ALLOWED_PROFILES),
@@ -375,7 +383,7 @@ def clear_session(session_id: str) -> Dict[str, Any]:
 
 @app.post("/rotate-token", dependencies=[Depends(_require_token)])
 def rotate_token(new_token: str = Body(..., embed=True)) -> Dict[str, Any]:
-    """Replace the in-memory token and persist it to ~/.qemu-api.token."""
+    """Replace the in-memory token and persist it to ~/.gorgon.token."""
     global _TOKEN
     if len(new_token) < _MIN_TOKEN_LEN:
         raise HTTPException(
@@ -409,11 +417,26 @@ def custom_mode(enabled: bool = Body(..., embed=True)) -> Dict[str, Any]:
 
 
 def _manager_proxy() -> object:
-    """Return a real QemuManager in local mode, or a thin executor_client proxy in remote mode."""
+    """Return a QemuManager wrapper in local mode, or a thin executor_client proxy in remote mode.
+
+    Both branches filter list_vms() by _ALLOWED_VMS. Without this, preflight's own VM-existence
+    checks (launch_vm, resize_disk, etc. — anything calling manager.list_vms() directly) would see
+    hidden VMs as real and skip its "not found" handling, a side channel that leaks a hidden VM's
+    existence through preflight's response shape even though the tool call itself would still
+    correctly deny it — before this fix, this was only guarded against in remote mode.
+    """
     from orchestrator.executor_client import API_URL, execute_tool as _exec
     if not API_URL or API_URL == "local":
-        from shared.executioner.tool_executor import manager
-        return manager
+        from shared.executioner.tool_executor import manager as _real_manager
+        class _LocalProxy:
+            def list_vms(self, *a, **k) -> list:
+                """Filter the real manager's list_vms() by _ALLOWED_VMS."""
+                vms = _real_manager.list_vms(*a, **k)
+                names = _filter_allowed([v["name"] for v in vms], _ALLOWED_VMS)
+                return [v for v in vms if v["name"] in names]
+            def __getattr__(self, attr: str):
+                return getattr(_real_manager, attr)
+        return _LocalProxy()
     class _Proxy:
         def scan_isos(self) -> dict:
             """Proxy scan_isos to the executor via the HTTP /execute path."""
@@ -431,21 +454,11 @@ def execute(req: ExecuteRequest) -> Any:
     import orchestrator.preflight.validator as _pf
     manager = _manager_proxy()
 
-    # ── Tool allowlist ────────────────────────────────────────────────────────
-    if _ALLOWED_TOOLS and req.tool_name not in _ALLOWED_TOOLS:
-        msg = (
-            f"Tool '{req.tool_name}' is not in the remote allowlist. "
-            f"Add it to executor.allowed_remote_tools in config.json if intentional."
-        )
-        return JSONResponse(status_code=403, content={"ok": False, "result": {"success": False, "error": msg}})
-
-    # ── VM access control ─────────────────────────────────────────────────────
-    from orchestrator.executor_client import _VM_TOOLS
-    if req.tool_name in _VM_TOOLS:
-        vm_name = req.args.get("name", "")
-        if _ALLOWED_VMS and vm_name not in _ALLOWED_VMS:
-            msg = f"VM '{vm_name}' is not accessible to clients."
-            return JSONResponse(status_code=403, content={"ok": False, "result": {"success": False, "error": msg}})
+    # Tool/VM allowlist enforcement lives solely in executor_client.execute_tool() below (the
+    # same point /chat already relies on with no pre-check of its own) — a prior duplicate
+    # pre-check here returned a differently-shaped response (HTTP 403, {"ok": False, ...}) with
+    # leakier wording than the deeper check, and disagreed with /chat's behavior for the same
+    # violation. One enforcement point, one consistent response shape.
 
     # ── Server-side preflight (authoritative — uses real VM/disk state) ──────
     pf     = _pf._preflight_check(req.tool_name, req.args, manager, req.verbose)
@@ -497,7 +510,7 @@ def execute(req: ExecuteRequest) -> Any:
 
     # ── Execute ───────────────────────────────────────────────────────────────
     try:
-        result = execute_tool(req.tool_name, args, req.verbose)
+        result = execute_tool(req.tool_name, args, req.verbose, log=req.log)
         if action == "auto_fix" and isinstance(result, dict):
             result["_preflight_auto_fixed"] = pf.get("correction", "Pre-flight corrected args.")
         # Filter list_vms results to only show allowed VMs

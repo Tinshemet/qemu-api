@@ -18,7 +18,7 @@ FILES IN THIS PROJECT
       api_server.py            FastAPI server — /chat, /execute, /health, /images, /events, /rotate-token
     executor_client.py         Re-export of shared.executioner.execute_tool; enforces access control
     event_log.py               JSON-lines event log (10 MB rotation → ~/.qemu_vms/events.log)
-    admin_tui.py               Curses fullscreen admin dashboard (qemu-api-admin, server-only)
+    admin_tui.py               Curses fullscreen admin dashboard (gorgon-admin, server-only)
     admin_config.json          Admin TUI appearance settings (text_color hex, font_size)
     connection_config.json     Server-side connection settings (url, token, timeout)
 
@@ -86,7 +86,7 @@ SECTION 1 — QUICK START
 
 1.1  ONE-COMMAND INSTALL
 ─────────────────────────
-  cd ~/path/to/qemu-api
+  cd ~/path/to/gorgon
   bash install.sh
 
   Handles automatically:
@@ -96,7 +96,7 @@ SECTION 1 — QUICK START
   - Ollama install + qwen2.5:7b model pull
   - systemd user service  (Ollama auto-starts on login)
   - Bridge networking config   /etc/qemu/bridge.conf
-  - zsh alias       qemu-api
+  - zsh alias       gorgon
   - Self-test
 
   To uninstall:  bash install.sh --uninstall
@@ -114,7 +114,7 @@ SECTION 1 — QUICK START
 
   # Start the HTTP API (server machine):
   API_TOKEN=mysecret PYTHONPATH=files uvicorn server.http.api_server:app --host 0.0.0.0 --port 8080
-  # Or use the alias:  qemu-api-serve
+  # Or use the alias:  gorgon-serve
 
   # On the CLIENT machine (your laptop — thin UI only):
   sudo apt install python3-venv
@@ -127,16 +127,16 @@ SECTION 1 — QUICK START
     source ~/qemu-env/bin/activate
     export SERVER_URL=http://localhost:8080   # or server LAN IP
     export API_TOKEN=mysecret
-    alias qemu-api='PYTHONPATH=~/path/to/qemu-api/files python3 ~/path/to/qemu-api/files/client/client_wrapper.py'
+    alias gorgon='PYTHONPATH=~/path/to/gorgon/files python3 ~/path/to/gorgon/files/client/client_wrapper.py'
 
 1.3  RUN (LOCAL MODE)
 ──────────────────────
-  qemu-api               AI chat mode
-  qemu-api -v            Verbose (shows raw tool calls and sanitised args)
-  qemu-api -cu           Custom machine mode (skip product verification)
-  qemu-api list          Direct CLI, no AI
-  qemu-api system        Check system capabilities
-  qemu-api -tf <name>    Fingerprint report on a VM
+  gorgon               AI chat mode
+  gorgon -v            Verbose (shows raw tool calls and sanitised args)
+  gorgon -cu           Custom machine mode (skip product verification)
+  gorgon list          Direct CLI, no AI
+  gorgon system        Check system capabilities
+  gorgon -tf <name>    Fingerprint report on a VM
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 2 — ARCHITECTURE OVERVIEW
@@ -265,7 +265,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
 
   setup_server.sh     Server-only setup. Run this on the server machine.
                       Installs Ollama + qwen2.5:7b, QEMU/KVM, Python venv,
-                      API token, systemd service (qemu-api HTTP API), Ollama
+                      API token, systemd service (gorgon HTTP API), Ollama
                       systemd service, SSH server, bridge networking.
                       Works on native Linux and WSL2.
                       Pre-set to skip prompts:
@@ -274,7 +274,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   setup_client.sh     Client-only setup. Run this on the user's laptop.
                       Installs Python venv + Rich + requests only (no QEMU).
                       Prompts for SERVER_URL and API_TOKEN.
-                      Writes connection_config.json and adds qemu-api alias.
+                      Writes connection_config.json and adds gorgon alias.
                       Pre-set to skip prompts:
                         SERVER_URL=http://192.168.1.10:8080 API_TOKEN=x bash setup_client.sh
 
@@ -292,7 +292,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   On the SERVER machine — start the HTTP API:
 
     source ~/qemu-env/bin/activate
-    cd ~/qemu-api
+    cd ~/gorgon
 
     # HTTP (SSH tunnel recommended for remote access)
     API_TOKEN=mysecrettoken PYTHONPATH=files uvicorn server.http.api_server:app \
@@ -304,7 +304,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
         --ssl-certfile /path/to/cert.pem --ssl-keyfile /path/to/key.pem
 
   Or use the alias created by setup_server.sh:
-    qemu-api-serve
+    gorgon-serve
 
   On the CLIENT machine (your laptop):
 
@@ -313,14 +313,14 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
 
     export SERVER_URL=http://localhost:8080   # or server's LAN IP without tunnel
     export API_TOKEN=mysecrettoken
-    qemu-api                                  # opens the Rich chat UI
+    gorgon                                  # opens the Rich chat UI
 
   With TLS on the client machine:
 
     export SERVER_URL=https://192.168.1.10:8443
     export API_TOKEN=mysecrettoken
     export API_CA_CERT=/path/to/ca.pem       # custom CA cert (optional)
-    qemu-api
+    gorgon
 
 3.6  CONFIGURATION REFERENCE
 ──────────────────────────────
@@ -338,7 +338,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
 
   files/client/connection_config.json  (read by client/ui/chat_client.py):
     {
-      "server_url": "http://localhost:8080",  ← qemu-api server address
+      "server_url": "http://localhost:8080",  ← gorgon server address
       "token":      "",                       ← shared secret (prefer API_TOKEN env)
       "ca_cert":    null,                     ← path to CA cert for self-signed HTTPS
       "verify_ssl": true,
@@ -357,7 +357,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
     API_VERIFY_SSL  Set to "0" to skip TLS certificate verification (dev only)
 
   Token persistence on the server:
-    The API server reads the token from ~/.qemu-api.token (chmod 0600).
+    The API server reads the token from ~/.gorgon.token (chmod 0600).
     API_TOKEN env var takes precedence. The token file survives server restarts.
 
     Rotate the token while the server is running:
@@ -365,7 +365,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
            -H "Authorization: Bearer currenttoken" \
            -H "Content-Type: application/json" \
            -d '{"new_token": "newlongsecrettoken"}'
-    The new token is written atomically to ~/.qemu-api.token and takes effect
+    The new token is written atomically to ~/.gorgon.token and takes effect
     immediately without a server restart.
 
 3.7  CLIENT ACCESS CONTROL
@@ -439,7 +439,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
 
   POST /rotate-token
     Body: {"new_token": str}   (must be ≥ 16 characters)
-    Replaces the in-memory token and persists to ~/.qemu-api.token.
+    Replaces the in-memory token and persists to ~/.gorgon.token.
     Auth required.
 
   GET  /events (auth required)
@@ -502,7 +502,7 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   If the client machine stops responding:
     Yellow warning: "Client machine health check failed (500)"
     Red alert:      "Client machine at http://... is not responding.
-                     Check that 'qemu-api serve' is still running."
+                     Check that 'gorgon serve' is still running."
 
   The warning appears inline in the chat session without interrupting it.
   The monitor thread is a daemon — it exits automatically when the provider
@@ -524,8 +524,8 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   4. Verifies the final SHA256 after download completes.
 
   Example:
-    qemu-api fetch win-test
-    qemu-api fetch win-test --out /external/backups/
+    gorgon fetch win-test
+    gorgon fetch win-test --out /external/backups/
 
   The disk is saved as <vm_name>.qcow2 in the output directory.
   If the VM is running, the image reflects in-flight state — stop the VM
@@ -539,11 +539,11 @@ SECTION 3 — LOCAL MODE vs REMOTE MODE
   Use this to move a VM to a new machine so it's ready to launch immediately.
 
   Example:
-    qemu-api bundle test
-    qemu-api bundle kali ~/vms/
+    gorgon bundle test
+    gorgon bundle kali ~/vms/
 
   After bundling, launch locally with:
-    qemu-api launch <vm_name>
+    gorgon launch <vm_name>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 4 — FLAGS  (-cu  and  -tf)
@@ -551,7 +551,7 @@ SECTION 4 — FLAGS  (-cu  and  -tf)
 
 4.1  -cu  CUSTOM MACHINE MODE
 ───────────────────────────────
-  Usage:  qemu-api -cu
+  Usage:  gorgon -cu
 
   Starts the AI chat with product verification disabled. Allows you to create
   VMs with any manufacturer/product_name combination — including fictional
@@ -573,7 +573,7 @@ SECTION 4 — FLAGS  (-cu  and  -tf)
   - Avoiding DuckDuckGo API calls in air-gapped environments
 
   Example:
-    qemu-api -cu
+    gorgon -cu
     You: create a VM called lab-01 with manufacturer "AcmeCorp" and
          product "SuperServer 9000", 16GB RAM
 
@@ -582,7 +582,7 @@ SECTION 4 — FLAGS  (-cu  and  -tf)
 
 4.2  -tf  FINGERPRINT REPORT
 ───────────────────────────────
-  Usage:  qemu-api -tf <vmname>
+  Usage:  gorgon -tf <vmname>
 
   Read-only analysis of a VM's configuration. Simulates exactly what
   inxi -M -N -C -D -A -G would report from inside the guest OS, then
@@ -841,7 +841,7 @@ SECTION 7 — AI LAYER  (provider/ai/, shared/sanitizer/, shared/preflight/)
   than llama (2 fixes vs 34 per run), reducing reliance on the sanitiser.
 
   Change model:
-    OLLAMA_MODEL=llama3.1 qemu-api          temporary
+    OLLAMA_MODEL=llama3.1 gorgon          temporary
     export OLLAMA_MODEL=llama3.1            permanent in ~/.zshrc
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1006,50 +1006,50 @@ SECTION 9 — DIRECT CLI REFERENCE
   Add -v to any command for verbose/raw JSON output.
 
   Global flags (before command):
-    qemu-api -cu <command>         Custom mode — skip product verification
-    qemu-api -v <command>          Verbose output
+    gorgon -cu <command>         Custom mode — skip product verification
+    gorgon -v <command>          Verbose output
 
   VMs:
-    qemu-api list                  List all VMs
-    qemu-api status <name>         Status
-    qemu-api monitor <name|all>    Activity report
-    qemu-api launch <name>         Start VM
-    qemu-api stop <name>           Stop VM
-    qemu-api clone <src> <new>     Clone VM
-    qemu-api config <name>         Show config JSON
-    qemu-api resize <name> <gb>    Resize primary disk
-    qemu-api delete <name>         Delete VM (asks confirmation)
-    qemu-api logs <name>           Failure diagnosis
-    qemu-api show-cmd <name>       Print QEMU launch command
-    qemu-api -tf <name>            Fingerprint report (inxi simulation)
+    gorgon list                  List all VMs
+    gorgon status <name>         Status
+    gorgon monitor <name|all>    Activity report
+    gorgon launch <name>         Start VM
+    gorgon stop <name>           Stop VM
+    gorgon clone <src> <new>     Clone VM
+    gorgon config <name>         Show config JSON
+    gorgon resize <name> <gb>    Resize primary disk
+    gorgon delete <name>         Delete VM (asks confirmation)
+    gorgon logs <name>           Failure diagnosis
+    gorgon show-cmd <name>       Print QEMU launch command
+    gorgon -tf <name>            Fingerprint report (inxi simulation)
 
   Snapshots:
-    qemu-api snapshot list <vm>
-    qemu-api snapshot create <vm> <snap>
-    qemu-api snapshot restore <vm> <snap>
-    qemu-api snapshot delete <vm> <snap>
+    gorgon snapshot list <vm>
+    gorgon snapshot create <vm> <snap>
+    gorgon snapshot restore <vm> <snap>
+    gorgon snapshot delete <vm> <snap>
 
   Networks:
-    qemu-api network list
-    qemu-api network create <name>
-    qemu-api network delete <name>
-    qemu-api network add <net> <vm>
-    qemu-api limit <vm> <cpu%> [mem_mb]
+    gorgon network list
+    gorgon network create <name>
+    gorgon network delete <name>
+    gorgon network add <net> <vm>
+    gorgon limit <vm> <cpu%> [mem_mb]
 
   Info:
-    qemu-api profiles
-    qemu-api check-profile <name>
-    qemu-api system
-    qemu-api isos
-    qemu-api cmd <vm> "<qemu cmd>"
+    gorgon profiles
+    gorgon check-profile <name>
+    gorgon system
+    gorgon isos
+    gorgon cmd <vm> "<qemu cmd>"
 
   Session:
-    qemu-api clear-session
+    gorgon clear-session
 
   Remote mode only:
-    qemu-api serve [host] [port] [--cert cert.pem --key key.pem]
+    gorgon serve [host] [port] [--cert cert.pem --key key.pem]
                                Start the API server on the client machine
-    qemu-api fetch <vm> [--out /dir]
+    gorgon fetch <vm> [--out /dir]
                                Download VM disk from the client machine
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1149,7 +1149,7 @@ SECTION 12 — KNOWN ISSUES
     "
 
   raspi3b has no display — serial console only:
-    qemu-api open-shell <name>
+    gorgon open-shell <name>
     For graphical ARM64: use machine_type=virt with Ubuntu ARM64 ISO.
 
   Windows 11 ARM64 ISO on x86 VM:
@@ -1480,7 +1480,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
           friendwsluser@203.0.113.42
       export API_URL=http://localhost:8080
       export API_TOKEN=<token from setup_client.sh output>
-      qemu-api
+      gorgon
 
     friendwsluser is the Linux username inside WSL2 — may differ from
     the Windows username. setup_wsl2.ps1 prints it automatically.
@@ -1512,7 +1512,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
 
     Your laptop                       Friend's machine
     ───────────                       ────────────────
-    qemu-api chat     ─ SSH tunnel ─► API server :8080 (127.0.0.1 only)
+    gorgon chat     ─ SSH tunnel ─► API server :8080 (127.0.0.1 only)
     localhost:8080                    tool_executor → QEMU
     localhost:5901    ─ SSH tunnel ─► VNC :5901 (127.0.0.1 only)
     vncviewer                         (bound by vnc_bind_local=True)
@@ -1529,8 +1529,8 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
     - Adds user to kvm group
     - Creates the Python venv and installs pip packages
     - Prompts for an API token (or generates one securely)
-    - Saves the token to ~/.qemu-api.token (chmod 600)
-    - Creates ~/start-qemu-api.sh
+    - Saves the token to ~/.gorgon.token (chmod 600)
+    - Creates ~/start-gorgon.sh
     - On native Linux: creates and enables a systemd user service with
       loginctl linger (server auto-starts even without login)
     - On WSL2: adds server auto-start to ~/.bashrc
@@ -1561,7 +1561,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
                          (the SSH tunnel makes the remote server appear as
                           localhost on your laptop)
     2. API_TOKEN?     → paste the token printed by setup_server.sh
-                         (it is also saved at ~/.qemu-api.token on the server)
+                         (it is also saved at ~/.gorgon.token on the server)
 
   To skip the prompts entirely, pre-set the values as env vars:
     SERVER_URL=http://localhost:8080 API_TOKEN=mytoken bash setup_client.sh
@@ -1572,7 +1572,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
     - Writes a block to your shell rc with the alias and env vars:
         export SERVER_URL="http://localhost:8080"
         export API_TOKEN="..."
-        alias qemu-api='python3 .../client/client_wrapper.py'
+        alias gorgon='python3 .../client/client_wrapper.py'
     - Pings the server's /health endpoint to verify connectivity
       (warns if the SSH tunnel is not open yet — that is fine at this step)
 
@@ -1581,7 +1581,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
 
   To point at a different server without re-running the script:
     Edit the SERVER_URL line in ~/.zshrc (or ~/.bashrc) between the
-    # qemu-api client start / end comments, then: source ~/.zshrc
+    # gorgon client start / end comments, then: source ~/.zshrc
 
   ── Step 3: Open the SSH tunnel ─────────────────────────────────────────────
 
@@ -1618,8 +1618,8 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
     source ~/qemu-env/bin/activate
     export API_URL=http://localhost:8080    <- tunnel makes remote look local
     export API_TOKEN=choose-a-long-secret-here
-    cd ~/qemu-api/files
-    qemu-api
+    cd ~/gorgon/files
+    gorgon
 
   You are now in the AI chat loop. Everything you type is processed locally
   by Ollama, and tool calls are forwarded through the tunnel to the friend's
@@ -1656,14 +1656,14 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
   manually after the fact:
 
   Native Linux:
-    systemctl --user status qemu-api         <- check status
-    systemctl --user restart qemu-api        <- restart
-    journalctl --user -u qemu-api -f         <- live logs
+    systemctl --user status gorgon         <- check status
+    systemctl --user restart gorgon        <- restart
+    journalctl --user -u gorgon -f         <- live logs
 
   WSL2:
-    cat /tmp/qemu-api.log                    <- server logs
+    cat /tmp/gorgon.log                    <- server logs
     pkill -f "api_server"                    <- stop
-    nohup ~/start-qemu-api.sh > /tmp/qemu-api.log 2>&1 &   <- start
+    nohup ~/start-gorgon.sh > /tmp/gorgon.log 2>&1 &   <- start
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1679,7 +1679,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
 
     Your laptop                  Friend's router           Friend's machine
     ───────────                  ───────────────           ────────────────
-    qemu-api chat  -- HTTPS --> port 8443 forward ------> API server :8443
+    gorgon chat  -- HTTPS --> port 8443 forward ------> API server :8443
     (API_URL=https://...)        (one-time config)         (0.0.0.0:8443, TLS)
 
   Note on VNC: VNC is still bound to 127.0.0.1 on the friend's machine.
@@ -1692,7 +1692,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
   Option 1 — self-signed (fast, requires copying the cert to your laptop):
     openssl req -x509 -newkey rsa:4096 -nodes \
         -keyout server.key -out server.crt -days 365 \
-        -subj "/CN=qemu-api"
+        -subj "/CN=gorgon"
 
   Option 2 — Let's Encrypt (requires a domain name pointing at the public IP):
     sudo apt install certbot
@@ -1715,7 +1715,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
   ── Step 3: Start the server with TLS ───────────────────────────────────────
 
   On the friend's machine:
-    cd ~/qemu-api
+    cd ~/gorgon
     source ~/qemu-env/bin/activate
     API_TOKEN=choose-a-long-secret-here PYTHONPATH=files uvicorn \
         client.server.api_server:app \
@@ -1726,7 +1726,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
   ── Step 4: Your laptop — copy the cert (self-signed only) ──────────────────
 
   If you used a self-signed cert, copy server.crt to your laptop:
-    scp friendusername@203.0.113.42:~/qemu-api/files/server.crt ~/qemu-api-ca.crt
+    scp friendusername@203.0.113.42:~/gorgon/files/server.crt ~/gorgon-ca.crt
 
   If you used Let's Encrypt, no cert copy is needed — it is publicly trusted.
 
@@ -1735,13 +1735,13 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
   Self-signed cert:
     export API_URL=https://203.0.113.42:8443
     export API_TOKEN=choose-a-long-secret-here
-    export API_CA_CERT=~/qemu-api-ca.crt
-    qemu-api
+    export API_CA_CERT=~/gorgon-ca.crt
+    gorgon
 
   Let's Encrypt cert:
     export API_URL=https://yourdomain.example.com:8443
     export API_TOKEN=choose-a-long-secret-here
-    qemu-api
+    gorgon
 
   ── Step 6: VNC in Approach B ───────────────────────────────────────────────
 
@@ -1785,7 +1785,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
       - Check the tunnel terminal is still open and has not timed out
       - Re-run: ssh -N -L 8080:127.0.0.1:8080 friendusername@203.0.113.42
       - Verify the server is running on the friend's machine:
-          systemctl --user status qemu-api
+          systemctl --user status gorgon
     TLS approach:
       - Check the server is running on the friend's machine
       - Check port 8443 is forwarded on the router
@@ -1794,12 +1794,12 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE QEMU SERVER
   "Invalid API token":
     - API_TOKEN on your laptop must match exactly what the server started with
     - Check for extra spaces or quotes in the export command
-    - If using token file: cat ~/.qemu-api.token on friend's machine
+    - If using token file: cat ~/.gorgon.token on friend's machine
 
   "Client machine is not responding" (liveness alert in chat):
     - The server process crashed or the SSH tunnel dropped
     - SSH tunnel: re-run the ssh -N command in its terminal tab
-    - TLS: check systemctl --user status qemu-api on the friend's machine
+    - TLS: check systemctl --user status gorgon on the friend's machine
     - The chat loop stays alive — once the tunnel or server is back,
       the next command will work normally
 
@@ -1885,7 +1885,7 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
     On startup, the client checks if the server is reachable. If not, and if
     the server files exist alongside the client (single-machine setup), it
     launches uvicorn automatically as a background process and polls /health
-    until ready. Server logs go to /tmp/qemu-api-server.log.
+    until ready. Server logs go to /tmp/gorgon-server.log.
 
   Appearance (client/CLI_config.json):
     text_color   Hex color for body text, e.g. "#7355a3"
@@ -1901,7 +1901,7 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
   client sparse checkout, no alias added by setup_client.sh.
 
   Launch:
-    qemu-api-admin
+    gorgon-admin
 
   The terminal auto-resizes to 52×200. Dashboard layout:
     Header bar     — uptime, VM count, event count, server PID (or "server=stopped")
@@ -1915,7 +1915,7 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
     kill <vm>         Force-kill (SIGKILL)
     stopall           Stop all running VMs
     list              Print VM names in status line
-    start-server      Launch the API server (uvicorn, background, logs → /tmp/qemu-api-server.log)
+    start-server      Launch the API server (uvicorn, background, logs → /tmp/gorgon-server.log)
     status            Show server PID, VM count, running count
     clearlog          Wipe the event log
     shutdown          Send SIGTERM to the api_server process
@@ -1933,5 +1933,131 @@ SECTION 15 — SERVER MONITORING & ADMIN TUI
   Appearance (server/admin_config.json):
     text_color   Hex color for body text, e.g. "#aaaaaa"
     font_size    Terminal font size hint, applied via xterm escape on startup
+
+================================================================================
+SECTION 16 — UNATTENDED OS INSTALL & GOLDEN-IMAGE TEMPLATES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+16.1  UNATTENDED OS INSTALL
+─────────────────────────────
+  create_vm(..., unattended=true) fully automates OS installation — no
+  clicking through installer screens. DESTRUCTIVE (wipes the target disk) —
+  preflight asks for Yes/No confirmation first (force=true skips it, same
+  pattern as delete_vm).
+
+  Code lives in its own package, executor/api/autoinstall/ (windows.py,
+  linux.py, templates/) — specifically so it's easy to find where to add a
+  custom answer file or a new distro. See that package's __init__.py for
+  exact instructions on adding one.
+
+  WINDOWS: generates an autounattend.xml answer file, packed onto both an ISO
+  (autounattend.iso) and a bootable FAT USB image (autounattend.img, whose
+  startup.nsh auto-launches Setup even if the "press any key" prompt is
+  missed). Automates disk partitioning, the hardware-check bypass, the
+  language screen, and OOBE. Fully hands-off by default, including account
+  creation (unattended_username/unattended_password, default user/Passw0rd!).
+  Pass unattended_skip_user=true to automate everything EXCEPT the account —
+  Setup stops at the normal sign-in screen instead. Use this when the disk is
+  destined to become a golden-image template (16.2), so each clone gets its
+  own account.
+
+  LINUX: direct-kernel-boots the installer (-kernel/-initrd/-append — the
+  only way to pass an autoinstall/preseed kernel parameter), per-distro
+  metadata in unattended_linux in executor/api/config.json:
+
+    Ubuntu Desktop (casper/Subiquity) — a cloud-init NoCloud volume
+    (cidata.iso) with interactive-sections:[identity] automates everything,
+    stops at "Create your account". Needs boot=casper on the cmdline or the
+    initrd can't find its root and drops to a rescue shell.
+
+    Kali (debian-installer) — preseed injected directly into the initrd (a
+    small cpio archive concatenated onto the end of initrd.gz — the kernel's
+    initramfs unpacker processes concatenated archives in sequence, later
+    files overriding earlier ones). passwd/* left unset so account creation
+    still prompts.
+
+    Linux Mint (ubiquity) — NOT CURRENTLY SUPPORTED. Mint ships Ubiquity, not
+    Subiquity, and Ubiquity doesn't read the autoinstall/cloud-init mechanism
+    at all. The same preseed-injection technique correctly pre-fills every
+    wizard page, but the GUI still needs manual clicks through each one.
+    Known, backlogged gap.
+
+  HOW THE VM KNOWS THE INSTALL FINISHED: a VM using direct kernel boot
+  re-triggers the installer on every boot until something clears
+  kernel_path/initrd_path/iso_path — including a guest-initiated reboot right
+  after the install finishes, which would otherwise re-run the same
+  destructive auto-partitioning. launch_vm checks this automatically via
+  _maybe_finish_unattended_install (executor/api/_vm_runtime.py): a cheap
+  disk-size pre-filter, then a real read-only check for /etc/os-release on
+  the disk (partitioning alone can't produce that file, so this can't
+  false-positive mid-install the way a size-only check can).
+
+16.2  GOLDEN-IMAGE TEMPLATES
+─────────────────────────────
+  Turn an already-set-up VM into a reusable base image, then clone new VMs
+  from it in seconds instead of reinstalling every time.
+
+  WORKFLOW:
+    1. Set up a source VM (typically via 16.1's unattended install, with
+       unattended_skip_user=true for Windows so a human creates the account;
+       Ubuntu/Kali's installers already stop at account creation with no
+       extra flag needed).
+    2. stop_vm WITHOUT force — a real ACPI shutdown, not a hard kill, so the
+       golden image doesn't inherit a dirty-shutdown filesystem state.
+       Ubuntu-specific gotcha: unlike Windows, Subiquity does not write
+       anything to the target disk until AFTER the identity step resolves —
+       there is no "mark before account creation" shortcut for Ubuntu. Check
+       disk size before marking regardless of which screen is showing.
+    3. mark_as_template(name) — flattens the disk(s) (qemu-img convert, not
+       a backing-file link, so the template never depends on the source VM's
+       own disk surviving) into ~/.qemu_vms/_templates/<name>/. Tags both the
+       source VM and the template.json copy with the protected "template"
+       label (config-driven: template_label / dirs.templates in
+       executor/api/config.json).
+    4. create_vm(name=..., template=<name>) — clones fresh VM(s) as QCOW2
+       backing files. The normal auto-ISO-match is SKIPPED for template
+       clones — attaching an install ISO to an already-installed disk risks
+       booting the installer's menu instead of the cloned OS.
+    5. remove_template(name) (Yes/Cancel confirm) — deletes the template
+       copy, un-tags the source VM if it still exists. remove_label refuses
+       to strip "template" directly — must go through remove_template.
+    6. list_templates() — mirrors list_profiles(); "templates" shortcut too.
+
+  PER-CLONE CREDENTIALS (executor/api/_vm_credentials.py, Linux only —
+  Windows credentials live in the SAM registry hive, not /etc/shadow, and
+  need a different tool [chntpw] not yet built):
+
+    randomize_root_password=true   Offline-sets a fresh random root password
+                                    via virt-customize (libguestfs — mounts
+                                    the disk itself, no host root/sudo
+                                    needed). Returned once in the result
+                                    message/root_password field, and also
+                                    persisted into the clone's own
+                                    config.json (show_config to retrieve
+                                    later).
+    randomize_user_password=true   Same, for the auto-detected primary
+                                    (non-root, first UID>=1000) account.
+    new_username=<name>            Renames that account via usermod/groupmod
+                                    run against the guest's own files
+                                    (virt-customize --run-command), home
+                                    directory moved too. Runs BEFORE
+                                    randomize_user_password in the same call,
+                                    so combining both targets the renamed
+                                    account. Both new_username and any
+                                    explicit old_username are validated
+                                    against a strict POSIX-username regex
+                                    before use — they're interpolated into a
+                                    real shell command, so this closes off
+                                    command injection via a crafted username.
+
+  NEEDS: libguestfs-tools (virt-customize, virt-cat) — in
+  complementary/install_executor.sh. Offline edits require the VM to be
+  STOPPED (libguestfs needs exclusive access to the disk file).
+
+  Proven end-to-end for Kali, Ubuntu, and Windows: each marked as a template,
+  then a real create_vm(template=X) clone booted straight to the correct
+  login screen with the account preserved (and, where tested, logged in
+  successfully with fresh randomized credentials). Mint is excluded pending
+  16.1's known gap.
 
 ================================================================================

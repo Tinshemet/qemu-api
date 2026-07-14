@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  install_executor.sh — qemu-api EXECUTOR machine setup
+#  install_executor.sh — gorgon EXECUTOR machine setup
 #
 #  The executor machine hosts:
 #    • QEMU/KVM (VM engine)
@@ -17,9 +17,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$HOME/qemu-env"
-START_SCRIPT="$HOME/start-qemu-api-executor.sh"
-SERVICE_FILE="$HOME/.config/systemd/user/qemu-api-executor.service"
-TOKEN_FILE="$HOME/.qemu-api-executor.token"
+START_SCRIPT="$HOME/start-gorgon-executor.sh"
+SERVICE_FILE="$HOME/.config/systemd/user/gorgon-executor.service"
+TOKEN_FILE="$HOME/.gorgon-executor.token"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -31,7 +31,7 @@ header() { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${RESET}"; }
 
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${CYAN}║   qemu-api — EXECUTOR machine setup          ║${RESET}"
+echo -e "${BOLD}${CYAN}║   gorgon — EXECUTOR machine setup          ║${RESET}"
 echo -e "${BOLD}${CYAN}║   QEMU/KVM + executor server                 ║${RESET}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
@@ -56,6 +56,7 @@ PKGS=(
     ovmf socat python3-venv "python${PY_VER}-venv" python3-pip
     acpica-tools genisoimage mtools swtpm
     cpu-checker bridge-utils curl
+    libguestfs-tools
 )
 if [[ "$IS_WSL" == false ]]; then
     PKGS+=(libvirt-daemon-system libvirt-clients virt-viewer tigervnc-viewer)
@@ -137,6 +138,64 @@ ok "Python packages installed"
 mkdir -p "$HOME/.qemu_vms/_profiles" "$HOME/.qemu_vms/_networks"
 ok "~/.qemu_vms/ ready"
 
+header "Default Custom Profiles"
+DEFAULT_PROFILES_DIR="$SCRIPT_DIR/default_profiles"
+if [[ -d "$DEFAULT_PROFILES_DIR" ]]; then
+    for p in "$DEFAULT_PROFILES_DIR"/*.json; do
+        [[ -e "$p" ]] || continue
+        dest="$HOME/.qemu_vms/_profiles/$(basename "$p")"
+        if [[ -f "$dest" ]]; then
+            info "Profile already present, leaving as-is: $(basename "$p")"
+        else
+            cp "$p" "$dest"
+            ok "Installed default profile: $(basename "$p")"
+        fi
+    done
+else
+    info "No default_profiles/ bundled — skipping"
+fi
+
+header "Golden-Image Template Scaffolding"
+# Creates the template-{kali,ubuntu,windows} VM shells with unattended install
+# configured (mirrors the interactive golden-image workflow) so a fresh
+# install starts with these ready to launch. Best-effort per template: if the
+# matching ISO isn't at the expected path yet (ISOs aren't bundled — you
+# provide those), the shell is still created, just without unattended-install
+# media wired up; re-run create_vm with force=true once the ISO is in place.
+# Won't touch a template that already exists (idempotent across re-runs).
+( cd "$FILES_DIR" && PYTHONPATH="$FILES_DIR" python3 - << 'SCAFFOLD_EOF'
+import sys
+from orchestrator.pipeline import execute_tool
+from executor.api.qemu_config import MachineConfig
+
+TEMPLATES = [
+    {"name": "template-kali", "os_type": "kali",
+     "description": "Golden image source — Kali Linux"},
+    {"name": "template-ubuntu", "os_type": "ubuntu",
+     "description": "Golden image source — Ubuntu"},
+    {"name": "template-windows", "os_type": "windows",
+     "description": "Golden image source — Windows 11",
+     "unattended_skip_user": True},
+]
+
+for t in TEMPLATES:
+    name = t["name"]
+    try:
+        MachineConfig.load(name)
+        print(f"  → {name} already exists, leaving as-is")
+        continue
+    except FileNotFoundError:
+        pass
+    args = dict(t)
+    args["unattended"] = True
+    result = execute_tool("create_vm", args, verbose=True, skip_gate=True)
+    if result.get("success"):
+        print(f"  ✓ {name}: {result.get('message', 'created')}")
+    else:
+        print(f"  ⚠ {name}: {result.get('error', 'failed')} (create it manually once its ISO is available)")
+SCAFFOLD_EOF
+)
+
 header "Executor Token"
 if [[ -n "${EXECUTOR_TOKEN:-}" ]]; then
     TOKEN="$EXECUTOR_TOKEN"
@@ -200,14 +259,14 @@ chmod +x "$START_SCRIPT"
 ok "Created $START_SCRIPT"
 
 header "Shell Integration"
-sed -i '/# qemu-api executor start/,/# qemu-api executor end/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '/# gorgon executor start/,/# gorgon executor end/d' "$SHELL_RC" 2>/dev/null || true
 cat >> "$SHELL_RC" << SHELLEOF
 
-# qemu-api executor start
+# gorgon executor start
 source "$VENV_DIR/bin/activate"
 export PATH="\$HOME/.local/bin:\$PATH"
-alias qemu-api-executor='$START_SCRIPT'
-# qemu-api executor end
+alias gorgon-executor='$START_SCRIPT'
+# gorgon executor end
 SHELLEOF
 ok "Added aliases to $SHELL_RC"
 
@@ -216,7 +275,7 @@ if [[ "$IS_WSL" == false ]]; then
     mkdir -p "$(dirname "$SERVICE_FILE")"
     cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
-Description=qemu-api Executor Server
+Description=gorgon Executor Server
 After=network.target
 
 [Service]
@@ -229,12 +288,12 @@ Environment=HOME=$HOME
 WantedBy=default.target
 SVCEOF
     systemctl --user daemon-reload
-    systemctl --user enable qemu-api-executor
-    systemctl --user start  qemu-api-executor
+    systemctl --user enable gorgon-executor
+    systemctl --user start  gorgon-executor
     ok "systemd service enabled and started"
     loginctl enable-linger "$USER" 2>/dev/null || warn "loginctl enable-linger failed"
 else
-    nohup "$START_SCRIPT" > /tmp/qemu-api-executor.log 2>&1 &
+    nohup "$START_SCRIPT" > /tmp/gorgon-executor.log 2>&1 &
     sleep 2
     pgrep -f "executor.server" > /dev/null && ok "Executor running" || warn "Executor may not have started"
 fi

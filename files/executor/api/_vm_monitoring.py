@@ -3,6 +3,7 @@ _vm_monitoring.py — VM Monitoring Mixin (status / metrics / display / shell).
 
 Provides _VmMonitoringMixin which is composed into QemuManager.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -19,6 +20,57 @@ from .qmp_client import QMPClient
 
 
 
+# ── VM flag tags (fully data-driven) ────────────────────────────────────────
+# list_vms surfaces compact tags (stealth / hardened / bridge / vpn / …) so both
+# the operator AND the model can see what each VM is. The tags are NOT hardcoded —
+# they come from the "list_flags" rules in config.json, so a user (or a future
+# feature like VPN egress) adds a tag by editing config, no code change. Rule shape:
+#   {"attr": "<dot.path into MachineConfig>",  # e.g. "stealth", "networks.0.mode"
+#    "label": "<tag>" | "$value",              # literal tag, or emit the value itself
+#    "hide_values": [...],   # optional — values that suppress the tag (e.g. default "nat")
+#    "equals": <x>}          # optional — emit only when the value equals x
+# Default label = the attr's last path segment; with no condition, "emit if truthy".
+_CFG        = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_LIST_FLAGS = _CFG.get("list_flags", [])
+
+
+def _resolve_attr(obj: Any, path: str) -> Any:
+    """Walk a dot-path (supports numeric list indices) safely; None if missing."""
+    cur = obj
+    for part in path.split("."):
+        if cur is None:
+            return None
+        if part.lstrip("-").isdigit():
+            idx = int(part)
+            cur = cur[idx] if isinstance(cur, (list, tuple)) and -len(cur) <= idx < len(cur) else None
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            cur = getattr(cur, part, None)
+    return cur
+
+
+def _config_flags(cfg: MachineConfig) -> List[str]:
+    """Compute a VM's tags from the data-driven list_flags rules (see config.json)."""
+    tags: List[str] = []
+    for rule in _LIST_FLAGS:
+        attr = rule.get("attr")
+        if not attr:
+            continue
+        value = _resolve_attr(cfg, attr)
+        if "equals" in rule:
+            match = value == rule["equals"]
+        elif "hide_values" in rule:
+            match = bool(value) and value not in rule["hide_values"]
+        else:
+            match = bool(value)
+        if not match:
+            continue
+        label = rule.get("label") or attr.split(".")[-1]
+        tags.append(str(value) if label == "$value" else label)
+    return tags
+
+
 class _VmMonitoringMixin:
     """Mixin providing VM listing, status, resource monitoring, and display/shell."""
 
@@ -26,12 +78,17 @@ class _VmMonitoringMixin:
     # VM listing
     # ------------------------------------------------------------------
 
-    def list_vms(self) -> List[Dict[str, Any]]:
+    def list_vms(self, label: Optional[str] = None) -> List[Dict[str, Any]]:
         """Scan ``~/.qemu_vms/`` and return status info for every VM directory.
+
+        Args:
+            label: If given, return only VMs carrying this auto-flag or user label.
 
         Returns:
             List of dicts with ``name``, ``id``, ``description``, ``os``,
-            ``cpu_cores``, ``memory_mb``, ``disks``, and ``status`` keys.
+            ``cpu_cores``, ``memory_mb``, ``disks``, ``status``,
+            ``flags`` (auto tags: stealth / hardened / bridge / vpn / …), and
+            ``labels`` (user-assigned tags) keys.
 
         Example::
             >>> mgr.list_vms()
@@ -50,8 +107,13 @@ class _VmMonitoringMixin:
             try:
                 cfg = MachineConfig.load(name)
             except Exception as e:
+                if label:                       # a filtered listing skips unreadable VMs
+                    continue
                 vms.append({"name": name, "error": str(e)})
                 continue
+            flags = _config_flags(cfg)
+            if label and label not in set(flags) | set(cfg.labels):
+                continue                        # doesn't carry the requested flag/label
             status = self.vm_status(name)
             vms.append({
                 "name":        name,
@@ -62,6 +124,8 @@ class _VmMonitoringMixin:
                 "memory_mb":   cfg.memory_mb,
                 "disks":       len(cfg.disks),
                 "status":      status["state"],
+                "flags":       flags,
+                "labels":      cfg.labels,
             })
         return vms
 

@@ -1,0 +1,14 @@
+#cloud-config
+autoinstall:
+  version: 1
+  interactive-sections:
+    - identity
+  locale: __LOCALE__
+  keyboard:
+    layout: __KEYBOARD__
+  storage:
+    layout:
+      name: direct
+  ssh:
+    install-server: false
+  updates: security

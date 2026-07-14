@@ -1,7 +1,7 @@
 """
 chat_client.py — Curses AI Chat Client
 
-Full-screen TUI that sends messages to the qemu-api server's /chat endpoint.
+Full-screen TUI that sends messages to the gorgon server's /chat endpoint.
 Mirrors the admin TUI visual style: header bar, scrollable chat area,
 command input at bottom.
 """
@@ -142,11 +142,14 @@ _session_id     = ""
 # sync data
 _REMOTE_VMS:        list = []
 _REMOTE_PROFILES:   list = []
-_SC_LIST     = {"list", "vms", "ls"}
-_SC_SYSTEM   = {"system"}
-_SC_PROFILES = {"profiles"}
-_SC_DRIFT    = {"drift"}
-_SC_CLEAR    = {"clear session", "forget", "/clear"}
+_COMMANDS:          list = []          # command catalog from /sync (help source of truth)
+_ALLOWED_TOOLS:     set  = set()       # executor allowed-tools list for help filtering
+_SC_LIST      = {"list", "vms", "ls"}
+_SC_SYSTEM    = {"system"}
+_SC_PROFILES  = {"profiles"}
+_SC_TEMPLATES = {"templates"}
+_SC_DRIFT     = {"drift"}
+_SC_CLEAR     = {"clear session", "forget", "/clear"}
 _SC_HELP     = {"help", "?", "/help"}
 _EXIT_CMDS   = {"exit", "quit", "q", "bye"}
 
@@ -184,7 +187,7 @@ def _draw(stdscr: "curses.window", input_buf: str) -> None:
             for v in _REMOTE_VMS[:6]
         ]
     vm_str = "   ".join(vm_parts)
-    hdr    = f" qemu-api{spin} {SERVER_URL}   {vm_str}"
+    hdr    = f" gorgon{spin} {SERVER_URL}   {vm_str}"
     try:
         stdscr.addstr(0, 0, hdr[:w - 1].ljust(w - 1), _cp(C_HEADER) | curses.A_BOLD)
     except curses.error:
@@ -231,7 +234,7 @@ def _draw(stdscr: "curses.window", input_buf: str) -> None:
     # Hint line
     try:
         stdscr.addstr(h - 2, 0,
-                      "  list  system  profiles  drift  /clear  help  q=quit"[:w - 1],
+                      "  list  system  profiles  templates  drift  /clear  help  q=quit"[:w - 1],
                       _cp(C_DIM))
     except curses.error:
         pass  # addstr fails past the screen edge — skip the hint line
@@ -303,7 +306,12 @@ def _render_tool_result(tool: str, result: dict) -> None:
             cpu    = v.get("cpu_cores", "")
             os_s   = v.get("os", "")[:18]
             name   = v.get("name", "")[:22]
-            _add(f"  {dot}{name:<22} {status:<12} {cpu}cpu  {ram:<6} {os_s}", color)
+            flags  = v.get("flags") or []
+            labels = v.get("labels") or []
+            tags   = f"  [{' '.join(flags)}]" if flags else ""
+            if labels:
+                tags += "  " + " ".join(f"#{l}" for l in labels)
+            _add(f"  {dot}{name:<22} {status:<12} {cpu}cpu  {ram:<6} {os_s:<18}{tags}", color)
 
     elif tool == "launch_vm":
         if result.get("success") or result.get("already_running"):
@@ -372,6 +380,19 @@ def _render_tool_result(tool: str, result: dict) -> None:
             _add(f"  {name:<28} {desc}", _cp(C_DIM))
         if not profiles:
             _add("  (no profiles)", _cp(C_DIM))
+
+    elif tool == "list_templates":
+        templates = result if isinstance(result, list) else result.get("templates", [])
+        for t in templates:
+            name    = t.get("name", "") if isinstance(t, dict) else str(t)
+            os_type = t.get("os_type", "") if isinstance(t, dict) else ""
+            disks   = t.get("disks", "") if isinstance(t, dict) else ""
+            _add(f"  {name:<28} {os_type:<10} {disks} disk(s)", _cp(C_DIM))
+        if not templates:
+            _add("  (no templates)", _cp(C_DIM))
+        # mark_as_template / remove_template need no dedicated branch — both return a
+        # plain {"success", "message"/"error"} dict already handled by the generic
+        # fallback further down.
 
     elif tool in ("vm_status", "monitor_vm"):
         status = result.get("status", "?")
@@ -495,12 +516,12 @@ def _autostart_server(stdscr: "curses.window") -> bool:
     env = os.environ.copy()
     env["PYTHONPATH"] = _files_dir
     try:
-        token = open(os.path.expanduser("~/.qemu-api.token")).read().strip()
+        token = open(os.path.expanduser("~/.gorgon.token")).read().strip()
         env["API_TOKEN"] = token
     except Exception:
         pass  # no token file — run without an API token (server may allow it)
 
-    _log_path = _UI_CFG.get("log_path", "/tmp/qemu-api-server.log")
+    _log_path = _UI_CFG.get("log_path", "/tmp/gorgon-server.log")
     import subprocess as _sp
     _sp.Popen(
         [sys.executable, "-m", "uvicorn",
@@ -526,8 +547,8 @@ def _autostart_server(stdscr: "curses.window") -> bool:
 
 def _sync_from_server() -> bool:
     """Refresh the cached remote VM/profile lists from the server; return success."""
-    global _REMOTE_VMS, _REMOTE_PROFILES
-    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_DRIFT, _SC_CLEAR
+    global _REMOTE_VMS, _REMOTE_PROFILES, _COMMANDS, _ALLOWED_TOOLS
+    global _SC_LIST, _SC_SYSTEM, _SC_PROFILES, _SC_TEMPLATES, _SC_DRIFT, _SC_CLEAR
     try:
         resp = requests.get(f"{SERVER_URL}/sync",
                             headers=_HEADERS, timeout=10, verify=_VERIFY)
@@ -538,14 +559,17 @@ def _sync_from_server() -> bool:
         return False
 
     sc = data.get("shortcut_commands", {})
-    if sc.get("list"):          _SC_LIST     = set(sc["list"])
-    if sc.get("system"):        _SC_SYSTEM   = set(sc["system"])
-    if sc.get("profiles"):      _SC_PROFILES = set(sc["profiles"])
-    if sc.get("drift"):         _SC_DRIFT    = set(sc["drift"])
-    if sc.get("clear_session"): _SC_CLEAR    = set(sc["clear_session"]) | {"/clear"}
+    if sc.get("list"):          _SC_LIST      = set(sc["list"])
+    if sc.get("system"):        _SC_SYSTEM    = set(sc["system"])
+    if sc.get("profiles"):      _SC_PROFILES  = set(sc["profiles"])
+    if sc.get("templates"):     _SC_TEMPLATES = set(sc["templates"])
+    if sc.get("drift"):         _SC_DRIFT     = set(sc["drift"])
+    if sc.get("clear_session"): _SC_CLEAR     = set(sc["clear_session"]) | {"/clear"}
 
     _REMOTE_VMS      = data.get("vms", [])
     _REMOTE_PROFILES = data.get("profiles", [])
+    _COMMANDS        = data.get("commands", []) or _COMMANDS
+    _ALLOWED_TOOLS   = set(data.get("allowed_remote_tools", []))
     return True
 
 
@@ -599,33 +623,38 @@ def _process_response(result: dict, verbose: bool = False) -> None:
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 def _show_help() -> None:
-    """Print the in-TUI command help into the scrollback."""
+    """Print the in-TUI command help into the scrollback, rendered from the command catalog.
+
+    Shows every command available to the user (filtered to the allowed-tools list) plus
+    a short example prompt per command for the AI. Both the catalog and the allow-list
+    come from /sync; falls back to the local catalog when the server list is empty.
+    """
+    from shared.command_help import visible_commands, load_local_catalog
+    catalog = _COMMANDS
+    if not catalog:
+        catalog, _ = load_local_catalog()
     _add_sep()
-    _add("  Shortcuts (instant, no AI):", _cp(C_CYAN) | curses.A_BOLD)
-    helps = [
-        ("list / vms",          "List all VMs on the server"),
-        ("system",              "Host capabilities (KVM, CPU, RAM)"),
-        ("profiles",            "Hardware profiles"),
-        ("drift",               "Configuration drift check"),
-        ("kill <vm>",           "Force-kill a VM (asks confirmation)"),
-        ("clear / clear session","Wipe conversation history"),
-        ("help / ?",            "Show this"),
-        ("q / quit / exit / bye", "Exit"),
-    ]
-    for cmd, desc in helps:
-        _add(f"    {cmd:<28} {desc}", _cp(C_DIM))
-    _add("  Natural language examples:", _cp(C_CYAN) | curses.A_BOLD)
-    examples = [
-        "create a Ubuntu VM called dev with 4GB RAM",
-        "launch dev",
-        "stop dev",
-        "clone dev as dev-backup",
-        "create snapshot of dev called pre-update",
-        "delete dev",
-        "why did dev fail",
-    ]
-    for ex in examples:
-        _add(f"    {ex}", _cp(C_DIM))
+
+    if not catalog:
+        _add("  Command list unavailable (sync the server to load it).", _cp(C_DIM))
+        _add_sep()
+        return
+
+    entries = visible_commands(catalog, _ALLOWED_TOOLS or None)
+    _add("  Commands (type the word, or just ask in plain language):",
+         _cp(C_CYAN) | curses.A_BOLD)
+    for e in entries:
+        verb = e["command"] + (" " + e["args"] if e["args"] else "")
+        _add(f"    {verb:<28} {e['desc']}", _cp(C_DIM))
+
+    _add("  Example prompts for the AI:", _cp(C_CYAN) | curses.A_BOLD)
+    for e in entries:
+        ex = e.get("ai_example")
+        if ex:
+            _add(f"    {ex}", _cp(C_DIM))
+
+    _add("  Built-in: drift · clear/clear session · help/? · q/quit/exit",
+         _cp(C_DIM))
     _add_sep()
 
 
@@ -666,8 +695,11 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
         _show_help()
         return True
 
-    if low in _SC_LIST:
-        result = _execute("list_vms")
+    # list / list <label> — an optional trailing flag or user label filters the list
+    _list_pfx = next((p for p in ("list ", "vms ", "ls ") if low.startswith(p)), None)
+    if low in _SC_LIST or _list_pfx:
+        label = cmd.strip()[len(_list_pfx):].strip() if (_list_pfx and low not in _SC_LIST) else ""
+        result = _execute("list_vms", {"label": label} if label else {})
         _render_tool_result("list_vms", result)
         return True
 
@@ -679,6 +711,11 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
     if low in _SC_PROFILES:
         result = _execute("list_profiles")
         _render_tool_result("list_profiles", result)
+        return True
+
+    if low in _SC_TEMPLATES:
+        result = _execute("list_templates")
+        _render_tool_result("list_templates", result)
         return True
 
     if low in _SC_DRIFT:
@@ -734,7 +771,7 @@ def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaa
         if started:
             _add("  Server ready.", _cp(C_GREEN))
         else:
-            _add("  Could not start server. Check /tmp/qemu-api-server.log", _cp(C_RED))
+            _add("  Could not start server. Check /tmp/gorgon-server.log", _cp(C_RED))
         _draw(stdscr, "")
 
     ok = _sync_from_server()
@@ -742,7 +779,7 @@ def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaa
     with _lock:
         _history.clear()
 
-    _add(f"  qemu-api  →  {SERVER_URL}", _cp(C_GREEN) | curses.A_BOLD)
+    _add(f"  gorgon  →  {SERVER_URL}", _cp(C_GREEN) | curses.A_BOLD)
     if not ok:
         _add(f"  ⚠ Could not reach server. Check connection.", _cp(C_YELLOW))
     elif _REMOTE_VMS:

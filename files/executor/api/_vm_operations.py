@@ -15,11 +15,12 @@ from typing import Any, Dict, List, Optional
 from ._vm_constants import (
     _BUFFERS, _LOG_DEFAULT_LINES, _LOG_ERROR_PATTERNS,
     _MONITOR_ALLOWED_CMDS, _TIMEOUTS, _UPDATE_ALLOWED_FIELDS,
-    _VALID_MACHINE_TYPES, VM_BASE_DIR,
+    _VALID_MACHINE_TYPES, VM_BASE_DIR, TEMPLATE_LABEL,
 )
 from .qemu_config import MachineConfig
 from .qemu_arg_builder import QemuArgBuilder
 from .qmp_client import QMPClient
+from .label_registry import register_label, list_registered_labels
 
 
 class _VmOperationsMixin:
@@ -351,7 +352,7 @@ class _VmOperationsMixin:
                 )
                 results["cpu_limit"] = f"cpulimit set to {cpu_percent}% (PID {pid})"
             else:
-                cgroup_path = f"/sys/fs/cgroup/qemu-api-{name}"
+                cgroup_path = f"/sys/fs/cgroup/gorgon-{name}"
                 try:
                     os.makedirs(cgroup_path, exist_ok=True)
                     quota  = int(cpu_percent * 1000)
@@ -437,6 +438,87 @@ class _VmOperationsMixin:
             changed.append(key)
         cfg.save()
         return {"success": True, "message": f"Updated {changed} for '{name}'."}
+
+    # ------------------------------------------------------------------
+    # Labels (user-defined tags)
+    # ------------------------------------------------------------------
+
+    def add_label(self, name: str, label: str) -> Dict[str, Any]:
+        """Assign a user label to a VM, registering it machine-wide if new.
+
+        Labels are metadata, so this works whether the VM is running or stopped.
+
+        Args:
+            name:  VM name.
+            label: Free-form tag (e.g. "work_vm"). Added to the universal registry.
+
+        Returns:
+            ``{"success": True, "labels": [...]}`` or error dict.
+
+        Example::
+            >>> mgr.add_label("tomer", "work_vm")
+            {"success": True, "message": "Labeled 'tomer' with 'work_vm'.", "labels": ["work_vm"]}
+        """
+        label = (label or "").strip()
+        if not label:
+            return {"success": False, "error": "A label name is required."}
+        try:
+            cfg = MachineConfig.load(name)
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+        if label not in cfg.labels:
+            cfg.labels.append(label)
+            cfg.save()
+        register_label(label)
+        return {"success": True,
+                "message": f"Labeled '{name}' with '{label}'.",
+                "labels": cfg.labels}
+
+    def remove_label(self, name: str, label: str) -> Dict[str, Any]:
+        """Remove a user label from a VM (it stays in the universal registry).
+
+        Args:
+            name:  VM name.
+            label: Label to remove from this VM.
+
+        Returns:
+            ``{"success": True, "labels": [...]}`` or error dict.
+
+        Example::
+            >>> mgr.remove_label("tomer", "work_vm")
+            {"success": True, "message": "Removed label 'work_vm' from 'tomer'.", "labels": []}
+        """
+        if label == TEMPLATE_LABEL:
+            return {"success": False,
+                    "error": f"The '{TEMPLATE_LABEL}' label can't be removed directly — use "
+                             f"remove_template('{name}') instead, which also cleans up the golden copy."}
+        try:
+            cfg = MachineConfig.load(name)
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+        if label not in cfg.labels:
+            return {"success": False, "error": f"VM '{name}' has no label '{label}'."}
+        cfg.labels = [l for l in cfg.labels if l != label]
+        cfg.save()
+        return {"success": True,
+                "message": f"Removed label '{label}' from '{name}'.",
+                "labels": cfg.labels}
+
+    def list_labels(self) -> Dict[str, Any]:
+        """List every registered label and which VMs carry each.
+
+        Returns:
+            ``{"success": True, "labels": [...], "usage": {label: [vm, ...]}}``.
+
+        Example::
+            >>> mgr.list_labels()
+            {"success": True, "labels": ["work_vm"], "usage": {"work_vm": ["tomer"]}}
+        """
+        usage: Dict[str, List[str]] = {lbl: [] for lbl in list_registered_labels()}
+        for vm in self.list_vms():
+            for lbl in vm.get("labels", []):
+                usage.setdefault(lbl, []).append(vm["name"])
+        return {"success": True, "labels": sorted(usage), "usage": usage}
 
     # ------------------------------------------------------------------
     # Command

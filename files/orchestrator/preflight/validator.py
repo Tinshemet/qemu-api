@@ -270,12 +270,18 @@ def _preflight_create_vm(args: Dict[str, Any], manager: object, verbose: bool,
         if name in _known:
             return {"action":"ask_user","reason":f"A VM named '{name}' already exists","question":f"A VM called '{name}' already exists. Overwrite it, or use a different name?","fix_field":"name","original_name":name,"options":[f"{name}-2",f"{name}-new","overwrite"],"correction":"Use a different name or delete the existing VM first."}
 
-    # Destructive opt-in: unattended Windows install WIPES the disk + creates a
-    # local admin account — confirm first (bypassed by force=true, like delete_vm).
+    # Destructive opt-in: unattended install WIPES the target disk — confirm first
+    # (bypassed by force=true, like delete_vm). Windows normally also auto-creates
+    # a local admin account unless unattended_skip_user leaves that step manual;
+    # Linux's autoinstall/preseed always leaves account creation for a human.
     _is_win = "windows" in os_type or "windows" in str(args.get("os_name", "")).lower()
-    if args.get("unattended") and _is_win and not args.get("force"):
-        _acct = args.get("unattended_username") or "user"
-        return {"action":"ask_user","reason":"Unattended install wipes the target disk and auto-creates a local admin account","question":f"Unattended Windows install will WIPE this VM's disk and auto-create local admin '{_acct}'. Proceed?","fix_field":None,"options":["Yes, wipe and install","No, cancel"],"correction":"On 'Yes' the client re-runs with force=true; the disk is erased/repartitioned and a known-password admin account is created."}
+    if args.get("unattended") and not args.get("force"):
+        if _is_win and not args.get("unattended_skip_user"):
+            _acct = args.get("unattended_username") or "user"
+            return {"action":"ask_user","reason":"Unattended install wipes the target disk and auto-creates a local admin account","question":f"Unattended Windows install will WIPE this VM's disk and auto-create local admin '{_acct}'. Proceed?","fix_field":None,"options":["Yes, wipe and install","No, cancel"],"correction":"On 'Yes' the client re-runs with force=true; the disk is erased/repartitioned and a known-password admin account is created."}
+        else:
+            _os_label = "Windows" if _is_win else "Linux"
+            return {"action":"ask_user","reason":"Unattended install wipes the target disk, stopping at account creation for you to set up manually","question":f"Unattended {_os_label} install will WIPE this VM's disk and auto-partition it, stopping at the account-creation screen. Proceed?","fix_field":None,"options":["Yes, wipe and install","No, cancel"],"correction":"On 'Yes' the client re-runs with force=true; the disk is erased/repartitioned."}
 
     if mt and mt not in VALID_MACHINE_TYPES and not mt.startswith("pc-"):
         fixed = dict(args)
@@ -496,6 +502,11 @@ def _preflight_check(
         name = str(args.get("name", "")).strip()
         if name and not args.get("force"):
             return {"action":"ask_user","reason":f"Destructive operation: delete VM '{name}'","question":f"Are you sure you want to delete '{name}'?","fix_field":None,"options":["Yes, delete it","No, keep it"],"correction":"Deletion cannot be undone without recreating the VM."}
+
+    elif tool_name == "remove_template":
+        name = str(args.get("name", "")).strip()
+        if name and not args.get("force"):
+            return {"action":"ask_user","reason":f"Remove template '{name}'","question":f"Delete the template copy for '{name}'? This permanently removes the golden disk copy.","fix_field":None,"options":["Yes, remove it","No, cancel"],"correction":"The golden disk copy cannot be recovered without re-marking the source VM (if it still exists)."}
 
     elif tool_name == "resize_disk" and not stateless_only:
         name     = str(args.get("name", "")).strip()

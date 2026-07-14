@@ -1,7 +1,7 @@
 {
   "net_timeout":   4,
   "qemu_timeout":  5,
-  "user_agent":    "qemu-api/1.0",
+  "user_agent":    "gorgon/1.0",
   "ms_windows_iso_page": "https://www.microsoft.com/software-download/windows11",
   "arm_cpu_prefixes": [
     "cortex-a", "cortex-m", "cortex-r",
@@ -36,7 +36,7 @@
   "preflight_tools": [
     "create_vm", "create_profile", "launch_vm", "delete_vm", "resize_disk",
     "clone_vm", "snapshot_restore", "snapshot_delete",
-    "set_resource_limits", "send_monitor_cmd"
+    "set_resource_limits", "send_monitor_cmd", "remove_template"
   ],
   "preflight_hw_fields": [
     "cpu_model", "machine_type", "memory_mb", "cpu_cores", "cpu_threads",

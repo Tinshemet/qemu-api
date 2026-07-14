@@ -21,6 +21,8 @@ _MONITOR_ALLOWED_CMDS  = tuple(_CFG["monitor_allowed_cmds"])
 _LINUX_DISTROS         = _CFG["linux_distros"]
 _LOG_DEFAULT_LINES     = _CFG["log_default_lines"]
 VM_BASE_DIR            = os.path.expanduser(_CFG["dirs"]["vm_base"])
+TEMPLATES_DIR          = os.path.expanduser(_CFG["dirs"]["templates"])
+TEMPLATE_LABEL         = _CFG.get("template_label", "template")
 
 _ISO_OS_KEYWORDS: dict = _CFG.get("iso_os_keywords", {})
 _WIN_ISO_NAMES:   list = _ISO_OS_KEYWORDS.get("windows", [])

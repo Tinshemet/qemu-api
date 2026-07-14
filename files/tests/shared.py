@@ -59,7 +59,8 @@ class ContextAssistantTest:
     tool_name:    str
     args:         Dict[str, Any]
     expect_fired: bool                # True = hint returned, False = None returned
-    expect_type:  Optional[str] = None  # "mismatch" | "hallucinated" | "high_stakes"
+    expect_type:  Optional[str] = None  # "mismatch" | "hallucinated" | "high_stakes" | "unknown_vm"
+    known_names:  Optional[List[str]] = None  # simulated VM registry for the unknown_vm check
 
 
 @dataclass

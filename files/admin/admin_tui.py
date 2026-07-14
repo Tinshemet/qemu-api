@@ -1,5 +1,5 @@
 """
-admin_tui.py — Real-time admin TUI for qemu-api
+admin_tui.py — Real-time admin TUI for gorgon
 
 Fullscreen dashboard: VM table, event feed, command prompt.
 Connects to the orchestrator over HTTP — run from any machine that can reach it.
@@ -33,7 +33,7 @@ _ADMIN_CFG = _load_json(os.path.join(_here, "admin_config.json"))
 _ORCH_URL     = os.environ.get("SERVER_URL",  _CONN_CFG.get("orchestrator_url", "http://localhost:8080"))
 _REFRESH      = _ADMIN_CFG.get("refresh_rate_s",       1.0)
 _DEFAULT_PORT = _ADMIN_CFG.get("default_port",         8080)
-_LOG_PATH     = _ADMIN_CFG.get("log_path",             "/tmp/qemu-api-server.log")
+_LOG_PATH     = _ADMIN_CFG.get("log_path",             "/tmp/gorgon-server.log")
 _EVENTS_LIMIT = _ADMIN_CFG.get("events_display_limit", 200)
 
 
@@ -43,7 +43,7 @@ def _token() -> str:
     if t:
         return t
     try:
-        with open(os.path.expanduser("~/.qemu-api.token")) as f:
+        with open(os.path.expanduser("~/.gorgon.token")) as f:
             return f.read().strip()
     except Exception:
         return ""
@@ -81,9 +81,24 @@ def _get(path: str, params: dict = None) -> dict:
         return {}
 
 
-def _exec(tool_name: str, args: dict = None) -> dict:
-    """Run a tool via the admin server's /execute endpoint."""
-    return _post("/execute", {"tool_name": tool_name, "args": args or {}})
+def _exec(tool_name: str, args: dict = None, log: bool = True) -> dict:
+    """Run a tool via the admin server's /execute endpoint.
+
+    Unwraps the {"ok": bool, "result": ...} envelope so callers get the tool's
+    actual result directly. Falls back to the raw response on a transport-level
+    failure (_post's own {"success": False, "error": ...} on a network error),
+    since that shape has no "result" key to unwrap.
+
+    Passes verbose=True — the admin TUI is a machine caller polling once a second;
+    without it the server prints a full Rich-rendered table to its own console/log
+    on every single poll tick.
+
+    log=False skips the server's persistent event log for this call — use it only
+    for the dashboard's own automatic background refresh, never for a command the
+    operator actually typed, otherwise the "list_vms" poll drowns the event feed.
+    """
+    r = _post("/execute", {"tool_name": tool_name, "args": args or {}, "verbose": True, "log": log})
+    return r.get("result", r) if isinstance(r, dict) else r
 
 
 def _get_events(limit: int = 200) -> list:
@@ -193,20 +208,29 @@ def _hline(stdscr: "curses.window", row: int, w: int, label: str="") -> None:
 
 
 def _draw(stdscr: "curses.window", vms: list, events: list, uptime_s: float) -> None:
-    """Redraw the dashboard — header, VM table, event table, and input line."""
+    """Redraw the dashboard — header, VM table, event table, and input line.
+
+    stdscr.erase() only runs in the dashboard branch below, never while help
+    is showing. Confirmed with a pty + raw-byte capture: erasing stdscr every
+    tick even though it's never refreshed while help is open caused curses to
+    emit a stray full-screen clear (`ESC[H ESC[J`) roughly one tick after the
+    help box was drawn, wiping it with nothing to replace it. help_mode itself
+    was never the problem — it stayed True throughout, confirmed by tracing.
+    """
     global _cmd_buf, _cmd_msg
     h, w = stdscr.getmaxyx()
-    stdscr.erase()
 
     if _help_mode:
         _draw_help(stdscr, h, w)
-        stdscr.refresh()
         return
+
+    _reset_help_cache()
+    stdscr.erase()
 
     uptime  = f"{int(uptime_s//3600):02d}:{int((uptime_s%3600)//60):02d}:{int(uptime_s%60):02d}"
     online  = _server_online()
     srv_str = f"online @ {_ORCH_URL}" if online else f"unreachable @ {_ORCH_URL}"
-    hdr     = f"  qemu-api admin   uptime {uptime}   vms {len(vms)}   events {len(events)}   {srv_str}  "
+    hdr     = f"  gorgon admin   uptime {uptime}   vms {len(vms)}   events {len(events)}   {srv_str}  "
     try:
         stdscr.addstr(0, 0, hdr.ljust(w - 1), _cp(C_HEADER) | curses.A_BOLD)
     except curses.error:
@@ -304,27 +328,83 @@ def _draw(stdscr: "curses.window", vms: list, events: list, uptime_s: float) -> 
     stdscr.refresh()
 
 
+_help_win_key = None
+
+
+def _reset_help_cache() -> None:
+    """Force the next help open to redraw fresh (call whenever the dashboard,
+    not help, is on screen — the physical screen has since been overwritten)."""
+    global _help_win_key
+    _help_win_key = None
+
+
+def _allowed_tools() -> "set | None":
+    """Return the executor's allowed-tools set for help filtering, or None if unrestricted.
+
+    Mirrors client/cli/commands.py's _allowed_tools() exactly — same direct-import approach,
+    same graceful fallback. Dispatch already enforces this allowlist for free (admin's _exec()
+    goes through /execute, which executor_client.execute_tool() gates); this is purely about
+    making the help overlay stop listing commands that would actually be rejected.
+    """
+    try:
+        from orchestrator.executor_client import _ALLOWED_TOOLS
+        return set(_ALLOWED_TOOLS) or None
+    except Exception:
+        return None
+
+
 def _draw_help(stdscr: "curses.window", h: int, w: int) -> None:
-    """Draw the help overlay listing the admin commands."""
-    SECTIONS = [
+    """Draw the help overlay listing the admin commands.
+
+    Reuses the same curses window across frames instead of creating a fresh
+    one every ~50ms tick. Measured with a pty harness: recreating the window
+    every tick sent ~120KB/3s of terminal traffic for fully static content
+    (~27x the dashboard's idle traffic, which reuses stdscr and lets curses'
+    diffing correctly send almost nothing for an unchanged frame). That write
+    volume, not a rendering-technique guess, was the confirmed cause of the
+    help-only flicker.
+    """
+    global _help_win_key
+    key = (h, w)
+    if _help_win_key == key:
+        return  # already drawn at this size — nothing has changed
+    _help_win_key = key
+
+    # Third element is the tool(s) required to actually run the command, or None for
+    # admin-only actions (server control, navigation) that never go through /execute at
+    # all and so are never allowlist-gated. Dispatch already enforces the allowlist
+    # (admin's _exec() goes through /execute -> executor_client.execute_tool()) — this
+    # filtering only keeps the help text honest about what would actually work.
+    _RAW_SECTIONS = [
         ("VM Commands", [
-            ("launch <vm>",  "Start a VM"),
-            ("stop <vm>",    "Graceful stop (SIGTERM)"),
-            ("kill <vm>",    "Force-kill (SIGKILL)"),
-            ("stopall",      "Stop all running VMs"),
-            ("list",         "Print VM names in status line"),
+            ("launch <vm>",  "Start a VM",                    ["launch_vm"]),
+            ("stop <vm>",    "Graceful stop (SIGTERM)",        ["stop_vm"]),
+            ("kill <vm>",    "Force-kill (SIGKILL)",           ["stop_vm"]),
+            ("stopall",      "Stop all running VMs",           ["stop_vm"]),
+            ("list",         "Print VM names in status line",  ["list_vms"]),
         ]),
         ("Server Commands (local only)", [
-            ("start-server", "Start the orchestrator on this machine"),
-            ("shutdown",     "SIGTERM the orchestrator on this machine"),
-            ("kill-server",  "SIGKILL the orchestrator on this machine"),
-            ("status",       "Show orchestrator reachability + VM counts"),
+            ("start-server", "Start the orchestrator on this machine", None),
+            ("shutdown",     "SIGTERM the orchestrator on this machine", None),
+            ("kill-server",  "SIGKILL the orchestrator on this machine", None),
+            ("status",       "Show orchestrator reachability + VM counts", None),
         ]),
         ("Navigation", [
-            ("help",         "Show this overlay  (any key to close)"),
-            ("q / Esc",      "Quit the admin TUI"),
+            ("help",         "Show this overlay  (any key to close)", None),
+            ("q / Esc",      "Quit the admin TUI", None),
         ]),
     ]
+
+    allowed = _allowed_tools()
+
+    def _cmd_visible(tools) -> bool:
+        return not tools or allowed is None or any(t in allowed for t in tools)
+
+    SECTIONS = [
+        (section, [(cmd, desc) for cmd, desc, tools in cmds if _cmd_visible(tools)])
+        for section, cmds in _RAW_SECTIONS
+    ]
+    SECTIONS = [(section, cmds) for section, cmds in SECTIONS if cmds]
 
     total_rows = sum(1 + len(cmds) for _, cmds in SECTIONS) + len(SECTIONS) + 3
     box_h = min(total_rows + 2, h - 4)
@@ -380,12 +460,12 @@ def _dispatch(cmd: str) -> None:
 
         elif verb == "list":
             r   = _exec("list_vms")
-            vms = r.get("vms", [])
+            vms = r if isinstance(r, list) else []
             new_msg = "  ".join(v.get("name", "") for v in vms) or "(none)"
 
         elif verb == "stopall":
             r   = _exec("list_vms")
-            vms = r.get("vms", [])
+            vms = r if isinstance(r, list) else []
             stopped = []
             for v in vms:
                 if v.get("status") == "running":
@@ -403,7 +483,7 @@ def _dispatch(cmd: str) -> None:
                 env = os.environ.copy()
                 env["PYTHONPATH"] = files_dir
                 try:
-                    with open(os.path.expanduser("~/.qemu-api.token")) as f:
+                    with open(os.path.expanduser("~/.gorgon.token")) as f:
                         env["API_TOKEN"] = f.read().strip()
                 except Exception:
                     pass  # no token file — run the admin server without an API token
@@ -442,8 +522,8 @@ def _dispatch(cmd: str) -> None:
 
         elif verb == "status":
             online  = _server_online()
-            r       = _exec("list_vms") if online else {}
-            vms     = r.get("vms", [])
+            r       = _exec("list_vms") if online else []
+            vms     = r if isinstance(r, list) else []
             running = sum(1 for v in vms if v.get("status") == "running")
             status  = "online" if online else "unreachable"
             new_msg = f"orchestrator={status}  vms={len(vms)}  running={running}"
@@ -465,39 +545,54 @@ def _dispatch(cmd: str) -> None:
 
 # ── keyboard ──────────────────────────────────────────────────────────────────
 
-def _handle_input(stdscr: "curses.window") -> None:
-    """Read one keypress and update the command buffer / help mode."""
-    global _cmd_buf, _cmd_msg, _help_mode
-    while not _quit.is_set():
-        try:
-            ch = stdscr.get_wch()
-        except curses.error:
-            time.sleep(0.05)
-            continue
+def _handle_key(ch) -> None:
+    """Apply one keypress to the command buffer / help mode.
 
-        with _lock:
-            if _help_mode:
+    Called only from the main loop in `_run()` — never spawn this on a
+    background thread. curses/ncurses isn't safe to call concurrently from
+    multiple threads against the same window; a prior version read keys on a
+    separate thread while `_run()` drew from the main thread, and the two
+    unsynchronized streams of curses calls caused visible corruption — most
+    noticeable in the help overlay, which repaints a fresh window every tick.
+    `_dispatch()` itself still runs on its own thread (it may block on a
+    network call) but it never touches curses, only shared Python state
+    under `_lock`, so that stays safe.
+    """
+    global _cmd_buf, _cmd_msg, _help_mode
+    # A "real" keypress — as opposed to a non-key curses event (KEY_RESIZE, etc.)
+    # that also flows through get_wch(). Only these should be able to dismiss
+    # help; treating literally any event as "close" let a stray non-key event
+    # slam it shut immediately after opening.
+    is_real_key = isinstance(ch, str) or ch in (curses.KEY_ENTER, curses.KEY_BACKSPACE)
+    with _lock:
+        if _help_mode:
+            if is_real_key:
                 _help_mode = False
-            elif ch in (3, "\x03", 27, "\x1b"):
-                _quit.set()
-            elif ch == "q" and not _cmd_buf:
-                _quit.set()
-            elif ch in ("\n", "\r", curses.KEY_ENTER):
-                cmd = _cmd_buf.strip()
-                _cmd_buf = ""
-                threading.Thread(target=_dispatch, args=(cmd,), daemon=True).start()
-            elif ch in (curses.KEY_BACKSPACE, "\x7f", 8):
-                _cmd_buf = _cmd_buf[:-1]
-                _cmd_msg = ""
-            elif isinstance(ch, str) and ch.isprintable():
-                _cmd_buf += ch
-                _cmd_msg = ""
+        elif ch in (3, "\x03", 27, "\x1b"):
+            _quit.set()
+        elif ch == "q" and not _cmd_buf:
+            _quit.set()
+        elif ch in ("\n", "\r", curses.KEY_ENTER):
+            cmd = _cmd_buf.strip()
+            _cmd_buf = ""
+            threading.Thread(target=_dispatch, args=(cmd,), daemon=True).start()
+        elif ch in (curses.KEY_BACKSPACE, "\x7f", 8):
+            _cmd_buf = _cmd_buf[:-1]
+            _cmd_msg = ""
+        elif isinstance(ch, str) and ch.isprintable():
+            _cmd_buf += ch
+            _cmd_msg = ""
 
 
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def _run(stdscr: "curses.window") -> None:
-    """curses main loop — poll server state, draw, and handle input."""
+    """curses main loop — poll server state, read input, and draw.
+
+    All curses calls (get_wch + erase/addstr/refresh) happen from this one
+    thread. See `_handle_key()` for why: reading input on a separate thread
+    while this loop draws is what caused the visible corruption/flicker.
+    """
     cfg       = _load_json(os.path.join(_here, "admin_config.json"))
     color_hex = cfg.get("text_color", "#aaaaaa")
     font_size = int(cfg.get("font_size", 13))
@@ -508,23 +603,33 @@ def _run(stdscr: "curses.window") -> None:
     time.sleep(0.12)
 
     curses.curs_set(0)
-    stdscr.nodelay(False)
-    stdscr.timeout(200)
+    curses.nonl()
+    stdscr.nodelay(True)
     _init_colours(color_hex)
     curses.resizeterm(*stdscr.getmaxyx())
 
     start = time.monotonic()
-    threading.Thread(target=_handle_input, args=(stdscr,), daemon=True).start()
 
     last_fetch = 0.0
     vms, events = [], []
 
     while not _quit.is_set():
+        # Drain every buffered key immediately (nodelay(True) never blocks) —
+        # relying on a curses read timeout to pace the loop made the redraw
+        # rate depend on terminal/curses-build timing behavior, which made
+        # the flicker worse. The explicit sleep below is what paces frames.
+        while True:
+            try:
+                ch = stdscr.get_wch()
+            except curses.error:
+                break
+            _handle_key(ch)
+
         now = time.monotonic()
         if now - last_fetch >= _REFRESH:
             try:
-                raw = _exec("list_vms")
-                vms = raw.get("vms", [])
+                raw = _exec("list_vms", log=False)
+                vms = raw if isinstance(raw, list) else []
             except Exception:
                 vms = []
             events     = _get_events(limit=_EVENTS_LIMIT)

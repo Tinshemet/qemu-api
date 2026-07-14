@@ -36,11 +36,12 @@ from executor.api.qemu_manager import QemuManager
 # This module has no orchestrator imports — it runs on executor-only machines.
 from shared.display import (
     console,
-    render_compat, render_monitor, render_profiles,
+    render_compat, render_monitor, render_profiles, render_templates,
     render_snapshots, render_status, render_system,
     render_vm_failure, render_vm_list,
 )
 from executor.fingerprint import tf_report
+from executor.api.label_registry import register_label
 from rich.panel import Panel
 
 manager = QemuManager()
@@ -225,9 +226,20 @@ def _execute_create_vm(args: Dict[str, Any], verbose: bool, raw_os_type: str,
               "display", "gpu", "audio", "manufacturer", "product_name", "bios_version",
               "serial_number", "board_product", "bios_vendor", "smbios_type",
               "uefi", "kvm", "battery", "hugepages", "machine_type", "os_type", "os_name",
-              "hardened", "stealth", "tpm", "bios"):
+              "hardened", "stealth", "tpm", "bios", "template", "randomize_root_password",
+              "randomize_user_password", "new_username"):
         if f in args and args[f] is not None and args[f] != "":
             setattr(cfg, f, args[f])
+
+    # User labels (work_vm / test_vm / …) — assign at creation and register each
+    # in the universal label registry so they can be reused across VMs.
+    _labels = args.get("labels") or []
+    if isinstance(_labels, str):
+        _labels = [_labels]
+    if _labels:
+        cfg.labels = list(dict.fromkeys(l for l in (s.strip() for s in _labels) if l))
+        for _lbl in cfg.labels:
+            register_label(_lbl)
 
     if args.get("chassis_type"):
         cfg.smbios_type = args["chassis_type"]
@@ -257,6 +269,8 @@ def _execute_create_vm(args: Dict[str, Any], verbose: bool, raw_os_type: str,
         cfg.unattended_locale    = args.get("unattended_locale", "")
         if "unattended_autologon" in args:
             cfg.unattended_autologon = bool(args["unattended_autologon"])
+        if "unattended_skip_user" in args:
+            cfg.unattended_skip_user = bool(args["unattended_skip_user"])
 
     # stealth implies hardened — __post_init__ only runs at construction so
     # stealth applied via setattr or profile won't have triggered it yet.
@@ -437,6 +451,18 @@ def _execute_create_vm(args: Dict[str, Any], verbose: bool, raw_os_type: str,
     if not verbose:
         if result.get("success"):
             console.print(f"[green]✓ VM '{result['name']}' created at {result['vm_dir']}[/green]")
+            if result.get("renamed_username"):
+                console.print(f"[dim]  User renamed to '{result['renamed_username']}'.[/dim]")
+            if result.get("root_password"):
+                console.print(
+                    f"[yellow]  New root password: {result['root_password']}"
+                    f" (unique to this clone — write it down)[/yellow]"
+                )
+            if result.get("user_password"):
+                console.print(
+                    f"[yellow]  New '{result.get('randomized_username')}' password: "
+                    f"{result['user_password']} (unique to this clone — write it down)[/yellow]"
+                )
             if cfg.stealth:
                 manager.generate_guest_setup(name)
                 console.print(
@@ -446,25 +472,67 @@ def _execute_create_vm(args: Dict[str, Any], verbose: bool, raw_os_type: str,
         else:
             console.print(f"[red]✗ create_vm failed: {result.get('error', 'unknown error')}[/red]")
     if result.get("success"):
-        # Opt-in unattended Windows install — build the answer-file CD now
-        # (Windows only). The builder attaches it on launch.
+        # Opt-in unattended install — build the answer-file/preseed media now.
+        # Windows: the builder attaches a CD, auto-detected by file presence at
+        # launch. Linux: kernel/initrd + cmdline are persisted onto the VM config
+        # itself, since qemu_arg_builder's direct-kernel-boot reads those fields
+        # off cfg rather than probing for a well-known file.
         if cfg.unattended:
             is_win = "windows" in cfg.os_type.lower() or "windows" in cfg.os_name.lower()
             if is_win:
                 try:
-                    from executor.api._unattend import generate_autounattend_iso
+                    from executor.api.autoinstall.windows import generate_autounattend_iso
                     generate_autounattend_iso(
                         result["vm_dir"], computer_name=cfg.name,
                         username=cfg.unattended_username, password=cfg.unattended_password,
                         locale=cfg.unattended_locale, autologon=cfg.unattended_autologon,
+                        skip_user_creation=cfg.unattended_skip_user,
                     )
                     if not verbose:
                         console.print("[dim]  Unattended answer-file CD generated — "
                                       "Windows installs hands-off on first boot.[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]⚠ unattended CD not generated: {e}[/yellow]")
-            elif not verbose:
-                console.print("[yellow]⚠ unattended=true ignored — Windows only.[/yellow]")
+            else:
+                from executor.api.autoinstall.linux import (
+                    linux_autoinstall_config, extract_kernel_initrd,
+                    generate_cidata_iso, inject_preseed_into_initrd,
+                )
+                meta = linux_autoinstall_config(cfg.os_name)
+                if meta and cfg.iso_path:
+                    try:
+                        locale = cfg.unattended_locale or "en_US.UTF-8"
+                        kernel_path, initrd_path = extract_kernel_initrd(
+                            cfg.iso_path, result["vm_dir"], cfg.os_name)
+                        if meta["installer_family"] == "casper":
+                            generate_cidata_iso(result["vm_dir"], locale=locale)
+                        elif meta["installer_family"] == "debian-installer":
+                            initrd_path = inject_preseed_into_initrd(
+                                initrd_path, result["vm_dir"],
+                                "kali-preseed-extra.cfg.template", locale=locale)
+                        elif meta["installer_family"] == "ubiquity":
+                            # Pre-fills every wizard page correctly (confirmed), but
+                            # Ubiquity's automatic-ubiquity mode still requires a human
+                            # to click Continue through each one — a wmctrl-based
+                            # auto-focus workaround was tried and did not survive
+                            # casper's switch_root into the live squashfs. Unresolved.
+                            initrd_path = inject_preseed_into_initrd(
+                                initrd_path, result["vm_dir"],
+                                "mint-preseed-extra.cfg.template", locale=locale)
+                        cfg.kernel_path    = kernel_path
+                        cfg.initrd_path    = initrd_path
+                        cfg.kernel_cmdline = meta["cmdline"]
+                        cfg.save()
+                        if not verbose:
+                            console.print("[dim]  Unattended Linux install media generated — "
+                                          "boots straight to account creation.[/dim]")
+                    except Exception as e:
+                        console.print(f"[yellow]⚠ unattended Linux media not generated: {e}[/yellow]")
+                elif not verbose:
+                    console.print(
+                        f"[yellow]⚠ unattended=true ignored — no unattended-install support "
+                        f"for os_name={cfg.os_name!r}.[/yellow]"
+                    )
         _set_revert("delete_vm", {"name": name}, f"undo create_vm '{name}'")
     return result
 
@@ -546,10 +614,31 @@ def _run(
         return manager.scan_isos()
 
     elif tool_name == "list_vms":
-        vms = manager.list_vms()
+        vms = manager.list_vms(label=args.get("label"))
         if not verbose:
             render_vm_list(vms)
         return vms
+
+    elif tool_name == "add_label":
+        return manager.add_label(args["name"], args["label"])
+
+    elif tool_name == "remove_label":
+        return manager.remove_label(args["name"], args["label"])
+
+    elif tool_name == "list_labels":
+        return manager.list_labels()
+
+    elif tool_name == "mark_as_template":
+        return manager.mark_as_template(args["name"])
+
+    elif tool_name == "remove_template":
+        return manager.remove_template(args["name"])
+
+    elif tool_name == "list_templates":
+        templates = manager.list_templates()
+        if not verbose:
+            render_templates(templates)
+        return templates
 
     elif tool_name == "list_profiles":
         profiles = list_profiles()

@@ -42,7 +42,49 @@
         "type": "function",
         "function": {
             "name": "list_vms",
-            "description": "List all VMs with status.",
+            "description": "List all VMs with status. Optional 'label' filters to VMs carrying that flag or user label (e.g. 'work_vm', 'stealth').",
+            "parameters": {
+                "type": "object",
+                "properties": {"label": {"type": "string", "description": "Only list VMs with this flag or user label."}},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_label",
+            "description": "Add a user-defined label/tag (e.g. 'work_vm', 'test_vm') to a VM. The label is registered machine-wide so it can be reused across VMs. Works whether the VM is running or stopped.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name":  {"type": "string", "description": "VM name."},
+                    "label": {"type": "string", "description": "Label to add (e.g. 'work_vm')."}
+                },
+                "required": ["name", "label"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_label",
+            "description": "Remove a user-defined label/tag from a VM. The label stays in the machine-wide registry for other VMs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name":  {"type": "string", "description": "VM name."},
+                    "label": {"type": "string", "description": "Label to remove."}
+                },
+                "required": ["name", "label"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_labels",
+            "description": "List every user-defined label registered on the machine and which VMs carry each.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
@@ -155,7 +197,18 @@
                     "stealth":      {"type": "boolean", "description": "Enable stealth mode (implies hardened). Applies full hardware fingerprint masking so the VM passes inxi -F as bare-metal hardware: SMBIOS chassis/board/BIOS overrides, PCI vendor spoofing (cirrus-vga, nec-usb-xhci), ACPI OEM ID, CPU flag hiding. Also auto-generates and serves a guest setup script on first launch (Firefox WebGL spoof + qemu_fw_cfg blacklist). Use when the VM must appear as real hardware to the OS and browser fingerprinting."},
                     "overwrite":    {"type": "boolean", "description": "If true and a VM with this name already exists, delete it and recreate. Only set this when the user explicitly said to overwrite or replace the existing VM."},
                     "extra_args":   {"type": "array", "items": {"type": "string"}},
-                    "manual":       {"type": "boolean", "description": "Set to true when the user said 'manual' and wants to configure each VM individually during batch creation. The CLI will prompt for os_type, memory_mb, cpu_cores, and disk_size_gb before creating each VM."}
+                    "manual":       {"type": "boolean", "description": "Set to true when the user said 'manual' and wants to configure each VM individually during batch creation. The CLI will prompt for os_type, memory_mb, cpu_cores, and disk_size_gb before creating each VM."},
+                    "labels":       {"type": "array", "items": {"type": "string"}, "description": "User-defined labels/tags to assign at creation (e.g. ['work_vm', 'test_vm']). Registered machine-wide so they can be reused across VMs and used to filter list_vms."},
+                    "template":     {"type": "string", "description": "Name of a golden-image template (created via mark_as_template) to clone this VM's disk(s) from, instead of creating blank disks. Use when the user says something like 'give it the X template disk' or 'create it from the X template'. Call list_templates to see what's available."},
+                    "randomize_root_password": {"type": "boolean", "description": "When cloning from a Linux template, offline-edit the new disk's root password to a fresh random value (via virt-customize) instead of inheriting the template's exact password. Only applies with 'template' set on a Linux template; ignored for Windows. Only set when the user asks for a unique/randomized/different password per clone."},
+                    "randomize_user_password": {"type": "boolean", "description": "Same as randomize_root_password, but for the disk's primary (non-root) user account instead — the username is auto-detected from the disk (first account with UID >= 1000). Only applies with 'template' set on a Linux template; ignored for Windows. Only set when the user asks for a unique/randomized user-account password per clone."},
+                    "new_username":  {"type": "string", "description": "Rename the cloned disk's primary (non-root) user account to this — the old username is auto-detected from the disk. Only applies with 'template' set on a Linux template; ignored for Windows. Only set when the user explicitly asks for a unique/different/renamed username per clone. Must be a valid lowercase Linux username."},
+                    "unattended":            {"type": "boolean", "description": "Fully automate OS installation instead of showing the interactive installer (Windows and Linux both supported). WIPES the target disk. Only set when the user explicitly asks for unattended/automated/hands-off install."},
+                    "unattended_username":   {"type": "string", "description": "Account username for the unattended install. Ignored if unattended_skip_user is true."},
+                    "unattended_password":   {"type": "string", "description": "Account password for the unattended install. Ignored if unattended_skip_user is true."},
+                    "unattended_locale":     {"type": "string", "description": "Locale for the unattended install, e.g. 'en-US'."},
+                    "unattended_autologon":  {"type": "boolean", "description": "Windows only: auto-login as the created account on first boot. Ignored if unattended_skip_user is true."},
+                    "unattended_skip_user":  {"type": "boolean", "description": "Automate everything (disk, locale, network/hardware-check bypass) EXCEPT the account — the installer stops at its normal 'create your account' screen for the user to fill in themselves. Use when the user says something like 'automate everything except creating the user' or 'let me create my own account'."}
                 },
                 "required": ["name", "os_type"]
             }
@@ -174,6 +227,38 @@
                 },
                 "required": ["source_name", "new_name"]
             }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_as_template",
+            "description": "Turn a stopped VM into a reusable golden-image template. Flattens its current disk state into a protected copy under ~/.qemu_vms/_templates/ and tags the VM with the protected 'template' label. Use when the user says 'mark X as a template' or similar. The VM must be stopped first.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "VM to snapshot as a template."}},
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_template",
+            "description": "Permanently delete a golden-image template's disk copy and remove the 'template' label from the source VM if it still exists. This is destructive and always asks the user to confirm first — never skip the confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "Template name (same as the VM it was created from)."}},
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_templates",
+            "description": "List every golden-image template registered on the machine.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
     {

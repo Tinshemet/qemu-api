@@ -1,9 +1,9 @@
 ================================================================================
-  QEMU-API  —  COMPLETE DICTIONARY OF ALL TERMS  (handbook part 1)
+  GORGON  —  COMPLETE DICTIONARY OF ALL TERMS  (handbook part 1)
 ================================================================================
 
 This document defines every term, acronym, concept, file name, function name,
-flag, config key, and port number used in the qemu-api project. Entries are
+flag, config key, and port number used in the gorgon project. Entries are
 grouped by topic. Use Ctrl+F / grep to find any term.
 
 Sources are listed as:  [file → function or section]
@@ -44,7 +44,7 @@ Hypervisor
 Hypervisor bit / -hypervisor CPUID flag
   A CPUID flag that the guest CPU reports when running inside a hypervisor.
   Programs inside the VM can read this flag to detect they are virtualised.
-  When hardened=True, qemu-api passes kvm=off and -vmx to QEMU which hides
+  When hardened=True, gorgon passes kvm=off and -vmx to QEMU which hides
   this flag from the guest, making the VM harder to detect.
   Source: shared/api/qemu_arg_builder.py → _harden()
 
@@ -156,7 +156,7 @@ virt machine type
 raspi3b / raspi4b machine type
   QEMU machine types that emulate a Raspberry Pi 3B / 4B board. Used with
   the raspberry_pi_3b and raspberry_pi_4 profiles. The 3B has no graphical
-  display — serial console only (qemu-api open-shell <name>).
+  display — serial console only (gorgon open-shell <name>).
 
 RTC / RTC clock
   Real-Time Clock. The hardware clock that keeps time when the computer is
@@ -534,7 +534,7 @@ API_URL
 API_TOKEN
   Environment variable. The shared secret for API authentication. Must match
   on both the server machine and the client machine. Also readable
-  from ~/.qemu-api.token file (the file is a fallback; env var takes precedence).
+  from ~/.gorgon.token file (the file is a fallback; env var takes precedence).
   Source: server/executor_client.py, server/http/api_server.py
 
 API_TIMEOUT
@@ -550,7 +550,7 @@ API_VERIFY_SSL
 
 OLLAMA_MODEL
   Environment variable. The Ollama model to use. Default: "qwen2.5:7b".
-  Can be set in ~/.zshrc or passed inline: OLLAMA_MODEL=llama3.1 qemu-api
+  Can be set in ~/.zshrc or passed inline: OLLAMA_MODEL=llama3.1 gorgon
 
 OLLAMA_URL
   Environment variable. The URL of the Ollama server. Default:
@@ -562,7 +562,7 @@ allowed_remote_tools
   HTTP 403 before running preflight. Example of what is excluded by default:
   send_monitor_cmd (raw QEMU monitor access).
 
-token file (~/.qemu-api.token)
+token file (~/.gorgon.token)
   A file on the client machine containing the API token. Readable by the
   API server on startup. chmod 0600 so only the owner can read it. The
   server also writes here when POST /rotate-token is called.
@@ -601,7 +601,7 @@ vm_dir
 .session.json
   JSON file at ~/.qemu_vms/.session.json. Stores the AI conversation history
   (last 40 messages). Loaded at startup so the AI has context from previous
-  sessions. Cleared with: qemu-api clear-session
+  sessions. Cleared with: gorgon clear-session
 
 launch.log
   Per-VM file that captures stdout and stderr from the last QEMU launch.
@@ -798,7 +798,7 @@ liveness monitor
 
 rotate-token
   POST /rotate-token endpoint. Replaces the in-memory API token and writes
-  the new value to ~/.qemu-api.token atomically. Takes effect immediately
+  the new value to ~/.gorgon.token atomically. Takes effect immediately
   without server restart. New token must be ≥ 16 characters.
 
 fetch command
@@ -848,8 +848,8 @@ chat_loop
   Source: server/ai/cli.py → chat_loop()
 
 cli_direct
-  The non-interactive CLI mode. Handles subcommands like qemu-api list,
-  qemu-api launch <name>, etc. No AI involved.
+  The non-interactive CLI mode. Handles subcommands like gorgon list,
+  gorgon launch <name>, etc. No AI involved.
   Source: server/ai/cli.py → cli_direct()
 
 session
@@ -938,7 +938,7 @@ setup_provider.sh
 setup_client.sh
   Thin-client setup. Run on the user's laptop. Installs only Python venv +
   requests + rich. Prompts for SERVER_URL and API_TOKEN. Writes
-  client/connection_config.json and adds the qemu-api alias.
+  client/connection_config.json and adds the gorgon alias.
 
 setup_wsl2.ps1
   Windows PowerShell script. Run as Admin after setup_client.sh when the
@@ -970,7 +970,7 @@ venv (virtual environment)
 L. PORTS AND ADDRESSES (REFERENCE)
 ────────────────────────────────────────────────────────────────────────────────
 
-:8080        Default API server port (qemu-api serve)
+:8080        Default API server port (gorgon serve)
 :11434       Ollama server default port
 :22          SSH default port
 :2222        Windows-side WSL2 SSH forward port (setup_wsl2.ps1)
@@ -1006,11 +1006,11 @@ M. KEY FILE PATHS (RUNTIME)
 ~/.qemu_vms/<name>/guest_setup.sh  Linux stealth script
 ~/.qemu_vms/<name>/guest_setup.ps1 Windows stealth script
 ~/.qemu_vms/<name>/.stealth_done   Stealth completion sentinel
-~/.qemu-api.token               API token file (chmod 0600)
+~/.gorgon.token               API token file (chmod 0600)
 ~/qemu-env/                     Python virtual environment
 ~/.config/systemd/user/         Systemd user service files
 /tmp/ollama.log                 Ollama server log (when started by setup scripts)
-/tmp/qemu-api.log               API server log in WSL2
+/tmp/gorgon.log               API server log in WSL2
 /etc/modprobe.d/blacklist-qemu.conf  QEMU module blacklist (written inside guest)
 /usr/share/OVMF/OVMF_CODE_4M.fd     OVMF firmware (standard UEFI)
 /usr/share/OVMF/OVMF_CODE_4M.ms.fd  OVMF firmware (Secure Boot)

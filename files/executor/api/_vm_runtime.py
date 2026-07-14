@@ -97,7 +97,7 @@ class _VmRuntimeMixin:
             if tpm_err:
                 return {"success": False, "error": tpm_err}
 
-        auto_detached_iso = self._maybe_auto_detach_iso(config)
+        auto_detached_iso = self._maybe_finish_unattended_install(config)
 
         if config.display == "vnc" and not config.vnc_port:
             config.vnc_port = next_free_port(VNC_PORT_START, self._used_ports("vnc"))
@@ -150,7 +150,8 @@ class _VmRuntimeMixin:
         # shell and setup never starts). Fires once (sentinel file), via the HMP
         # monitor socket so it doesn't contend with QMP, and never touches a booted
         # desktop (only the very first launch).
-        if config.unattended:
+        _is_win = "windows" in config.os_type.lower() or "windows" in config.os_name.lower()
+        if config.unattended and _is_win:
             _sentinel = os.path.join(config.get_vm_dir(), ".unattended_booted")
             if not os.path.exists(_sentinel):
                 try:
@@ -225,8 +226,18 @@ class _VmRuntimeMixin:
 
         if config.display == "vnc" and config.vnc_bind_local:
             import secrets
+            import string as _string
             from datetime import datetime, timedelta, timezone
-            vnc_password = secrets.token_urlsafe(8)
+            # Classic VNC "VNC Authentication" is DES-based with an 8-byte key —
+            # anything past the first 8 characters is silently truncated by the
+            # protocol itself. secrets.token_urlsafe(8) encodes 8 *bytes* as an
+            # 11-character base64 string, so the password QEMU actually honors
+            # (chars 0-7 of that string) differs from the one shown to the user,
+            # and typing the full displayed string into a VNC client fails auth.
+            # Generate exactly 8 characters so displayed == effective.
+            vnc_password = "".join(
+                secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8)
+            )
             result["vnc_port"] = config.vnc_port
             _qmp = None
             for _attempt in range(15):
@@ -243,8 +254,13 @@ class _VmRuntimeMixin:
                         "protocol": "vnc", "password": vnc_password, "connected": "keep",
                     })
                     try:
+                        # 10 minutes was too tight for real interactive use (an
+                        # OS install/setup session routinely runs longer than
+                        # that, and the password silently stops working mid-
+                        # session with no visible warning). 4 hours still
+                        # bounds exposure without breaking normal sessions.
                         _expire = int(
-                            (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp()
+                            (datetime.now(timezone.utc) + timedelta(hours=4)).timestamp()
                         )
                         _qmp.execute("expire_password",
                                      {"protocol": "vnc", "time": str(_expire)})
@@ -258,8 +274,8 @@ class _VmRuntimeMixin:
 
         if auto_detached_iso:
             result["note"] = (
-                "ISO detached automatically — disk has an installed OS. "
-                "VM will boot from disk."
+                "Unattended install detected as finished — installer media/kernel-boot "
+                "detached automatically. VM will boot the installed OS from disk from now on."
             )
 
         if config.stealth:
@@ -507,18 +523,40 @@ class _VmRuntimeMixin:
         except Exception:
             pass  # psutil swtpm sweep is best-effort cleanup — never block VM stop on it
 
-    def _maybe_auto_detach_iso(self, config: MachineConfig) -> bool:
-        """Detach ISO if disk already has a substantial OS install (> 2 GB data).
+    def _maybe_finish_unattended_install(self, config: MachineConfig) -> bool:
+        """Detect whether an install has actually finished, and if so switch the
+        VM back to normal disk-boot: clear ``iso_path`` and (crucially) the
+        direct-kernel-boot fields ``kernel_path``/``initrd_path``/``kernel_cmdline``.
 
-        Persists the config change if detached.
+        Without clearing the kernel-boot fields, EVERY future relaunch of a VM
+        that used an unattended installer (direct -kernel/-initrd boot, since
+        that's the only way to pass an autoinstall/preseed kernel parameter)
+        re-triggers the installer from scratch instead of booting the disk's own
+        bootloader — including on a guest-initiated reboot right after the
+        install finishes, which re-runs the SAME destructive auto-partitioning
+        preseed and wipes the install that had just completed. This happened for
+        real once; this function exists specifically to stop it recurring.
+
+        Two-stage check, cheapest first:
+          1. ``qemu-img info`` disk size — skip the expensive stage below for a
+             disk that's obviously still blank/early (no unattended install ever
+             gets this far without writing at least ~2 GB).
+          2. A real, read-only check for ``/etc/os-release`` via virt-cat. Disk
+             size alone isn't enough — partitioning writes real data too, well
+             before an install actually finishes, so a size-only check (the
+             previous version of this function) can false-positive mid-install
+             and detach things prematurely. os-release can only exist if the OS
+             is genuinely installed.
+
+        Persists the config change if the install is detected as finished.
 
         Args:
-            config: MachineConfig that may have ``iso_path`` set.
+            config: MachineConfig that may have ``iso_path``/``kernel_path`` set.
 
         Returns:
-            ``True`` if the ISO was detached, ``False`` otherwise.
+            ``True`` if the installer fields were cleared, ``False`` otherwise.
         """
-        if not config.iso_path:
+        if not (config.iso_path or config.kernel_path):
             return False
         disks = getattr(config, "disks", [])
         if not disks:
@@ -539,7 +577,15 @@ class _VmRuntimeMixin:
                 return False
         except Exception:
             return False
-        config.iso_path = None
+
+        from ._vm_credentials import linux_os_installed
+        if not linux_os_installed(disk_path):
+            return False
+
+        config.iso_path       = None
+        config.kernel_path     = None
+        config.initrd_path     = None
+        config.kernel_cmdline  = ""
         config.save()
         return True
 

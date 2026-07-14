@@ -1,5 +1,5 @@
 """
-test_api.py — qemu-api Test Suite entry point (v6)
+test_api.py — gorgon Test Suite entry point (v6)
 Seven independent layers:
   LAYER 1 — Sanitiser:          pure unit tests, no AI, instant
   LAYER 2 — Executor:           unit tests against execute_tool/preflight, no AI
@@ -240,7 +240,7 @@ def main():
 
     mode_str = "FUZZ" if fuzz else ("QUICK" if quick else "normal")
     console.print(Panel(
-        f"[bold cyan]qemu-api Test Suite v6[/bold cyan]\n"
+        f"[bold cyan]gorgon Test Suite v6[/bold cyan]\n"
         f"Model: [bold]{OLLAMA_MODEL}[/bold]  |  {OLLAMA_URL}\n"
         f"Layers: {sorted(run_layers)}  "
         f"| L1={len(san_tests)} L2={len(EXECUTOR_TESTS)}+{len(rand_pf_tests)}r "
@@ -254,7 +254,7 @@ def main():
         f"L11={len(REMOTE_SPLIT_TESTS)}\n"
         f"Seed: {seed}  |  Mode: {mode_str}"
         + (f"\nTag: [bold]{tag_filter}[/bold]" if tag_filter else ""),
-        border_style="cyan", title="[bold]qemu-api[/bold]",
+        border_style="cyan", title="[bold]gorgon[/bold]",
     ))
 
     all_results: List[TestResult] = []

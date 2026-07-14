@@ -1,5 +1,5 @@
 ================================================================================
-  QEMU-API  —  CONFIGURATION REFERENCE  (handbook part 4)
+  GORGON  —  CONFIGURATION REFERENCE  (handbook part 4)
 ================================================================================
 
 Every configuration file, every key, every environment variable, and every
@@ -15,7 +15,7 @@ corresponding config.json values.
 SERVER_URL
   Default:  "http://localhost:8080"  (from client/connection_config.json)
   Values:   "http://host:port" | "https://host:port"
-  Effect:   URL of the qemu-api server for the chat client to connect to.
+  Effect:   URL of the gorgon server for the chat client to connect to.
   Read by:  client/ui/chat_client.py
 
 API_TOKEN
@@ -25,7 +25,7 @@ API_TOKEN
             Client chat_client: sent in Authorization header.
             Server api_server: compared against incoming tokens.
   Read by:  client/ui/chat_client.py, server/http/api_server.py
-  Also read from (server side): ~/.qemu-api.token (file fallback)
+  Also read from (server side): ~/.gorgon.token (file fallback)
 
 API_TIMEOUT
   Default:  120 (from connection_config.json)
@@ -69,7 +69,7 @@ OLLAMA_URL
     # Always "local" — server runs QEMU co-located.
 
   "token": "",
-    # API token. Match this to API_TOKEN env var or ~/.qemu-api.token.
+    # API token. Match this to API_TOKEN env var or ~/.gorgon.token.
 
   "timeout": 120,
     # HTTP request timeout (seconds).
@@ -138,7 +138,7 @@ ACCESS CONTROL ENFORCEMENT:
 
 {
   "server_url": "http://localhost:8080",
-    # URL of the qemu-api server. Override with SERVER_URL env var.
+    # URL of the gorgon server. Override with SERVER_URL env var.
 
   "token": "",
     # API token. Leave empty and use API_TOKEN env var.

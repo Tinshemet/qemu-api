@@ -273,6 +273,22 @@ class QemuArgBuilder(_QemuSmbiosMixin):
                     "-drive",  f"file={unattend_iso},if=none,id=cdrom_ua,readonly=on,media=cdrom",
                     "-device", dev,
                 ]
+        # Unattended Linux (casper family — Ubuntu/Mint) install: attach the
+        # generated cidata volume so cloud-init's autoinstall runs hands-off up
+        # to account creation. Opt-in; built at create_vm time into the VM dir.
+        # Inert if absent — debian-installer family (Kali) injects its preseed
+        # into the initrd instead and never creates this file.
+        if self.cfg.unattended:
+            cidata_iso = os.path.join(self.vm_dir, "cidata.iso")
+            if os.path.exists(cidata_iso):
+                # q35's default ide.0 (where cdrom0 lands) is a single-unit bus —
+                # a second bare ide-cd collides on it ("bus supports only 1
+                # units"). ide.1 is q35's other independent single-unit legacy
+                # IDE channel, confirmed free.
+                self.args += [
+                    "-drive",  f"file={cidata_iso},if=none,id=cdrom_cidata,readonly=on,media=cdrom",
+                    "-device", "ide-cd,drive=cdrom_cidata,bus=ide.1",
+                ]
 
     def _network(self) -> None:
         """Append network args from each NetworkConfig, falling back to default user-NAT."""

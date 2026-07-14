@@ -91,13 +91,19 @@ Status: command generation is implemented + verified; a real passthrough needs
 a spare GPU to dedicate (not testable without one).
 
 
-3. UNATTENDED WINDOWS INSTALL   (unattended=true)   [DESTRUCTIVE, Windows-only]
+3. UNATTENDED OS INSTALL   (unattended=true)              [DESTRUCTIVE]
 ────────────────────────────────────────────────────────────────────────────
-Installs Windows fully hands-off — no OOBE, no Microsoft-account gate, no
-clicking. This is the answer to Windows being teeth-pulling to set up.
+Installs an OS fully hands-off — no clicking through installer screens. This
+is the answer to OS setup being teeth-pulling. Windows AND Linux (Ubuntu, Kali)
+are supported; Mint is a known gap (see below). Code lives in its own package,
+executor/api/autoinstall/ (windows.py, linux.py, templates/) — specifically so
+it's easy to find where to add a custom answer file or a new distro; see that
+package's __init__.py for exact instructions.
 
-HOW: create_vm generates an autounattend.xml (from the template
-executor/api/assets/autounattend.xml.template, filled from the VM config +
+--- WINDOWS ---
+
+HOW: create_vm generates an autounattend.xml (from
+autoinstall/templates/autounattend.xml.template, filled from the VM config +
 the `unattended_windows` config block) and packs it onto TWO media in the VM
 dir: a small ISO (autounattend.iso, attached as a second CD) AND a 16 MB FAT16
 image (autounattend.img, attached as a removable USB stick). Windows Setup
@@ -112,10 +118,28 @@ OVMF DOES mount FAT, so autounattend.img also carries a startup.nsh that the
 shell auto-runs to launch the Windows installer — making the whole install boot
 hands-off even if the early "press any key" window is missed. (The image is
 built with mtools; the ISO alone still applies the answer file but needs a
-manual boot nudge.)
+manual boot nudge.) In practice this auto-run is still timing-flaky (~1s
+window) — if it misses and drops to the UEFI Interactive Shell, drive it
+manually: type `fs1:` (the install CD — `dir` each FSn to identify it, don't
+guess) then `efi\boot\bootx64.efi`, all lowercase (bare uppercase letters are
+NOT valid HMP sendkey keysyms — `sendkey E` silently fails, needs `shift-e`;
+UEFI paths are case-insensitive so lowercasing sidesteps this entirely). Do NOT
+press a key at the resulting "press any key to boot from CD" prompt unless you
+actually want to (re-)boot the CD — it's the same generic bootmgfw.efi
+regardless of which medium invoked it, so pressing there mid-install restarts
+Setup from scratch. Mid-install reboots hit the shell again the same way —
+boot `fs0:\efi\boot\bootx64.efi` (the TARGET disk's own ESP) instead, and let
+its own "press any key" time out untouched.
 
-OPT-IN + CONFIRMATION: because it WIPES the target disk and creates a fixed
-local admin, preflight returns a Yes/No confirmation:
+`unattended_skip_user=true` automates everything EXCEPT the account — Setup
+stops at the normal sign-in screen ("Other user", blank fields) instead of
+auto-creating one. This is what you want when the VM is destined to become a
+golden-image template (section 3b) — confirmed end-to-end: Setup completes,
+reaches the sign-in screen, no account exists yet.
+
+OPT-IN + CONFIRMATION: because it WIPES the target disk, preflight returns a
+Yes/No confirmation (wording differs slightly with unattended_skip_user — see
+orchestrator/preflight/validator.py):
     "Unattended Windows install will WIPE this VM's disk and auto-create local
      admin 'user'. Proceed?"  [Yes, wipe and install / No, cancel]
 On "Yes" the client re-runs with force=true (force=true skips the prompt).
@@ -123,18 +147,24 @@ On "Yes" the client re-runs with force=true (force=true skips the prompt).
 CONFIG / OVERRIDES (unattended_windows block in executor/api/config.json;
 per-VM overrides as create_vm args):
     unattended_username, unattended_password, unattended_locale,
-    unattended_autologon      (defaults: user / Passw0rd! / en-US / autologon on)
+    unattended_autologon, unattended_skip_user
+    (defaults: user / Passw0rd! / en-US / autologon on / skip_user off)
 Computer name = the VM name.
 
 FIRST-BOOT: launch_vm spawns a thread that auto-presses Enter (via the HMP
 monitor) to clear the Windows "Press any key to boot from CD or DVD" prompt —
 otherwise it times out to the UEFI shell and setup never starts. Fires ONCE (a
-.unattended_booted sentinel in the VM dir), so it never touches a booted desktop.
+.unattended_booted sentinel in the VM dir), gated to WINDOWS ONLY (an earlier
+version fired for any cfg.unattended, which corrupted Kali's ncurses d-i
+navigation by mashing Enter through it — found via a clean A/B: same launch
+with/without the burst active). Never touches a booted desktop.
   The burst runs for `unattended_boot_keys` seconds (config.json timeouts,
 default 25). IMPORTANT: do NOT raise this much — once Windows Setup's UI renders
 (~35s), a stray Enter activates Setup's on-screen "Support" hyperlink and pops a
 recurring "Unable to open link" modal that BLOCKS the unattended auto-advance.
-25s clears cdboot (which appears ~5-20s) but stops before the UI.
+25s clears cdboot (which appears ~5-20s) but stops before the UI. This timing
+is inherently a bit flaky ("host-timing-tuned" — one launch may stick on the
+language screen for minutes; a fresh relaunch usually goes straight through).
   The keypress daemon lives in the launching process, so whatever calls
 launch_vm must stay alive ≥25s. Screendumps share the single-connection monitor,
 so take them AFTER the keypress window.
@@ -142,13 +172,137 @@ so take them AFTER the keypress window.
 NEEDS on the executor: genisoimage (answer ISO) + mtools (the FAT boot image) +
 swtpm (TPM 2.0 for Win11). All are in complementary/install_executor.sh.
 
-PROVEN end-to-end (Win11 25H2, 2026-07-10): fresh create_vm unattended=true →
-launch, untouched → Installing 5% by 30s, 100% hands-off, reboots itself to the
+PROVEN end-to-end (Win11 25H2): fresh create_vm unattended=true → launch,
+untouched → Installing 5% by 30s, 100% hands-off, reboots itself to the
 desktop with autologon and a local account. Zero clicks, zero dialogs.
+Also proven end-to-end WITH unattended_skip_user=true, all the way to the
+sign-in screen, then marked as a golden-image template (section 3b).
 
-NOT this feature (1.1 idea): pre-made "golden" disks already installed up to
-the last step (just create the user on boot) — a sysprep/template-image
-approach, different from autounattend.
+--- LINUX ---
+
+Direct-kernel-boots the installer (-kernel/-initrd/-append — the ONLY way to
+pass an autoinstall/preseed kernel parameter; booting an attached -cdrom alone
+can't inject a custom kernel cmdline). Per-distro metadata in
+`unattended_linux` in executor/api/config.json (installer_family,
+kernel_path, initrd_path, cmdline):
+
+  casper (Ubuntu Desktop/Subiquity):
+    Extract /casper/vmlinuz + /casper/initrd from the ISO via
+    `xorriso -osirrox on -extract` (no mount/root needed). Needs
+    `boot=casper` on the cmdline or the initrd's generic local-top script
+    fails "No root device specified" and drops to an initramfs rescue shell —
+    confirmed via serial console capture; this ISO's own grub.cfg doesn't
+    show `boot=casper` either (just `linux /casper/vmlinuz --- quiet splash`),
+    so don't trust grub.cfg as proof it's unneeded for direct-kernel-boot.
+    A separate cidata.iso (cloud-init NoCloud volume, built the same
+    `xorriso -as mkisofs` way as the Windows answer ISO) carries `user-data`
+    with `interactive-sections: [identity]` — the key Subiquity feature that
+    automates everything but leaves account-creation prompted.
+    Attached as a second cdrom on q35's `ide.1` bus — a bare second
+    `-device ide-cd` collides with the first (`cdrom0`) since q35's default
+    `ide.0` is a single-unit bus, not a 2-unit legacy IDE channel.
+    PROVEN end-to-end: boots hands-off through locale/keyboard/storage/
+    network, stops exactly at "Create your account".
+    CAVEAT for templating: unlike Windows, Subiquity does NOT write anything
+    to the target disk until AFTER identity resolves — there is no "mark
+    before account creation" shortcut here. Always verify disk size before
+    mark_as_template, regardless of which screen is showing.
+
+  debian-installer (Kali):
+    No separate medium. A small cpio archive holding a replacement
+    preseed.cfg is gzipped and concatenated onto the END of the extracted
+    initrd.gz. The kernel's initramfs unpacker (unlike the userspace `cpio`
+    tool) processes concatenated cpio archives in sequence, later files
+    overriding earlier same-named ones. passwd/* questions are left unset so
+    account creation still prompts. PROVEN end-to-end: stops at "Set up users
+    and passwords".
+
+  ubiquity (Linux Mint):
+    NOT CURRENTLY SUPPORTED. Mint ships Ubiquity, not Subiquity — Ubiquity
+    doesn't read the autoinstall/cloud-init mechanism at all. The SAME
+    initrd-injection preseed mechanism as debian-installer correctly loads
+    and pre-fills every wizard page (confirmed: keyboard layout comes up
+    pre-set), but automatic-ubiquity mode only pre-fills — it does not
+    auto-advance the GTK wizard, so it still needs manual Continue clicks
+    through each page. A wmctrl-based auto-focus workaround (autostart
+    .desktop + retry-loop script, bundled into the same initrd-injection
+    cpio) was tried and did NOT survive casper's switch_root into the live
+    squashfs — casper's own scripts specifically know to carry preseed.cfg
+    across that boundary, but arbitrary extra files bundled the same way
+    don't. Real fix needs either casper's actual "ship extra files into the
+    live session" mechanism, or a respun ISO with the fix baked into the
+    squashfs. Known gap, explicitly backlogged — not actively worked on.
+
+3b. GOLDEN-IMAGE TEMPLATES   (mark_as_template / create_vm template=)
+────────────────────────────────────────────────────────────────────────────
+The "pre-made golden disk" idea noted as a future 1.1 direction above — now
+built. Turn an already-set-up VM into a reusable base image; clone new VMs
+from it instead of reinstalling every time.
+
+WORKFLOW:
+  1. Set up a source VM (often via unattended install above, with
+     unattended_skip_user=true for Windows so account creation is left for a
+     human — Ubuntu/Kali's installers already stop at account creation
+     without a separate flag).
+  2. stop_vm WITHOUT force — a real ACPI shutdown, not a hard kill, so the
+     golden image doesn't inherit a dirty-shutdown filesystem state.
+  3. mark_as_template(name) — flattens the disk(s) (qemu-img convert, NOT a
+     backing-file link, so the template never depends on the source VM's own
+     disk surviving) into ~/.qemu_vms/_templates/<name>/. Tags BOTH the
+     source VM and the template.json copy with the protected "template"
+     label (config-driven: template_label / dirs.templates in
+     executor/api/config.json).
+  4. create_vm(name=..., template=<name>) — clones fresh VM(s) as QCOW2
+     backing files. The normal auto-ISO-match logic is SKIPPED for template
+     clones — attaching an install ISO to an already-installed disk risks
+     the VM booting the installer's boot menu instead of the cloned OS (the
+     CD-ROM device gets an explicit bootindex; the cloned disk doesn't).
+  5. remove_template(name) (Yes/Cancel confirm) — deletes the template copy,
+     un-tags the source VM if it still exists. remove_label refuses to strip
+     "template" directly — must go through remove_template.
+  6. list_templates() — mirrors list_profiles(); `templates` shortcut too.
+
+PER-CLONE CREDENTIALS (executor/api/_vm_credentials.py, Linux only — Windows
+credentials live in the SAM registry hive, not /etc/shadow, needs a different
+tool [chntpw], not yet built):
+  randomize_root_password=true    offline-sets a fresh random root password
+                                   via `virt-customize --root-password
+                                   password:<generated>` (libguestfs — mounts
+                                   the disk itself via a small internal
+                                   appliance, no host root/sudo needed).
+                                   Returned once in the result message/
+                                   root_password field, ALSO persisted into
+                                   the clone's own config.json (show_config to
+                                   retrieve later — a bare "shown once, never
+                                   saved" wasn't good enough).
+  randomize_user_password=true    same, for the auto-detected primary
+                                   (non-root, first UID>=1000) account.
+  new_username=<name>             renames that account via
+                                   `virt-customize --run-command "usermod -l
+                                   NEW -m -d /home/NEW OLD" --run-command
+                                   "groupmod -n NEW OLD || true"` — runs the
+                                   guest's OWN usermod/groupmod against its
+                                   own passwd/shadow/group files via the
+                                   libguestfs appliance, correctly handles
+                                   the private-group-per-user convention.
+                                   SECURITY: new_username/old_username are
+                                   validated against a strict POSIX-username
+                                   regex (^[a-z_][a-z0-9_-]{0,31}$) before use
+                                   — they get interpolated into a real shell
+                                   command via --run-command, so an
+                                   unvalidated value would be a command-
+                                   injection vector (e.g. "alice; rm -rf /").
+                                   Runs BEFORE randomize_user_password in the
+                                   same call, so combining both targets the
+                                   renamed account, not the old name.
+NEEDS: libguestfs-tools (virt-customize, virt-cat) — in
+complementary/install_executor.sh. Requires the VM to be STOPPED (libguestfs
+needs exclusive access to the disk file).
+
+PROVEN end-to-end for Kali, Ubuntu, and Windows: each marked as a template,
+then a real create_vm(template=X) clone booted straight to the correct login
+screen with the account preserved (and, where tested, with fresh randomized
+credentials that actually worked to log in). Mint is excluded (see above).
 
 
 4. HARDWARE FINGERPRINT / SMBIOS ARGS                    [non-destructive]
@@ -184,11 +338,25 @@ degrades gracefully offline — fine for an air-gapped lab).
   - stealth + no identity  ⇒  random persona; stealth + identity/profile ⇒ that
     model. Rotation gives unique serial/MAC/BIOS/RAM/CPU each time.
   - GPU /sys tell is ONLY closable with passthrough (needs host IOMMU/vfio prep).
-  - unattended is Windows-only, DESTRUCTIVE (wipes disk), and confirms first
-    (force=true skips). Answer file ships on BOTH an ISO and a FAT USB image;
-    the FAT's startup.nsh + a 25s Enter-burst make it boot hands-off (don't raise
-    unattended_boot_keys — Enter into Setup's UI pops a blocking "link" modal).
-    Needs mtools + genisoimage + swtpm on the executor.
+  - unattended supports Windows AND Linux (Ubuntu, Kali) now — Mint (Ubiquity)
+    is the one known gap. DESTRUCTIVE (wipes disk), confirms first (force=true
+    skips). Windows answer file ships on BOTH an ISO and a FAT USB image; the
+    FAT's startup.nsh + a 25s Enter-burst (Windows-only — an earlier version
+    firing for any unattended VM corrupted Kali's d-i navigation) make it boot
+    hands-off (don't raise unattended_boot_keys — Enter into Setup's UI pops a
+    blocking "link" modal). Needs mtools + genisoimage + swtpm + libguestfs-tools
+    on the executor.
+  - A VM using direct-kernel-boot (any unattended Linux install) re-triggers the
+    installer on EVERY launch until _maybe_finish_unattended_install confirms
+    the OS actually installed (disk-size pre-filter + real /etc/os-release
+    check) and clears kernel_path/initrd_path/iso_path — otherwise a
+    guest-initiated post-install reboot re-runs the same destructive
+    auto-partitioning preseed. Learned this the hard way once.
+  - Golden-image templates (section 3b): mark_as_template needs a graceful
+    stop_vm (no force) first; create_vm(template=X) skips the auto-ISO-match
+    that would otherwise risk booting the installer menu instead of the clone.
+    randomize_root_password/randomize_user_password/new_username are Linux-only
+    (libguestfs) and need the VM stopped.
   - passthrough_pci auto-adds the .1 audio function for a lone GPU .0.
   - manual SMBIOS fields (serial/bios_vendor/chassis_type) suppress profile match.
   - Windows 11: TPM (swtpm) + UEFI + q35 are auto-set; unattended bypasses the

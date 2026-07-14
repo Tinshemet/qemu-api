@@ -324,7 +324,7 @@ class _VmDiagnosticsMixin:
             if "ovmf" in m or "uefi"    in m:
                 suggestions.append("sudo apt install ovmf")
             if "no bootable"            in m:
-                suggestions.append("Check iso_path in VM config — run: qemu-api config " + name)
+                suggestions.append("Check iso_path in VM config — run: gorgon config " + name)
             if "blank" in m and "disk"  in m:
                 suggestions.append(
                     "Call scan_isos to find an ISO, then update_config with iso_path, "
@@ -338,7 +338,7 @@ class _VmDiagnosticsMixin:
                 suggestions.append("Check DISPLAY env var: echo $DISPLAY  (should be :0 or :1)")
             if "not a valid qemu machine type" in m or "profile name" in m:
                 suggestions.append(
-                    f"Fix machine_type: run: qemu-api cmd {name} '' — "
+                    f"Fix machine_type: run: gorgon cmd {name} '' — "
                     "or delete and recreate the VM with machine_type=q35"
                 )
             if "architecture mismatch"  in m:

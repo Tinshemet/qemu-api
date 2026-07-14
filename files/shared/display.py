@@ -57,11 +57,13 @@ def render_vm_list(vms: List[Dict]) -> None:
     t.add_column("RAM",    justify="right")
     t.add_column("Disks",  justify="right")
     t.add_column("Status", justify="center")
+    t.add_column("Tags",   style="magenta")
     for i, vm in enumerate(vms, 1):
         status_str = (
             "[success]● running[/success]" if vm.get("status") == "running"
             else "[dim]○ stopped[/dim]"
         )
+        tags = " ".join(vm.get("flags", []) + [f"#{l}" for l in vm.get("labels", [])])
         t.add_row(
             str(i),
             vm.get("name", "?"),
@@ -70,6 +72,7 @@ def render_vm_list(vms: List[Dict]) -> None:
             f"{vm.get('memory_mb', 0) // 1024}GB",
             str(vm.get("disks", "?")),
             status_str,
+            tags,
         )
     console.print(t)
 
@@ -143,6 +146,20 @@ def render_profiles(profiles: List[Dict]) -> None:
     for p in profiles:
         custom = "[success]✓[/success]" if p.get("custom") == "True" else ""
         t.add_row(p["name"], p.get("arch", "x86_64"), custom, p.get("description", ""))
+    console.print(t)
+
+
+def render_templates(templates: List[Dict]) -> None:
+    """Render the golden-image template list as a table."""
+    if not templates:
+        console.print("[warn]No templates found.[/warn]")
+        return
+    t = Table(box=box.ROUNDED, border_style="magenta", header_style="bold magenta")
+    t.add_column("Name",    style="bold cyan")
+    t.add_column("OS type", style="dim")
+    t.add_column("Disks",   justify="center")
+    for tpl in templates:
+        t.add_row(tpl["name"], tpl.get("os_type", ""), str(tpl.get("disks", 0)))
     console.print(t)
 
 
@@ -312,7 +329,7 @@ def print_banner(
         f"{verb_line}\n"
         f"[dim]Commands: 'exit' · 'clear session' · 'list' · 'system' · 'drift'[/dim]",
         border_style="cyan",
-        title="[bold]qemu-api[/bold]",
+        title="[bold]gorgon[/bold]",
     ))
 
 

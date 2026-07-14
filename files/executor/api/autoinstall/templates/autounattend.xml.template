@@ -65,14 +65,14 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
-        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideLocalAccountScreen>__HIDE_ACCOUNT_SCREEN__</HideLocalAccountScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
         <ProtectYourPC>3</ProtectYourPC>
         <SkipMachineOOBE>true</SkipMachineOOBE>
-        <SkipUserOOBE>true</SkipUserOOBE>
+        <SkipUserOOBE>__SKIP_USER_OOBE__</SkipUserOOBE>
       </OOBE>
-      <UserAccounts>
+      <!--__USER_ACCOUNTS_BLOCK__--><UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
             <Name>__USERNAME__</Name>
@@ -86,7 +86,7 @@
         <Username>__USERNAME__</Username>
         <Password><Value>__PASSWORD__</Value><PlainText>true</PlainText></Password>
         <LogonCount>1</LogonCount>
-      </AutoLogon>
+      </AutoLogon><!--__END_USER_ACCOUNTS_BLOCK__-->
     </component>
   </settings>
 </unattend>

@@ -387,6 +387,7 @@ class MachineConfig:
     unattended_password: str       = ""
     unattended_locale:   str       = ""
     unattended_autologon: bool     = True
+    unattended_skip_user: bool     = False  # automate everything except account creation
     boot_order:      str           = _MC["boot_order"]
     smbios_type:     str           = _MC["smbios_type"]
     product_name:    str           = _MC["product_name"]
@@ -411,6 +412,14 @@ class MachineConfig:
     tpm:             bool          = _MC.get("tpm", False)
     hugepages_path:  str           = _MC["hugepages_path"]
     extra_args:      List[str]     = field(default_factory=list)
+    labels:          List[str]     = field(default_factory=list)  # user-defined tags (work_vm, test_vm, …)
+    template:        Optional[str] = None  # golden-image name under ~/.qemu_vms/_templates/ to clone disks from
+    randomize_root_password: bool = False  # offline-edit the cloned disk's root password (Linux templates only)
+    root_password:   Optional[str] = None  # set when randomize_root_password succeeds — the ONLY record of it
+    randomize_user_password: bool = False  # offline-edit the cloned disk's primary user's password too
+    user_password:   Optional[str] = None  # set when randomize_user_password succeeds
+    randomized_username: Optional[str] = None  # which account user_password applies to (auto-detected)
+    new_username:    Optional[str] = None  # rename the cloned disk's primary user to this (Linux templates only)
     # ARM / non-x86 support
     qemu_binary:     str           = _MC["qemu_binary"]
     machine_arch:    str           = _MC["machine_arch"]

@@ -1,5 +1,5 @@
 """
-server.py — qemu-api Executor Server
+server.py — gorgon Executor Server
 
 Lightweight FastAPI service that receives validated tool calls from the
 orchestrator (AI server) over HTTP and executes them against the local
@@ -10,7 +10,7 @@ Start with:
 
 Environment variables:
     EXECUTOR_TOKEN   shared secret between orchestrator and executor.
-                     Alternatively write the token to ~/.qemu-api-executor.token
+                     Alternatively write the token to ~/.gorgon-executor.token
                      or set "token" in executor/config.json.
 
 Endpoints:
@@ -38,8 +38,8 @@ _CFG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 with open(_CFG_PATH) as _f:
     _CFG = json.load(_f)
 
-_TOKEN_FILE = pathlib.Path.home() / ".qemu-api-executor.token"
-_EVENT_LOG  = pathlib.Path.home() / ".qemu-api-executor-events.jsonl"
+_TOKEN_FILE = pathlib.Path.home() / ".gorgon-executor.token"
+_EVENT_LOG  = pathlib.Path.home() / ".gorgon-executor-events.jsonl"
 
 
 def _load_token() -> str:
@@ -58,7 +58,7 @@ _TOKEN = _load_token()
 if not _TOKEN:
     print(
         "[executor] WARNING: No token configured — remote connections will be refused.\n"
-        "  Set EXECUTOR_TOKEN, write to ~/.qemu-api-executor.token, "
+        "  Set EXECUTOR_TOKEN, write to ~/.gorgon-executor.token, "
         "or set 'token' in executor/config.json."
     )
 
@@ -81,7 +81,7 @@ _KNOWN_TOOLS: set = {
     "setup_done", "generate_guest_setup",
 }
 
-app   = FastAPI(title="qemu-api executor", version="1.0")
+app   = FastAPI(title="gorgon executor", version="1.0")
 _auth = HTTPBearer(auto_error=False)
 _LOCALHOST = {"127.0.0.1", "::1", "localhost"}
 
@@ -295,6 +295,20 @@ def tools() -> Dict[str, Any]:
         ``{"tools": ["check_system", "clone_vm", ...]}``
     """
     return {"tools": sorted(_KNOWN_TOOLS)}
+
+
+@app.get("/commands", dependencies=[Depends(_require_token)])
+def commands() -> Dict[str, Any]:
+    """Return the authored command catalog that drives both help surfaces.
+
+    The single source of truth for user-facing commands (terminal + AI-chat CLI).
+    Callers filter it against the allowed-tools list before rendering.
+
+    Returns:
+        ``{"commands": [...], "category_order": [...]}``
+    """
+    from executor.command_catalog import COMMAND_CATALOG, CATEGORY_ORDER
+    return {"commands": COMMAND_CATALOG, "category_order": CATEGORY_ORDER}
 
 
 @app.get("/status", dependencies=[Depends(_require_token)])

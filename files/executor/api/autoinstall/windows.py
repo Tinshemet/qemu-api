@@ -1,6 +1,7 @@
 """
-_unattend.py — build an ``autounattend.xml`` answer-file ISO for unattended
-Windows installs.
+windows.py — build an ``autounattend.xml`` answer-file ISO for unattended
+Windows installs. Edit ``templates/autounattend.xml.template`` directly to
+change what gets automated.
 
 The ISO (autounattend.xml at its root) is attached to a Windows VM as a second
 CD; Windows Setup auto-detects it and installs fully hands-off: disk partition,
@@ -10,14 +11,15 @@ account, no clicking. Opt-in only (it wipes the target disk).
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "config.json")) as _f:
+with open(os.path.join(os.path.dirname(_HERE), "config.json")) as _f:
     _UA = json.load(_f).get("unattended_windows", {})
-_TEMPLATE = os.path.join(_HERE, "assets", "autounattend.xml.template")
+_TEMPLATE = os.path.join(_HERE, "templates", "autounattend.xml.template")
 
 # If OVMF misses the "Press any key to boot from CD" window it drops to the UEFI
 # shell, which auto-runs startup.nsh from a mounted volume. This one finds the
@@ -27,7 +29,7 @@ _TEMPLATE = os.path.join(_HERE, "assets", "autounattend.xml.template")
 def _startup_nsh() -> str:
     """UEFI shell startup.nsh: try each filesystem's Windows bootloader in turn.
     Explicit per-FS checks (the shell's for-loop %var interpolation is unreliable)."""
-    lines = ["@echo -off", "echo qemu-api: auto-booting Windows installer..."]
+    lines = ["@echo -off", "echo gorgon: auto-booting Windows installer..."]
     for n in range(10):
         p = "fs%d:\\efi\\boot\\bootx64.efi" % n
         lines += ["if exist %s then" % p, "    echo booting fs%d:" % n, "    %s" % p, "endif"]
@@ -91,6 +93,7 @@ def generate_autounattend_iso(
     organization: str = None,
     product_key: str = "",
     autologon: bool = None,
+    skip_user_creation: bool = False,
 ) -> str:
     """Fill the answer-file template (config defaults + overrides) and build
     ``<vm_dir>/autounattend.iso``.
@@ -101,6 +104,11 @@ def generate_autounattend_iso(
         username/password/locale/organization/product_key/autologon:
                        Overrides; empty/None falls back to the ``unattended_windows``
                        config block.
+        skip_user_creation: When True, automate everything EXCEPT the local account —
+                       omits the <UserAccounts>/<AutoLogon> blocks and un-hides the
+                       account-creation OOBE screen, so Setup stops there for a human
+                       to create their own account. Default False keeps today's fully
+                       hands-off behavior (account auto-created from username/password).
 
     Returns:
         Path to the generated ISO.
@@ -132,9 +140,19 @@ def generate_autounattend_iso(
         "__ORGANIZATION__":  organization if organization is not None else _UA.get("organization", ""),
         "__PRODUCT_KEY__":   product_key or _UA.get("product_key", ""),
         "__AUTOLOGON__":     "true" if _autolog else "false",
+        "__HIDE_ACCOUNT_SCREEN__": "false" if skip_user_creation else "true",
+        "__SKIP_USER_OOBE__":      "false" if skip_user_creation else "true",
     }
     for k, v in repl.items():
         xml = xml.replace(k, str(v))
+
+    if skip_user_creation:
+        # Automate everything else, but let Setup stop at its normal account-creation
+        # screen instead of auto-creating one from username/password.
+        xml = re.sub(
+            r"<!--__USER_ACCOUNTS_BLOCK__-->.*?<!--__END_USER_ACCOUNTS_BLOCK__-->",
+            "", xml, flags=re.DOTALL,
+        )
 
     os.makedirs(vm_dir, exist_ok=True)
     xml_path = os.path.join(vm_dir, "autounattend.xml")

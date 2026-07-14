@@ -1,6 +1,6 @@
-# qemu-api
+# gorgon
 
-**Release: [1.0-stable](https://github.com/Tinshemet/qemu-api/releases/tag/1.0-stable)**
+**Release: [1.0-stable](https://github.com/Tinshemet/gorgon/releases/tag/1.0-stable)**
 
 AI-driven QEMU/KVM virtual machine manager with an Ollama chat loop, remote split architecture, stealth/SMBIOS spoofing, TPM, Secure Boot, and an 11-layer automated test suite.
 
@@ -17,25 +17,27 @@ AI-driven QEMU/KVM virtual machine manager with an Ollama chat loop, remote spli
 6. [AI Chat Reference](#ai-chat-reference)
 7. [VM Configuration Fields](#vm-configuration-fields)
 8. [Hardware Profiles](#hardware-profiles)
-9. [Flags: -cu, -tf, -cs](#flags--cu--tf--cs)
-10. [Stealth Mode](#stealth-mode)
-11. [SMBIOS / Hardware Fingerprint](#smbios--hardware-fingerprint)
-12. [Guest Setup Scripts](#guest-setup-scripts)
-13. [Windows 11 Setup Workflow](#windows-11-setup-workflow)
-14. [Bridge Networking](#bridge-networking)
-15. [Remote Mode — Full Reference](#remote-mode--full-reference)
-16. [API Endpoints](#api-endpoints)
-17. [Configuration Reference](#configuration-reference)
-18. [Test Suite](#test-suite)
-19. [Directory Structure](#directory-structure)
-20. [Known Issues](#known-issues)
-21. [Stealth Rating Reference](#stealth-rating-reference)
+9. [Unattended OS Install](#unattended-os-install)
+10. [Golden-Image Templates](#golden-image-templates)
+11. [Flags: -cu, -tf, -cs](#flags--cu--tf--cs)
+12. [Stealth Mode](#stealth-mode)
+13. [SMBIOS / Hardware Fingerprint](#smbios--hardware-fingerprint)
+14. [Guest Setup Scripts](#guest-setup-scripts)
+15. [Windows 11 Setup Workflow](#windows-11-setup-workflow)
+16. [Bridge Networking](#bridge-networking)
+17. [Remote Mode — Full Reference](#remote-mode--full-reference)
+18. [API Endpoints](#api-endpoints)
+19. [Configuration Reference](#configuration-reference)
+20. [Test Suite](#test-suite)
+21. [Directory Structure](#directory-structure)
+22. [Known Issues](#known-issues)
+23. [Stealth Rating Reference](#stealth-rating-reference)
 
 ---
 
 ## What It Is
 
-`qemu-api` is an AI-powered VM manager. You talk to it in plain English; an Ollama model (default: `qwen2.5:7b`) translates your intent into structured tool calls. Every tool call passes through five protection layers before QEMU sees it:
+`gorgon` is an AI-powered VM manager. You talk to it in plain English; an Ollama model (default: `qwen2.5:7b`) translates your intent into structured tool calls. Every tool call passes through five protection layers before QEMU sees it:
 
 ```
 User Input
@@ -74,16 +76,16 @@ Pick the version that matches your setup:
 
 ```bash
 # Both (local mode — AI + QEMU on the same machine)
-git clone https://github.com/tinshemet/qemu-api.git
+git clone https://github.com/tinshemet/gorgon.git
 
 # Orchestrator only (AI/Ollama machine)
-git clone --filter=blob:none --sparse https://github.com/Tinshemet/qemu-api.git
-cd qemu-api
+git clone --filter=blob:none --sparse https://github.com/Tinshemet/gorgon.git
+cd gorgon
 git sparse-checkout set files/orchestrator files/shared files/complementary
 
 # Executor only (QEMU execution machine)
-git clone --filter=blob:none --sparse https://github.com/Tinshemet/qemu-api.git
-cd qemu-api
+git clone --filter=blob:none --sparse https://github.com/Tinshemet/gorgon.git
+cd gorgon
 git sparse-checkout set files/executor files/shared files/complementary
 ```
 
@@ -101,19 +103,22 @@ After cloning, run the matching setup script:
 ### One-Command Install
 
 ```bash
-cd ~/path/to/qemu-api
+cd ~/path/to/gorgon
 bash files/complementary/install.sh
 ```
 
 Handles automatically:
-- `apt` packages: `qemu-kvm`, `qemu-utils`, `ovmf`, `virt-viewer`, `socat`, `cpu-checker`
+- `apt` packages: `qemu-kvm`, `qemu-utils`, `ovmf`, `virt-viewer`, `socat`, `cpu-checker`, `libguestfs-tools` (offline disk credential edits — see [Golden-Image Templates](#golden-image-templates))
 - KVM group membership
 - Python venv at `~/qemu-env` with `requests psutil rich fastapi uvicorn httpx`
 - Ollama install + `qwen2.5:7b` model pull
 - `systemd` user service (Ollama auto-starts on login)
 - Bridge networking config `/etc/qemu/bridge.conf`
-- Shell alias `qemu-api`
+- Shell alias `gorgon`
 - Self-test
+- **Out-of-the-box presets** (executor setup, so also covered by the full `install.sh`):
+  - Bundled default hardware profiles copied into `~/.qemu_vms/_profiles/` (skipped if a same-named file already exists — never overwrites your own)
+  - `template-kali` / `template-ubuntu` / `template-windows` VM shells scaffolded with unattended install pre-configured, ready to launch. Best-effort: needs the matching ISO already at its expected path to fully wire up (ISOs aren't bundled — you provide those); otherwise the shell is still created, just without install media, and `create_vm(..., force=true)` re-attaches it once the ISO's in place. Idempotent — won't touch a template that already exists.
 
 To uninstall: `bash files/complementary/install.sh --uninstall`
 
@@ -137,20 +142,20 @@ Add to `~/.zshrc` / `~/.bashrc`:
 source ~/qemu-env/bin/activate
 export OLLAMA_MODEL=qwen2.5:7b
 export SERVER_URL="http://localhost:8080"
-export API_TOKEN="$(cat ~/.qemu-api.token 2>/dev/null || echo '')"
-alias qemu-api-serve='~/start-qemu-api-server.sh'
-alias qemu-api='PYTHONPATH=~/path/to/qemu-api/files python3 ~/path/to/qemu-api/files/client/client_wrapper.py'
+export API_TOKEN="$(cat ~/.gorgon.token 2>/dev/null || echo '')"
+alias gorgon-serve='~/start-gorgon-server.sh'
+alias gorgon='PYTHONPATH=~/path/to/gorgon/files python3 ~/path/to/gorgon/files/client/client_wrapper.py'
 ```
 
 ### Run (Local Mode)
 
 ```bash
-qemu-api              # AI chat mode
-qemu-api -v           # verbose (shows raw tool calls)
-qemu-api -cu          # custom machine mode (skip product verification)
-qemu-api list         # direct CLI, no AI
-qemu-api system       # check system capabilities
-qemu-api -tf <name>   # fingerprint report
+gorgon              # AI chat mode
+gorgon -v           # verbose (shows raw tool calls)
+gorgon -cu          # custom machine mode (skip product verification)
+gorgon list         # direct CLI, no AI
+gorgon system       # check system capabilities
+gorgon -tf <name>   # fingerprint report
 ```
 
 ---
@@ -237,7 +242,7 @@ files/
 │   └── connection_config.json       Client settings (server_url, token, ca_cert)
 │
 ├── admin/                           Any machine that can reach the orchestrator over HTTP
-│   ├── admin_tui.py                 Curses fullscreen admin dashboard (qemu-api-admin) — HTTP-only, no local QEMU needed
+│   ├── admin_tui.py                 Curses fullscreen admin dashboard (gorgon-admin) — HTTP-only, no local QEMU needed
 │   ├── admin_config.json            Admin TUI appearance (text_color hex, font_size, refresh rate)
 │   └── connection_config.json       Admin connection settings (orchestrator_url, token)
 │
@@ -379,20 +384,20 @@ Note `API_TOKEN` (client→orchestrator) and `EXECUTOR_TOKEN` (orchestrator→ex
 ```bash
 # On the orchestrator machine — start the HTTP API
 source ~/qemu-env/bin/activate
-cd ~/qemu-api
+cd ~/gorgon
 API_TOKEN=mysecrettoken PYTHONPATH=files uvicorn orchestrator.http.api_server:app --host 0.0.0.0 --port 8080
 
 # On the executor machine — start the executor server
 source ~/qemu-env/bin/activate
-cd ~/qemu-api
+cd ~/gorgon
 PYTHONPATH=files uvicorn executor.server:app --host 0.0.0.0 --port 8001
 
 # Or use the alias created by install_orchestrator.sh:
-qemu-api-serve
+gorgon-serve
 
 # Admin TUI — runs on any machine that can reach the orchestrator over HTTP
 # (install separately: bash files/complementary/install_admin.sh):
-qemu-api-admin
+gorgon-admin
 
 # On your laptop — open SSH tunnel (if connecting over the internet)
 ssh -N -L 8080:127.0.0.1:8080 -L 5901:127.0.0.1:5901 user@server-ip
@@ -400,7 +405,7 @@ ssh -N -L 8080:127.0.0.1:8080 -L 5901:127.0.0.1:5901 user@server-ip
 # On your laptop — start the chat client
 export SERVER_URL=http://localhost:8080   # (or LAN IP without tunnel)
 export API_TOKEN=mysecrettoken
-qemu-api
+gorgon
 ```
 
 ### Cross-Platform Support
@@ -420,52 +425,52 @@ Add `-v` to any command for verbose/raw JSON output.
 
 ```bash
 # Global flags
-qemu-api -cu <command>         # custom mode — skip product verification
-qemu-api -v <command>          # verbose output
+gorgon -cu <command>         # custom mode — skip product verification
+gorgon -v <command>          # verbose output
 
 # VMs
-qemu-api list                  # list all VMs
-qemu-api status <name>         # status
-qemu-api monitor <name|all>    # activity report
-qemu-api launch <name>         # start VM (SDL window, direct local engine)
-qemu-api launch <name> sdl     # SDL display (local window, no server needed)
-qemu-api launch <name> vnc     # VNC display → connect with vncviewer localhost:5900
-qemu-api launch <name> gtk     # GTK display
-qemu-api stop <name>           # stop VM
-qemu-api clone <src> <new>     # clone VM
-qemu-api config <name>         # show config JSON
-qemu-api resize <name> <gb>    # resize primary disk
-qemu-api delete <name>         # delete VM (asks confirmation)
-qemu-api logs <name>           # failure diagnosis
-qemu-api show-cmd <name>       # print QEMU launch command
-qemu-api -tf <name>            # fingerprint report (inxi simulation)
+gorgon list                  # list all VMs
+gorgon status <name>         # status
+gorgon monitor <name|all>    # activity report
+gorgon launch <name>         # start VM (SDL window, direct local engine)
+gorgon launch <name> sdl     # SDL display (local window, no server needed)
+gorgon launch <name> vnc     # VNC display → connect with vncviewer localhost:5900
+gorgon launch <name> gtk     # GTK display
+gorgon stop <name>           # stop VM
+gorgon clone <src> <new>     # clone VM
+gorgon config <name>         # show config JSON
+gorgon resize <name> <gb>    # resize primary disk
+gorgon delete <name>         # delete VM (asks confirmation)
+gorgon logs <name>           # failure diagnosis
+gorgon show-cmd <name>       # print QEMU launch command
+gorgon -tf <name>            # fingerprint report (inxi simulation)
 
 # Snapshots
-qemu-api snapshot list <vm>
-qemu-api snapshot create <vm> <snap>
-qemu-api snapshot restore <vm> <snap>
-qemu-api snapshot delete <vm> <snap>
+gorgon snapshot list <vm>
+gorgon snapshot create <vm> <snap>
+gorgon snapshot restore <vm> <snap>
+gorgon snapshot delete <vm> <snap>
 
 # Networks
-qemu-api network list
-qemu-api network create <name>
-qemu-api network delete <name>
-qemu-api network add <net> <vm>
-qemu-api limit <vm> <cpu%> [mem_mb]
+gorgon network list
+gorgon network create <name>
+gorgon network delete <name>
+gorgon network add <net> <vm>
+gorgon limit <vm> <cpu%> [mem_mb]
 
 # Info
-qemu-api profiles
-qemu-api check-profile <name>
-qemu-api system
-qemu-api isos
-qemu-api cmd <vm> "<qemu monitor cmd>"
+gorgon profiles
+gorgon check-profile <name>
+gorgon system
+gorgon isos
+gorgon cmd <vm> "<qemu monitor cmd>"
 
 # Session
-qemu-api clear-session
+gorgon clear-session
 
 # Remote mode only
-qemu-api serve [host] [port] [--cert cert.pem --key key.pem]
-qemu-api fetch <vm> [--out /dir]
+gorgon serve [host] [port] [--cert cert.pem --key key.pem]
+gorgon fetch <vm> [--out /dir]
 ```
 
 ---
@@ -479,6 +484,7 @@ qemu-api fetch <vm> [--out /dir]
 | `list` / `vms` / `ls` | List all VMs |
 | `system` | System capabilities |
 | `profiles` | Hardware profiles |
+| `templates` | Golden-image templates |
 | `drift` | Configuration drift check |
 | `kill <name>` / `force stop <name>` | Force-kill a VM (SIGKILL), with confirm |
 | `clear session` / `forget` | Clear conversation history |
@@ -503,6 +509,13 @@ qemu-api fetch <vm> [--out /dir]
 
 # Raspberry Pi / ARM
 "create a Raspberry Pi 3B VM called rpi-test"
+
+# Unattended install / golden-image templates
+"create a Kali VM called template-kali, unattended install"
+"create a Windows 11 VM called template-windows, unattended install, skip user creation"
+"mark template-kali as a template"
+"create a vm called test, give it the template-kali template disk, randomize the root and user password"
+"list my templates"
 
 # Monitoring
 "list all my VMs and tell me which are running"
@@ -573,6 +586,12 @@ qemu-api fetch <vm> [--out /dir]
 | `iso_path` | string | Path to installation ISO |
 | `extra_args` | list | Raw QEMU args appended to the command |
 | `overwrite` | bool | Delete and recreate if VM already exists |
+| `unattended` | bool | Fully automate OS install ([details](#unattended-os-install)). Destructive — wipes the disk, asks confirmation |
+| `unattended_username` / `unattended_password` / `unattended_locale` / `unattended_autologon` | — | Windows unattended overrides (defaults: `user` / `Passw0rd!` / `en-US` / autologon on) |
+| `unattended_skip_user` | bool | Windows: automate everything except account creation — stops at the sign-in screen |
+| `template` | string | Clone disk(s) from a golden image instead of creating blank ones ([details](#golden-image-templates)) |
+| `randomize_root_password` / `randomize_user_password` | bool | Offline-randomize the clone's root/primary-user password (Linux templates only) |
+| `new_username` | string | Offline-rename the clone's primary user account (Linux templates only) |
 
 ### Sanitizer auto-corrections
 
@@ -609,14 +628,105 @@ Custom profiles stored at `~/.qemu_vms/_profiles/<name>.json`. Validated against
 
 ---
 
+## Unattended OS Install
+
+`create_vm(..., unattended=true)` fully automates OS installation — no clicking through installer screens. **Destructive** (wipes the target disk) — preflight asks for confirmation first (`force=true` skips the prompt, same as `delete_vm`).
+
+Code lives in `files/executor/api/autoinstall/` (`windows.py`, `linux.py`, `templates/` — its own package specifically so you know where to look to add a custom answer file or a new distro; see that package's `__init__.py` for exact instructions).
+
+### Windows
+
+Generates an `autounattend.xml` answer-file ISO + a bootable FAT USB image (the FAT's `startup.nsh` auto-launches Setup even if you miss the "press any key" prompt). Automates disk partitioning, the hardware-check bypass (TPM/Secure Boot/RAM requirements), language screen, and OOBE.
+
+By default it's **fully hands-off**, including account creation (`unattended_username`/`unattended_password`, default `user`/`Passw0rd!`):
+
+```
+"create a Windows 11 VM called win-test, unattended install"
+```
+
+Pass `unattended_skip_user=true` to automate everything **except** the account — Setup stops at the normal "Who's going to use this device" sign-in screen instead of auto-creating one. This is what you want when the disk is destined to become a [golden-image template](#golden-image-templates), so each clone gets its own account:
+
+```
+"create a Windows 11 VM called template-windows, unattended install, skip user creation"
+```
+
+### Linux
+
+Direct-kernel-boots the installer (`-kernel`/`-initrd`/`-append` — the only way to pass an autoinstall/preseed kernel parameter) with a per-distro mechanism, configured in `unattended_linux` in `executor/api/config.json`:
+
+| Distro | Installer family | Mechanism |
+|---|---|---|
+| Ubuntu Desktop | `casper` (Subiquity) | cloud-init NoCloud volume (`cidata.iso`) with `interactive-sections: [identity]` — automates everything, stops at "Create your account" |
+| Kali | `debian-installer` | preseed injected directly into the initrd (concatenated gzip-cpio archive); `passwd/*` left unset so account creation still prompts |
+| Linux Mint | `ubiquity` | **not currently supported** — Mint ships Ubiquity, not Subiquity, and Ubiquity doesn't read the autoinstall/cloud-init mechanism at all. Preseed injection pre-fills every wizard page correctly, but the GUI still needs manual clicks through each page. Known gap, not actively worked on. |
+
+```
+"create an Ubuntu VM called template-ubuntu, unattended install"
+"create a Kali VM called template-kali, unattended install"
+```
+
+Both Ubuntu and Kali stop at account creation the same way Windows does with `unattended_skip_user` — no separate flag needed, it's how their installers work.
+
+### How the VM knows the install finished
+
+A VM using direct kernel boot re-triggers the installer on **every** boot until something clears `kernel_path`/`initrd_path`/`iso_path` — including a guest-initiated reboot right after the install finishes, which would otherwise re-run the same destructive auto-partitioning. `launch_vm` checks this automatically: a cheap disk-size pre-filter, then a real read-only check for `/etc/os-release` on the disk (partitioning alone can't produce that file, so this can't false-positive mid-install the way a size-only check can). Confirmed installed → clears the installer fields so all future launches boot the installed OS normally.
+
+---
+
+## Golden-Image Templates
+
+Turn an already-set-up VM into a reusable base image, then clone new VMs from it in seconds instead of reinstalling every time.
+
+```
+"mark template-kali as a template"
+"create a vm called test, give it the template-kali template disk"
+"list my templates"
+"remove the template mark from template-kali"
+```
+
+### Workflow
+
+1. **Set up a source VM** the way you want the golden image to look. For [unattended installs](#unattended-os-install) destined to become templates, use `unattended_skip_user=true` (Windows) so the install finishes but account creation is left for a human — connect via VNC, create the account, then stop the VM.
+   - **Ubuntu-specific gotcha:** unlike Windows and Kali, Subiquity doesn't actually write anything to the target disk until *after* the identity step resolves — there's no "mark before account creation" shortcut for Ubuntu. Always check disk size (`du -sh ~/.qemu_vms/<name>/disk0.qcow2`) before marking; a few hundred KB means nothing installed yet regardless of which screen is showing.
+2. **Stop the VM gracefully** (`stop_vm` without `force` — a real ACPI shutdown, not a hard kill, so the golden image doesn't inherit a dirty-shutdown filesystem state).
+3. **`mark_as_template(name)`** — flattens the VM's disk(s) (`qemu-img convert`, not a backing-file link, so the template never depends on the source VM's disk surviving) into `~/.qemu_vms/_templates/<name>/`. Tags both the source VM and the template copy with the protected `template` label.
+4. **`create_vm(name=..., template=<name>)`** — clones fresh VM(s) from the template's disk(s) as QCOW2 backing files. No installer ISO gets attached (even if one would normally auto-match) — a template clone already has a real, bootable OS, and attaching an install ISO risks the VM booting the installer's boot menu instead of the cloned OS.
+5. **`remove_template(name)`** (asks Yes/Cancel first) — deletes the template's disk copy and un-tags the source VM if it still exists.
+6. **`list_templates()`** — mirrors `list_profiles()`; also reachable as the `templates` shortcut in chat/CLI.
+
+### Per-clone credential handling
+
+Every clone inherits the template disk's `/etc/shadow` byte-for-byte — same root password, same account password, same everything, unless you change it. These `create_vm` args offline-edit the *new* disk before the VM ever boots (via `virt-customize`/libguestfs — no boot required, needs `libguestfs-tools` installed):
+
+| Arg | Effect |
+|---|---|
+| `randomize_root_password` | Sets a fresh random root password on the clone. Returned in the result message/`root_password` field **once** — also saved into the clone's own `config.json` (`show_config <name>` to retrieve it later). |
+| `randomize_user_password` | Same, for the disk's primary (non-root) account — auto-detected as the first `/etc/passwd` entry with UID ≥ 1000. |
+| `new_username` | Renames that primary account to whatever you specify (`usermod -l`/`groupmod -n` run against the guest's own files, home directory moved too). Runs *before* `randomize_user_password` in the same call, so combining both targets the renamed account correctly. |
+
+```
+"create a vm called clone1 from the template-kali template, randomize the root and user password"
+"create a vm called clone2 from template-kali, rename the user to alice"
+```
+
+**Linux only.** Windows credentials live in the SAM registry hive, not `/etc/shadow` — needs a different tool (`chntpw`), not yet built.
+
+### Notes
+
+- Offline username/password edits require the VM to be **stopped** (libguestfs needs exclusive access to the disk file).
+- `mark_as_template`/`remove_template` are gated behind the same Yes/Cancel confirmation pattern as `delete_vm`.
+- The reserved `template` label and the `_templates/` folder path are config-driven (`template_label`/`dirs.templates` in `executor/api/config.json`) — not hardcoded.
+
+---
+
 ## Flags: -cu, -tf, -cs
 
-All three work from the real `qemu-api` client entry point in both local and split mode — `client/client_wrapper.py` uses a local orchestrator/executor install when present, and otherwise falls back to the configured `SERVER_URL`/`API_TOKEN` over HTTP.
+All three work from the real `gorgon` client entry point in both local and split mode — `client/client_wrapper.py` uses a local orchestrator/executor install when present, and otherwise falls back to the configured `SERVER_URL`/`API_TOKEN` over HTTP.
 
 ### `-cu` — Custom Machine Mode
 
 ```bash
-qemu-api -cu
+gorgon -cu
 ```
 
 Starts the AI chat with product verification disabled. Allows any `manufacturer`/`product_name` combination including fictional hardware.
@@ -634,7 +744,7 @@ In split mode this calls `POST /custom-mode` on the orchestrator (see [API Endpo
 ### `-cs` — Clear Session
 
 ```bash
-qemu-api -cs
+gorgon -cs
 ```
 
 Clears the saved chat session (`~/.qemu_vms/.chat_session_id`) before starting, so the AI begins with no prior conversation history.
@@ -642,7 +752,7 @@ Clears the saved chat session (`~/.qemu_vms/.chat_session_id`) before starting, 
 ### `-tf` — Fingerprint Report
 
 ```bash
-qemu-api -tf <vmname>
+gorgon -tf <vmname>
 ```
 
 Read-only analysis of a VM's configuration. Simulates what `inxi -M -N -C -D -A -G` would report from inside the guest OS, then checks each field against known VM fingerprint signatures.
@@ -921,7 +1031,7 @@ sudo apt install tigervnc-viewer
 
 **SDL/GTK display (local window):** if you're on the same machine as the server, use the direct CLI instead:
 ```bash
-qemu-api launch <name> sdl    # opens an SDL window directly
+gorgon launch <name> sdl    # opens an SDL window directly
 ```
 
 **For a truly remote machine** (server ≠ your laptop), open an SSH tunnel:
@@ -937,8 +1047,8 @@ When `API_URL != "local"`, a background daemon thread pings `GET /health` every 
 ### Fetch — Download VM Disk
 
 ```bash
-qemu-api fetch <vm_name>
-qemu-api fetch <vm_name> --out /external/backups/
+gorgon fetch <vm_name>
+gorgon fetch <vm_name> --out /external/backups/
 ```
 
 1. Checks `GET /images/{vm_name}/sha256` — skips download if local file matches
@@ -955,7 +1065,7 @@ curl -X POST http://client:8080/rotate-token \
      -d '{"new_token": "newlongsecrettoken"}'
 ```
 
-New token persists to `~/.qemu-api.token` and takes effect immediately without restart.
+New token persists to `~/.gorgon.token` and takes effect immediately without restart.
 
 ### Friend's House — SSH Tunnel Quickstart
 
@@ -977,7 +1087,7 @@ ssh -N \
     friendusername@203.0.113.42    # add -p 2222 for WSL2
 
 # Step 4: Start the chat
-qemu-api
+gorgon
 
 # Step 5: VNC connects through the already-open tunnel
 # In chat: "create a Linux VM called myvm with 4GB RAM and launch it"
@@ -1042,7 +1152,7 @@ The client runs as a fullscreen curses TUI (same visual style as the admin TUI):
 - **Scrollable chat area** — AI responses, tool results, your messages
 - **Command input** — bottom row; built-in shortcuts bypass the AI
 
-**Auto-start (localhost only):** if the server is not running when you launch `qemu-api`, the client detects this and starts it automatically in the background. No second terminal needed.
+**Auto-start (localhost only):** if the server is not running when you launch `gorgon`, the client detects this and starts it automatically in the background. No second terminal needed.
 
 ### Client shortcuts
 
@@ -1077,7 +1187,7 @@ Edit `files/client/CLI_config.json`:
 
 ```bash
 bash files/complementary/install_admin.sh   # one-time setup — prompts for orchestrator URL + token
-qemu-api-admin
+gorgon-admin
 ```
 
 Displays a live dashboard (refreshes every second, per `admin_config.json`'s `refresh_rate_s`):
@@ -1139,7 +1249,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`.
 | `/images/{vm_name}/sha256` | GET | Yes | SHA-256 checksum of primary disk |
 | `/vms/{vm_name}/bundle` | GET | Yes | Stream entire VM folder (disk + config + OVMF vars) as `.tar.gz` |
 | `/events` | GET | Yes | Return recent event log entries. Query: `?limit=N&since=<iso-ts>` |
-| `/rotate-token` | POST | Yes | Replace token (min 16 chars) and persist to `~/.qemu-api.token` |
+| `/rotate-token` | POST | Yes | Replace token (min 16 chars) and persist to `~/.gorgon.token` |
 | `/custom-mode` | POST | Yes | Toggle `-cu` custom-machine mode. Body: `{enabled: bool}`. **Process-global** — affects every client on this orchestrator, not just the caller |
 
 ### /execute request flow
@@ -1240,7 +1350,7 @@ Set `url` to `"local"` for same-machine mode (executor code runs in-process) or 
 
 Priority order:
 1. `API_TOKEN` environment variable
-2. `~/.qemu-api.token` file (chmod 0600)
+2. `~/.gorgon.token` file (chmod 0600)
 
 Server refuses to start if neither is set.
 
@@ -1254,7 +1364,7 @@ Server refuses to start if neither is set.
 | `mistral-nemo` | 6/19 | ~40s | — | Poor tool use |
 
 ```bash
-OLLAMA_MODEL=llama3.1 qemu-api    # temporary
+OLLAMA_MODEL=llama3.1 gorgon    # temporary
 export OLLAMA_MODEL=llama3.1      # permanent
 ```
 
@@ -1331,8 +1441,14 @@ Results saved to `test_report.json` after every run.
 │   └── my-profile.json
 ├── _networks/                   Isolated network definitions
 │   └── networks.json
+├── _templates/                  Golden-image disk copies (see Golden-Image Templates)
+│   └── <template-name>/
+│       ├── template.json        os_type, disk metadata, labels
+│       └── diskN.qcow2          Flattened disk copy (qemu-img convert, not a backing link)
 └── <vm-name>/
-    ├── config.json              Full MachineConfig serialised
+    ├── config.json              Full MachineConfig serialised — includes root_password/
+    │                            user_password/randomized_username when set via
+    │                            randomize_root_password/randomize_user_password
     ├── disk0.qcow2              Primary disk image
     ├── OVMF_VARS.fd             Per-VM UEFI variable store (writable copy)
     ├── vm.pid                   PID of running QEMU process
@@ -1347,6 +1463,11 @@ Results saved to `test_report.json` after every run.
     ├── tpm.pid                  swtpm PID file
     ├── guest_setup.sh           Auto-generated Linux stealth setup script
     ├── guest_setup.ps1          Auto-generated Windows stealth setup script
+    ├── autounattend.iso         Windows unattended answer-file ISO (see Unattended OS Install)
+    ├── autounattend.img         Windows unattended answer-file FAT/USB image
+    ├── cidata.iso               Linux (casper/Subiquity) cloud-init NoCloud volume
+    ├── linux-kernel              Extracted installer kernel (direct-kernel-boot unattended Linux)
+    ├── linux-initrd-preseeded   Extracted installer initrd + injected preseed (debian-installer/ubiquity)
     ├── .relaunch_after_install  Watcher flag — deleted by stop_vm to cancel auto-relaunch
     └── .stealth_done            Sentinel — suppresses HTTP server on subsequent launches
 ```
@@ -1361,7 +1482,7 @@ When a VM is launched with an ISO attached, the following happens automatically:
 2. A background **watcher process** is spawned, monitoring the QEMU PID
 3. When the installer finishes and the guest requests a restart, QEMU exits cleanly (due to `-no-reboot`)
 4. The watcher detects the exit, calls `launch_vm` again
-5. `_maybe_auto_detach_iso` detects the installed OS (disk > 2 GB actual data), removes the ISO from config
+5. `_maybe_finish_unattended_install` (`_vm_runtime.py`) checks whether the install has actually finished — a cheap disk-size pre-filter, then a real read-only check for `/etc/os-release` (size alone can false-positive mid-install, since partitioning writes real data before the OS is actually installed). If confirmed, clears `iso_path` **and** (for [unattended](#unattended-os-install) direct-kernel-boot installs) `kernel_path`/`initrd_path`/`kernel_cmdline` — without this, a VM using direct kernel boot would re-run the installer from scratch on every subsequent launch, including right after the install finishes
 6. VM boots from the installed disk
 
 **Cancelling the auto-relaunch:** calling `stop_vm` (even force-kill) at any point deletes the `.relaunch_after_install` flag before sending the signal. The watcher sees the missing flag on exit and does not relaunch.
@@ -1390,7 +1511,7 @@ json.dump(d, open(p,'w'), indent=2)
 
 **Raspberry Pi 3B has no display — serial console only:**
 ```bash
-qemu-api open-shell <name>
+gorgon open-shell <name>
 # For graphical ARM64: use machine_type=virt with Ubuntu ARM64 ISO
 ```
 

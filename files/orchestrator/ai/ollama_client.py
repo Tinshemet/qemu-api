@@ -16,7 +16,7 @@ import requests
 from orchestrator.executor_client import get_ovmf as _get_ovmf, get_profiles as list_profiles
 from .tools        import TOOLS
 from shared.display import console
-import orchestrator.preflight.validator as _validator
+import orchestrator.preflight.host_probe as _host_probe
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _OLLAMA = _CFG["ollama"]
@@ -34,10 +34,10 @@ def _build_system_prompt() -> str:
     custom_note = (
         "\nCUSTOM MODE ACTIVE (-cu): product_name and manufacturer can be any fictional values. "
         "Skip all warnings about unverifiable hardware."
-    ) if _validator._CUSTOM_MODE else ""
+    ) if _host_probe._CUSTOM_MODE else ""
 
-    return f"""You are an expert KVM/QEMU virtual machine assistant.
-You manage virtual machines using QEMU/KVM. Respond concisely and use tools immediately.{custom_note}
+    return f"""You are the DOORMAN — a Doorman-class assistant: the front desk of gorgon, its friendly, supervised, non-cyber face. A human operator is always in the loop; you assist them and act on their behalf, never autonomously, and you are not a security agent.
+You are an expert at managing virtual machines using QEMU/KVM. Respond concisely and use tools immediately.{custom_note}
 You help the user create, launch, monitor, and manage QEMU/KVM virtual machines.
 
 SYSTEM: OVMF={ovmf_status} | Profiles={profiles}

@@ -8,27 +8,27 @@ Used when the client machine has QEMU installed and the user wants to
 manage VMs directly rather than through the AI chat interface.
 
 Usage (via client_wrapper.py):
-    qemu-api list
-    qemu-api launch <vm> [sdl|vnc]
-    qemu-api stop <vm>
-    qemu-api status <vm>
-    qemu-api snapshot list|create|restore|delete <vm> [tag]
-    qemu-api clone <src> <dst>
-    qemu-api delete <vm>
-    qemu-api resize <vm> <gb>
-    qemu-api config <vm>
-    qemu-api profiles
-    qemu-api system
-    qemu-api isos
-    qemu-api show-cmd <vm>
-    qemu-api setup-done <vm>
+    gorgon list
+    gorgon launch <vm> [sdl|vnc]
+    gorgon stop <vm>
+    gorgon status <vm>
+    gorgon snapshot list|create|restore|delete <vm> [tag]
+    gorgon clone <src> <dst>
+    gorgon delete <vm>
+    gorgon resize <vm> <gb>
+    gorgon config <vm>
+    gorgon profiles
+    gorgon system
+    gorgon isos
+    gorgon show-cmd <vm>
+    gorgon setup-done <vm>
 """
 
 import json
 import os
 import socket
 import threading
-from typing import List
+from typing import List, Optional
 
 import requests
 
@@ -39,13 +39,14 @@ from rich.table import Table
 try:
     # shared/ isn't part of a true client-only checkout (see README's client
     # sparse checkout) — fall back to plain rich output instead of crashing
-    # the whole direct-CLI module (even "qemu-api help" needs this import).
+    # the whole direct-CLI module (even "gorgon help" needs this import).
     from shared.display import (
         console,
         render_vm_list,
         render_status,
         render_monitor,
         render_profiles,
+        render_templates,
         render_compat,
         render_snapshots,
         render_system,
@@ -62,6 +63,7 @@ except ImportError:
     render_status    = _render_json
     render_monitor    = _render_json
     render_profiles  = _render_json
+    render_templates = _render_json
     render_compat    = _render_json
     render_snapshots = _render_json
     render_system    = _render_json
@@ -113,11 +115,20 @@ from .commands_helpers import (  # helpers (extracted from this file)
 )
 
 
+def _allowed_tools() -> Optional[set]:
+    """Return the executor's allowed-tools set for help filtering, or None if unrestricted."""
+    try:
+        from orchestrator.executor_client import _ALLOWED_TOOLS
+        return set(_ALLOWED_TOOLS) or None
+    except Exception:
+        return None
+
+
 def run(args: List[str], verbose: bool = False) -> None:
-    """Dispatch a direct ``qemu-api <cmd>`` sub-command.
+    """Dispatch a direct ``gorgon <cmd>`` sub-command.
 
     Routes the first arg (list / launch / stop / status / snapshot / clone /
-    delete / resize / config / profiles / system / isos / show-cmd / setup-done)
+    delete / resize / config / profiles / templates / system / isos / show-cmd / setup-done)
     to the local QEMU manager, or to the configured server when QEMU isn't
     installed locally. ``verbose`` echoes the raw JSON result for each call.
 
@@ -240,7 +251,7 @@ def run(args: List[str], verbose: bool = False) -> None:
             console.print(Panel(
                 f"[bold]Stealth guest setup required.[/bold] {how_line}\n\n"
                 f"[cyan]{setup_cmd}[/cyan]\n\n"
-                f"[dim]When done, run:[/dim] [bold]qemu-api setup-done {rest[0]}[/bold]",
+                f"[dim]When done, run:[/dim] [bold]gorgon setup-done {rest[0]}[/bold]",
                 title="Stealth Setup", border_style="yellow",
             ))
             _show_stealth_popup(rest[0], setup_cmd)
@@ -323,6 +334,10 @@ def run(args: List[str], verbose: bool = False) -> None:
     elif cmd == "profiles":
         render_profiles(list_profiles())
 
+    elif cmd == "templates":
+        _require_manager()
+        render_templates(manager.list_templates())
+
     elif cmd == "check-profile" and rest:
         render_compat(check_profile_compatibility(rest[0]))
 
@@ -368,7 +383,7 @@ def run(args: List[str], verbose: bool = False) -> None:
         console.print(Panel(
             f"[bold]Script generated:[/bold] {r['path']}\n\n"
             f"[dim]Copy this to the VM and run it, or use:[/dim]\n"
-            f"[bold]qemu-api launch {rest[0]}[/bold]  (auto-serves on first boot)",
+            f"[bold]gorgon launch {rest[0]}[/bold]  (auto-serves on first boot)",
             title="Guest Setup", border_style="cyan",
         ))
         _show_stealth_popup(rest[0], r.get("setup_cmd", ""))
@@ -493,36 +508,23 @@ def run(args: List[str], verbose: bool = False) -> None:
         console.print(f"[bold green]✓ {vm_name} bundle extracted to {dest_dir}/{vm_name}[/bold green]")
 
     elif cmd in ("help", "--help", "-h"):
-        console.print(Panel(
-            "[bold]Direct QEMU commands (no AI):[/bold]\n\n"
-            "  list                         List all VMs\n"
-            "  status <vm>                  Show VM status\n"
-            "  launch <vm> \\[sdl|vnc]       Start a VM\n"
-            "  stop <vm>                    Stop a VM\n"
-            "  delete <vm>                  Delete a VM and its disk\n"
-            "  clone <src> <dst>            Clone a VM\n"
-            "  resize <vm> <gb>             Grow disk to <gb> GB\n"
-            "  config <vm>                  Show VM config JSON\n"
-            "  snapshot list <vm>           List snapshots\n"
-            "  snapshot create <vm> <tag>   Create snapshot\n"
-            "  snapshot restore <vm> <tag>  Restore snapshot\n"
-            "  snapshot delete <vm> <tag>   Delete snapshot\n"
-            "  network list|create|delete   Manage networks\n"
-            "  profiles                     List hardware profiles\n"
-            "  check-profile <name>         Check profile compatibility\n"
-            "  system                       Show system capabilities\n"
-            "  isos                         List available ISOs\n"
-            "  show-cmd <vm>                Print full QEMU command\n"
-            "  setup-done <vm>              Mark stealth setup complete\n"
-            "  guest-setup <vm>             Generate/serve guest setup script\n"
-            "  fetch <vm> [dest]            Download VM disk from server (SHA256 verified)\n"
-            "  bundle <vm> [dest_dir]       Download entire VM folder (disk + config) as zip\n\n"
-            "[dim]For AI-assisted management, run without arguments: qemu-api[/dim]",
-            title="qemu-api help", border_style="cyan",
-        ))
+        from shared.command_help import load_local_catalog, render_terminal_panel
+        catalog, order = load_local_catalog()
+        if catalog is None:
+            console.print("[dim]Command list unavailable — the executor package "
+                          "could not be loaded.[/dim]")
+        else:
+            body = render_terminal_panel(catalog, _allowed_tools(), order)
+            body += (
+                "\n\n[bold cyan]Flags[/bold cyan]\n"
+                "  -v                             Verbose / raw JSON output\n"
+                "  -cu                            Custom mode: skip product verification\n"
+                "  -cs                            Clear the saved session first"
+            )
+            console.print(Panel(body, title="gorgon help", border_style="cyan"))
 
     else:
         console.print(
             f"[bold yellow]Unknown command: {cmd}[/bold yellow]  "
-            f"Run [bold]qemu-api help[/bold] for usage."
+            f"Run [bold]gorgon help[/bold] for usage."
         )

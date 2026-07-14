@@ -1,5 +1,5 @@
 ================================================================================
-  QEMU-API  —  FILES AND FUNCTIONS REFERENCE  (handbook part 3)
+  GORGON  —  FILES AND FUNCTIONS REFERENCE  (handbook part 3)
 ================================================================================
 
 Every source file is documented with its purpose, its public functions, what
@@ -79,7 +79,7 @@ PURPOSE
   not deployed to the client machine and not listed as a client alias.
   The operator console; groundwork for the 1.1+ IaaS fleet management UI.
 
-  Launch:  qemu-api-admin  (alias added by setup_server.sh)
+  Launch:  gorgon-admin  (alias added by setup_server.sh)
   Config:  server/admin_config.json  (text_color hex, font_size)
 
 LAYOUT (curses, differential updates — no flicker)
@@ -406,7 +406,7 @@ CLIENT SIDE  (files/client/)
 client/client_wrapper.py
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
-  Entry point for the `qemu-api` alias. Reads CLI_config.json, then either
+  Entry point for the `gorgon` alias. Reads CLI_config.json, then either
   launches the curses chat TUI (no args) or dispatches to commands.py (with args).
 
   Flags:
@@ -468,7 +468,7 @@ KEY FUNCTIONS
   _autostart_server(stdscr) → bool
     If SERVER_URL is localhost and /health fails: finds server files next to
     client, launches uvicorn (start_new_session=True), polls /health up to 10s.
-    Returns True when server is ready. Logs to /tmp/qemu-api-server.log.
+    Returns True when server is ready. Logs to /tmp/gorgon-server.log.
 
   _sync_from_server()
     GET /sync — populates _REMOTE_VMS, _REMOTE_PROFILES, and shortcut sets.
@@ -512,7 +512,7 @@ MODULE-LEVEL STATE
   _CFG              — loaded config
   _EX               — _CFG["executor"] sub-dict
   _ALLOWED_TOOLS    — set from _EX["allowed_remote_tools"]
-  _TOKEN_FILE       — ~/.qemu-api.token
+  _TOKEN_FILE       — ~/.gorgon.token
   _TOKEN            — loaded from env or token file; server exits if empty
   app               — FastAPI() instance
   _auth             — HTTPBearer() security dependency
@@ -528,7 +528,7 @@ ENDPOINT: GET /health
 ENDPOINT: POST /rotate-token (auth required)
   Body: {"new_token": "..."}
   Validates length ≥ 16.
-  Sets _TOKEN globally, sets os.environ["API_TOKEN"], writes ~/.qemu-api.token.
+  Sets _TOKEN globally, sets os.environ["API_TOKEN"], writes ~/.gorgon.token.
   Returns {"ok":True, "message":"..."}
 
 ENDPOINT: POST /execute (auth required)

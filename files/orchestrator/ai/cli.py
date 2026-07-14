@@ -2,7 +2,7 @@
 cli.py — CLI Entry Point and Chat Loop Layer
 
 Provides the interactive AI chat loop and the direct sub-command CLI
-(qemu-api list, launch, stop, etc.). This is the main entry point
+(gorgon list, launch, stop, etc.). This is the main entry point
 for both modes; ollama_wrapper.py is a thin shim that re-exports from here.
 """
 
@@ -44,6 +44,10 @@ _EXIT_CMDS      = set(_CFG["exit_commands"])
 _SHORTCUTS      = _CFG["shortcut_commands"]
 _LOOP_MAX       = get_loop_max()   # respects tool_loop_max_override if set
 _ACTION_WORDS   = set(_CFG["action_words"])
+# State/read-query words. Folded into the "wants a tool" trigger so the model is
+# forced to ground factual questions ("which VMs are running?") in a tool call
+# instead of answering — and hallucinating — from memory.
+_STATE_QUERY_WORDS = set(_CFG.get("state_query_words", []))
 _OS_KEYWORDS    = set(_CFG["os_keywords_gate"])
 _CONFIRM_YN     = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
 _CONFIRM_NAME   = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
@@ -114,8 +118,10 @@ def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
         _handle_command("make a vm", messages, 0, False)  # → False
     """
     global _LOOP_MAX
-    if ui in _SHORTCUTS["list"]:
-        execute_tool("list_vms", {}, verbose)
+    _list_pfx = next((p for p in ("list ", "vms ", "ls ") if ui.startswith(p)), None)
+    if ui in _SHORTCUTS["list"] or _list_pfx:
+        _label = ui[len(_list_pfx):].strip() if (_list_pfx and ui not in _SHORTCUTS["list"]) else ""
+        execute_tool("list_vms", {"label": _label} if _label else {}, verbose)
         return True
     if ui in _SHORTCUTS["system"]:
         execute_tool("check_system", {}, verbose)
@@ -209,7 +215,7 @@ def chat_loop(verbose: bool = False) -> None:
                     if not r.ok:
                         console.print(f"\n[bold yellow]⚠ Client machine health check failed ({r.status_code}) — it may have restarted.[/bold yellow]")
                 except Exception:
-                    console.print(f"\n[bold red]✖ Client machine at {API_URL} is not responding. Check that 'qemu-api serve' is still running.[/bold red]")
+                    console.print(f"\n[bold red]✖ Client machine at {API_URL} is not responding. Check that 'gorgon serve' is still running.[/bold red]")
         _liveness_thread = threading.Thread(target=_liveness_loop, daemon=True)
         _liveness_thread.start()
 
@@ -239,7 +245,9 @@ def chat_loop(verbose: bool = False) -> None:
         if not _is_synthetic:
             messages.append({"role": "user", "content": user_input})
 
-        state = TurnState(user_wants_action=bool(set(_ui.split()) & _ACTION_WORDS))
+        # "action" here means any tool-worthy intent — an action OR a state/read
+        # query — so factual questions get grounded in a tool call, not confabulated.
+        state = TurnState(user_wants_action=bool({t.strip('.,!?;:') for t in _ui.split()} & (_ACTION_WORDS | _STATE_QUERY_WORDS)))
 
         # Agentic tool loop — up to _LOOP_MAX rounds per user turn
         for _loop_iter in range(_LOOP_MAX):

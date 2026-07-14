@@ -1,5 +1,5 @@
 ================================================================================
-  QEMU-API  —  GENERAL WORKFLOW  (handbook part 2)
+  GORGON  —  GENERAL WORKFLOW  (handbook part 2)
 ================================================================================
 
 This document traces every workflow in the project from the user's perspective
@@ -10,11 +10,11 @@ how every piece connects.
 1. STARTUP SEQUENCE
 ────────────────────────────────────────────────────────────────────────────────
 
-When you run "qemu-api" the following happens in order:
+When you run "gorgon" the following happens in order:
 
   1. Shell expands the alias:
-       OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=~/Desktop/qemu-api/files
-       python3 ~/Desktop/qemu-api/files/server/ollama_wrapper.py
+       OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=~/Desktop/gorgon/files
+       python3 ~/Desktop/gorgon/files/server/ollama_wrapper.py
 
   2. Python executes server/ollama_wrapper.py.
      This file re-exports symbols from server/ and shared/ so they are
@@ -184,7 +184,7 @@ STEP 9 — DISPATCH: LOCAL OR REMOTE?  [server/executor_client.py → execute_to
 STEP 10 — SERVER-SIDE (remote mode only)  [server/http/api_server.py → /execute]
   The FastAPI server receives the request and:
   1. Extracts Bearer token from Authorization header
-  2. Compares with _TOKEN (loaded from env or ~/.qemu-api.token)
+  2. Compares with _TOKEN (loaded from env or ~/.gorgon.token)
      → 401 if mismatch
   3. Checks tool_name in allowed_remote_tools
      → 403 if not in list
@@ -535,8 +535,8 @@ ON FRIEND'S MACHINE (once):
      Installs: qemu-kvm, qemu-utils, ovmf, python3-venv, openssh-server, socat
      Creates: Python venv at ~/qemu-env
      Generates: API token (random 32 chars via secrets.token_urlsafe(32))
-     Saves:    token to ~/.qemu-api.token (chmod 600)
-     Creates:  ~/start-qemu-api.sh (reads token from file at runtime)
+     Saves:    token to ~/.gorgon.token (chmod 600)
+     Creates:  ~/start-gorgon.sh (reads token from file at runtime)
      Enables:  systemd user service for the API server
      Starts:   API server
      Prints:   SSH tunnel command + export commands for your laptop
@@ -546,9 +546,9 @@ ON FRIEND'S MACHINE (once):
      Gets:    WSL2 IP from "wsl hostname -I"
      Adds:    netsh portproxy 2222 → WSL2:22
      Adds:    Windows Firewall rule for 2222
-     Creates: helper script at C:\Windows\System32\qemu-api-wsl2-forward.ps1
+     Creates: helper script at C:\Windows\System32\gorgon-wsl2-forward.ps1
      Creates: Scheduled Task (SYSTEM, AtStartup) that refreshes portproxy
-     Reads:   token from WSL2 with "wsl cat ~/.qemu-api.token"
+     Reads:   token from WSL2 with "wsl cat ~/.gorgon.token"
      Prints:  ready-to-paste ssh command
 
 ON YOUR LAPTOP (once):
@@ -562,7 +562,7 @@ ON YOUR LAPTOP (once):
     export API_URL="http://localhost:8080"
     export API_TOKEN="<token>"
     export OLLAMA_MODEL="qwen2.5:7b"
-    alias qemu-api='PYTHONPATH=... python3 .../server/ollama_wrapper.py'
+    alias gorgon='PYTHONPATH=... python3 .../server/ollama_wrapper.py'
 
 EVERY SESSION:
 
@@ -574,7 +574,7 @@ EVERY SESSION:
            friendusername@<public-ip>     # add -p 2222 for WSL2
 
   2. Start chat:
-       qemu-api
+       gorgon
 
   3. (If VNC needed): vncviewer localhost:5901
      (tunnel already forwarding VNC from step 1)
@@ -588,14 +588,14 @@ The entire switch is one environment variable: API_URL.
 To switch to remote mode for one session:
   export API_URL=http://localhost:8080
   export API_TOKEN=mysecrettoken
-  qemu-api
+  gorgon
 
 To switch back to local mode for one session:
   export API_URL=local
-  qemu-api
+  gorgon
 
 To change permanently in ~/.zshrc / ~/.bashrc:
-  Find the "# qemu-api provider start" block (written by setup_provider.sh)
+  Find the "# gorgon provider start" block (written by setup_provider.sh)
   Change the API_URL line:
     export API_URL="local"                 ← local mode
     export API_URL="http://localhost:8080" ← remote via SSH tunnel
@@ -613,12 +613,12 @@ are identical in both modes.
 INITIAL SETUP
   Token is generated on the client machine:
     python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-  Saved to ~/.qemu-api.token (chmod 600 — only owner can read)
+  Saved to ~/.gorgon.token (chmod 600 — only owner can read)
   Must be set identically on the provider machine (via API_TOKEN env var)
 
 SERVER STARTUP TOKEN PRECEDENCE
   1. API_TOKEN environment variable (checked first)
-  2. ~/.qemu-api.token file (fallback)
+  2. ~/.gorgon.token file (fallback)
   3. If neither: server refuses to start with a clear error message
 
 HOW THE TOKEN IS CHECKED
@@ -637,7 +637,7 @@ TOKEN ROTATION (while server is running)
   - Validates new_token length ≥ 16
   - Sets _TOKEN = new_token in memory
   - Sets os.environ["API_TOKEN"] = new_token
-  - Writes new_token to ~/.qemu-api.token
+  - Writes new_token to ~/.gorgon.token
   - Effect is immediate — no restart needed
   Provider machine must then also update API_TOKEN.
 

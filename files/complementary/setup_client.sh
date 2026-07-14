@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  setup_client.sh — qemu-api CLIENT machine setup (your laptop)
+#  setup_client.sh — gorgon CLIENT machine setup (your laptop)
 #
-#  Sets up the thin chat UI that connects to a qemu-api server.
+#  Sets up the thin chat UI that connects to a gorgon server.
 #  No QEMU or Ollama needed here — the server handles all of that.
 #
 #  What this installs:
 #    • Python venv + requests, rich
-#    • Shell alias: qemu-api  (starts the AI chat client)
+#    • Shell alias: gorgon  (starts the AI chat client)
 #    • client/connection_config.json with SERVER_URL and token
 #
 #  Run as your normal user:
@@ -36,7 +36,7 @@ ask()    { echo -e "${CYAN}  ?${RESET} $*"; }
 # ── banner ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${CYAN}║   qemu-api — client machine setup            ║${RESET}"
+echo -e "${BOLD}${CYAN}║   gorgon — client machine setup            ║${RESET}"
 echo -e "${BOLD}${CYAN}║   AI chat UI (connects to remote server)     ║${RESET}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
@@ -56,7 +56,7 @@ if [[ -n "${SERVER_URL:-}" ]]; then
     ok "Using SERVER_URL from environment: $CHOSEN_URL"
 else
     echo ""
-    echo "  Enter the qemu-api server URL."
+    echo "  Enter the gorgon server URL."
     echo "  (If the server is on the same machine, use http://localhost:8080)"
     echo ""
     read -r -p "  SERVER_URL [http://localhost:8080]: " CHOSEN_URL
@@ -76,7 +76,7 @@ else
     echo ""
     read -r -p "  API_TOKEN: " CHOSEN_TOKEN
     if [[ -z "$CHOSEN_TOKEN" ]]; then
-        warn "No token entered — set API_TOKEN in your shell before running qemu-api."
+        warn "No token entered — set API_TOKEN in your shell before running gorgon."
     fi
 fi
 
@@ -152,18 +152,18 @@ ok "Written to $CLIENT_CFG"
 # ── shell integration ─────────────────────────────────────────────────────────
 header "Shell Integration"
 
-sed -i '/# qemu-api client start/,/# qemu-api client end/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '/# gorgon client start/,/# gorgon client end/d' "$SHELL_RC" 2>/dev/null || true
 
 cat >> "$SHELL_RC" << SHELLEOF
 
-# qemu-api client start
+# gorgon client start
 source "$VENV_DIR/bin/activate"
 export PATH="\$HOME/.local/bin:\$PATH"
-alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
-# qemu-api client end
+alias gorgon='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
+# gorgon client end
 SHELLEOF
 
-ok "Added qemu-api function to $SHELL_RC"
+ok "Added gorgon function to $SHELL_RC"
 
 # ── connectivity check ────────────────────────────────────────────────────────
 header "Connectivity Check"
@@ -175,7 +175,7 @@ if curl -sf "${CURL_ARGS[@]}" "$CHOSEN_URL/health" 2>/dev/null | grep -q '"ok"';
     ok "Server is reachable and healthy"
 else
     warn "Could not reach $CHOSEN_URL/health"
-    warn "Make sure the server is running: ssh to server and run qemu-api-serve"
+    warn "Make sure the server is running: ssh to server and run gorgon-serve"
     warn "If connecting over the internet, open the SSH tunnel first:"
     echo ""
     echo "    ssh -N -L 8080:127.0.0.1:8080 -L 5901:127.0.0.1:5901 <user>@<server-ip>"
@@ -193,7 +193,7 @@ echo -e "  SERVER_URL  : ${BOLD}$CHOSEN_URL${RESET}"
 [[ -n "$CHOSEN_CA_CERT" ]] && echo -e "  API_CA_CERT : ${BOLD}$CHOSEN_CA_CERT${RESET}"
 echo ""
 echo -e "  Reload shell : ${BOLD}source $SHELL_RC${RESET}"
-echo -e "  Then run     : ${BOLD}qemu-api${RESET}"
+echo -e "  Then run     : ${BOLD}gorgon${RESET}"
 echo ""
 echo -e "  ${YELLOW}Tip:${RESET} If not on the same LAN as the server, open the SSH tunnel first:"
 echo ""

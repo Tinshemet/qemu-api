@@ -251,7 +251,8 @@
     "tool_mismatch":        "The prompt hints at {hints} but you called '{tool_name}'. Make sure you have the right tool.",
     "hallucinated_field":   "You set {field}={value} but the user never mentioned it. Ask the user for '{field}' before proceeding.",
     "high_stakes_field":    "You set {field}={value} which is high-stakes but the user did not mention it — confirm before using it.",
-    "contradictory_prompt": "The prompt asks to both {tool_a} and {tool_b} the same target '{name}' — this is contradictory. Ask the user which action they actually want."
+    "contradictory_prompt": "The prompt asks to both {tool_a} and {tool_b} the same target '{name}' — this is contradictory. Ask the user which action they actually want.",
+    "unknown_vm_reference": "You referenced VM '{name}' but no VM with that name exists. Known VMs: {known}. Confirm the correct name with the user before proceeding."
   },
 
   "specificity_rules": [

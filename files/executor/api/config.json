@@ -2,9 +2,11 @@
   "dirs": {
     "vm_base": "~/.qemu_vms",
     "profiles": "~/.qemu_vms/_profiles",
+    "templates": "~/.qemu_vms/_templates",
     "isolated_net": "_networks",
     "state_file": ".state.json"
   },
+  "template_label": "template",
   "network": {
     "mcast_addr": "230.0.0.1",
     "start_port": 1234
@@ -259,6 +261,26 @@
     "antiX",
     "antix"
   ],
+  "unattended_linux": {
+    "ubuntu": {
+      "installer_family": "casper",
+      "kernel_path": "/casper/vmlinuz",
+      "initrd_path": "/casper/initrd",
+      "cmdline": "boot=casper autoinstall ds=nocloud;"
+    },
+    "mint": {
+      "installer_family": "ubiquity",
+      "kernel_path": "/casper/vmlinuz",
+      "initrd_path": "/casper/initrd.lz",
+      "cmdline": "boot=casper automatic-ubiquity noprompt"
+    },
+    "kali": {
+      "installer_family": "debian-installer",
+      "kernel_path": "/install.amd/vmlinuz",
+      "initrd_path": "/install.amd/initrd.gz",
+      "cmdline": "auto=true priority=critical"
+    }
+  },
   "generic_os_names": [
     "linux",
     "windows",
@@ -2627,5 +2649,13 @@
       ],
       "description": "Lenovo ThinkSystem SR650 V3"
     }
-  }
+  },
+  "list_flags": [
+    {"attr": "stealth",             "label": "stealth"},
+    {"attr": "hardened",            "label": "hardened"},
+    {"attr": "tpm",                 "label": "tpm"},
+    {"attr": "gpu_passthrough_pci", "label": "gpu-pt"},
+    {"attr": "networks.0.mode",     "label": "$value", "hide_values": ["nat", ""]},
+    {"attr": "vpn",                 "label": "vpn"}
+  ]
 }

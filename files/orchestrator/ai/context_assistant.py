@@ -16,7 +16,9 @@ preflight) remain the hard stops. This is a soft nudge, not a gate.
 import json
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+from orchestrator.executor_client import _VM_TOOLS
 
 _here = os.path.dirname(__file__)
 with open(os.path.join(_here, "context_assistant_config.json")) as _f:
@@ -166,6 +168,7 @@ def check_context(
     tool_name:      str,
     args:           Dict,
     recent_context: str = "",
+    known_names:    Optional[Set[str]] = None,
 ) -> Optional[str]:
     """
     Main entry point called from the chat loop after the AI produces a
@@ -174,6 +177,13 @@ def check_context(
     recent_context: space-joined string of the last N real user messages.
     Used to verify field values in multi-turn flows where the entity was
     named in a prior turn and only a confirmation arrived as the current prompt.
+
+    known_names: the actual set of existing VM names, if the caller has it handy.
+    Ground truth, not a heuristic — when supplied, a tool that references an
+    existing VM (see _VM_TOOLS) with a name outside this set is flagged
+    unconditionally. Optional and defaults to None so this function stays a
+    pure, network-free check for callers/tests that don't have a registry to
+    pass (e.g. the layer7 test harness) — the check is simply skipped then.
 
     Returns a short _INTERNAL_ hint string if something looks wrong,
     or None if the call looks grounded and the tool matches intent.
@@ -256,6 +266,19 @@ def check_context(
         )
         if not user_mentioned:
             issues.append(_MSG["high_stakes_field"].format(field=field, value=repr(ai_value)))
+
+    # ── Check 5: unknown VM reference (ground truth, not a heuristic) ─────────
+    # If the caller supplied the actual known-VM registry, a reference-style
+    # tool (see _VM_TOOLS) naming a VM that doesn't exist is unambiguous — the
+    # AI hallucinated or mistyped the name. "all" is a valid sentinel for
+    # stop_vm (stop everything), not a real name, so it's exempted rather than
+    # checked against the registry.
+    if known_names is not None and tool_name in _VM_TOOLS:
+        ref_name = args.get("name")
+        if ref_name and ref_name != "all" and ref_name not in known_names:
+            issues.append(_MSG["unknown_vm_reference"].format(
+                name=ref_name, known=sorted(known_names),
+            ))
 
     if not issues:
         return None

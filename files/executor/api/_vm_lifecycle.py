@@ -10,14 +10,22 @@ import subprocess
 import uuid as _uuid
 from typing import Any, Dict, List
 
-from ._vm_constants import _MACOS_OVMF, _WIN_OVMF, VM_BASE_DIR, infer_os_name
+from ._vm_constants import (
+    _MACOS_OVMF, _WIN_OVMF, VM_BASE_DIR, TEMPLATES_DIR, TEMPLATE_LABEL, infer_os_name,
+)
 from .qemu_config import DiskConfig, MachineConfig, NetworkConfig, OVMF, apply_os_hints
 from .qemu_arg_builder import SPICE_PORT_START, VNC_PORT_START, next_free_port, build_iso_search_dirs
+from .label_registry import register_label
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _ISO_OS_KEYWORDS  = _CFG.get("iso_os_keywords", {})
 _ISO_ARM_MARKERS  = tuple(_CFG.get("iso_arm_markers", []))
 _ISO_X86_MARKERS  = tuple(_CFG.get("iso_x86_markers", []))
+
+
+def _template_dir(name: str) -> str:
+    """Return the golden-image directory for a template name."""
+    return os.path.join(TEMPLATES_DIR, name)
 
 
 class _VmLifecycleMixin:
@@ -149,20 +157,94 @@ class _VmLifecycleMixin:
         if config.display == "spice" and not config.spice_port:
             config.spice_port = next_free_port(SPICE_PORT_START, used_spice)
 
-        # Create disk images
-        for disk in config.disks:
+        # Create disk images — either blank, or backing-file clones of a golden
+        # template's disks when config.template names one (see mark_as_template()).
+        template_meta = None
+        if config.template:
+            template_json = os.path.join(_template_dir(config.template), "template.json")
+            if not os.path.exists(template_json):
+                return {"success": False, "error": f"Template '{config.template}' not found."}
+            with open(template_json) as _f:
+                template_meta = json.load(_f)
+
+        for i, disk in enumerate(config.disks):
             disk_path = os.path.expanduser(disk.path)
-            if not os.path.exists(disk_path):
-                os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+            if os.path.exists(disk_path):
+                continue
+            os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+            if template_meta:
+                template_disk = os.path.join(_template_dir(config.template), f"disk{i}.qcow2")
+                if not os.path.exists(template_disk):
+                    return {"success": False,
+                            "error": f"Template '{config.template}' has no disk{i} — it has "
+                                     f"{len(template_meta.get('disks', []))} disk(s)."}
+                result = subprocess.run(
+                    ["qemu-img", "create", "-f", "qcow2",
+                     "-b", template_disk, "-F", "qcow2", disk_path],
+                    capture_output=True, text=True,
+                )
+            else:
                 result = subprocess.run(
                     ["qemu-img", "create", "-f", disk.format, disk_path, f"{disk.size_gb}G"],
                     capture_output=True, text=True,
                 )
-                if result.returncode != 0:
-                    return {"success": False, "error": f"qemu-img failed: {result.stderr}"}
+            if result.returncode != 0:
+                return {"success": False, "error": f"qemu-img failed: {result.stderr}"}
 
-        # Auto-attach a matching ISO if none was provided
-        if not config.iso_path:
+        # Golden-image clones inherit the template disk's /etc/shadow byte-for-byte —
+        # every clone shares the exact same root password unless something changes it.
+        # Offline-edit it on this new disk before the VM ever boots. Linux only
+        # (Windows credentials live in the SAM hive, not /etc/shadow — needs a
+        # different tool). Best-effort: a failure here shouldn't block VM creation,
+        # since the clone is already usable with the template's original password.
+        root_password_warning = None
+        new_root_password = None
+        user_password_warning = None
+        new_user_password = None
+        randomized_username = None
+        username_rename_warning = None
+        renamed_username = None
+        _is_linux_template = (template_meta
+                               and "windows" not in template_meta.get("os_type", "").lower())
+        if config.randomize_root_password and _is_linux_template and config.disks:
+            from ._vm_credentials import randomize_root_password
+            try:
+                new_root_password = randomize_root_password(
+                    os.path.expanduser(config.disks[0].path))
+                config.root_password = new_root_password
+            except Exception as _e:
+                root_password_warning = str(_e)
+        if config.new_username and _is_linux_template and config.disks:
+            from ._vm_credentials import rename_user
+            try:
+                renamed_username = rename_user(
+                    os.path.expanduser(config.disks[0].path), config.new_username)
+            except Exception as _e:
+                username_rename_warning = str(_e)
+        if config.randomize_user_password and _is_linux_template and config.disks:
+            from ._vm_credentials import find_primary_user, randomize_user_password
+            _disk_path = os.path.expanduser(config.disks[0].path)
+            try:
+                # Target whichever account is actually current — the just-renamed
+                # one if new_username was also given this call, else auto-detect.
+                randomized_username = renamed_username or find_primary_user(_disk_path)
+                if not randomized_username:
+                    raise RuntimeError("could not auto-detect a primary user account on this disk")
+                new_user_password = randomize_user_password(_disk_path, randomized_username)
+                config.user_password = new_user_password
+                config.randomized_username = randomized_username
+            except Exception as _e:
+                user_password_warning = str(_e)
+
+        if template_meta and not config.os_type:
+            config.os_type = template_meta.get("os_type", config.os_type)
+
+        # Auto-attach a matching ISO if none was provided — but never for a
+        # template-based clone, which already has a real, bootable OS on disk.
+        # Attaching an install ISO there just risks the VM booting the
+        # installer's own boot menu instead of the cloned OS (the CD-ROM device
+        # gets an explicit bootindex; the cloned disk doesn't).
+        if not config.iso_path and not template_meta:
             matches = self._match_iso(config.os_type, config.os_name, config.machine_arch)
             matches.sort(key=lambda x: x["match_score"], reverse=True)
             if matches and matches[0]["match_score"] > 0:
@@ -175,7 +257,24 @@ class _VmLifecycleMixin:
 
         config.save()
         _iso_basename = os.path.basename(config.iso_path) if config.iso_path else ""
-        return {
+        _message = (
+            f"VM '{config.name}' created successfully."
+            + (f" Attached ISO: {_iso_basename} (os_name={config.os_name})"
+               if _iso_basename else " No ISO attached.")
+        )
+        if renamed_username:
+            _message += f" Renamed user to '{renamed_username}'."
+        elif username_rename_warning:
+            _message += f" (user NOT renamed — {username_rename_warning})"
+        if new_root_password:
+            _message += f" New root password: {new_root_password}"
+        elif root_password_warning:
+            _message += f" (root password NOT randomized — {root_password_warning})"
+        if new_user_password:
+            _message += f" New '{randomized_username}' password: {new_user_password}"
+        elif user_password_warning:
+            _message += f" (user password NOT randomized — {user_password_warning})"
+        result = {
             "success":  True,
             "name":     config.name,
             "vm_dir":   vm_dir,
@@ -184,12 +283,16 @@ class _VmLifecycleMixin:
             "iso_path": config.iso_path,
             "iso_name": _iso_basename,
             "os_name":  config.os_name,
-            "message":  (
-                f"VM '{config.name}' created successfully."
-                + (f" Attached ISO: {_iso_basename} (os_name={config.os_name})"
-                   if _iso_basename else " No ISO attached.")
-            ),
+            "message":  _message,
         }
+        if renamed_username:
+            result["renamed_username"] = renamed_username
+        if new_root_password:
+            result["root_password"] = new_root_password
+        if new_user_password:
+            result["user_password"] = new_user_password
+            result["randomized_username"] = randomized_username
+        return result
 
     # ------------------------------------------------------------------
     # Clone
@@ -254,6 +357,133 @@ class _VmLifecycleMixin:
         return {"success": True,
                 "message": f"VM '{source_name}' cloned to '{new_name}'.",
                 "new_vm": new_name}
+
+    # ------------------------------------------------------------------
+    # Templates (golden images)
+    # ------------------------------------------------------------------
+
+    def mark_as_template(self, name: str) -> Dict[str, Any]:
+        """Snapshot a stopped VM's current disk state into a reusable golden template.
+
+        Flattens each disk (qemu-img convert, not a backing-file link) into
+        ``~/.qemu_vms/_templates/<name>/diskN.qcow2`` so the template never depends on the
+        source VM's own disk surviving. Tags the source VM with the protected "template"
+        label; the template.json copy also records "template" in its own labels.
+
+        Args:
+            name: VM to snapshot (must be stopped).
+
+        Returns:
+            ``{"success": True, "message": str, "template": str}`` or error dict.
+
+        Example::
+            >>> mgr.mark_as_template("vm_perfect_kali")
+            {"success": True, "message": "...", "template": "vm_perfect_kali"}
+        """
+        if self._is_running(name):
+            return {"success": False, "error": "Stop the VM before marking it as a template."}
+        try:
+            cfg = MachineConfig.load(name)
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
+        if TEMPLATE_LABEL in cfg.labels:
+            return {"success": False, "error": f"'{name}' is already marked as a template."}
+
+        tmpl_dir = _template_dir(name)
+        if os.path.exists(tmpl_dir):
+            return {"success": False, "error": f"A template named '{name}' already exists."}
+        os.makedirs(tmpl_dir, exist_ok=True)
+
+        disks_meta = []
+        for i, disk in enumerate(cfg.disks):
+            src_path = os.path.expanduser(disk.path)
+            dst_path = os.path.join(tmpl_dir, f"disk{i}.qcow2")
+            if not os.path.exists(src_path):
+                shutil.rmtree(tmpl_dir)
+                return {"success": False, "error": f"Disk not found: {src_path}"}
+            result = subprocess.run(
+                ["qemu-img", "convert", "-O", "qcow2", src_path, dst_path],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                shutil.rmtree(tmpl_dir)
+                return {"success": False, "error": f"Template disk conversion failed: {result.stderr}"}
+            disks_meta.append({"size_gb": disk.size_gb, "format": "qcow2", "bus": disk.bus})
+
+        with open(os.path.join(tmpl_dir, "template.json"), "w") as f:
+            json.dump({
+                "name":     name,
+                "os_type":  cfg.os_type,
+                "disks":    disks_meta,
+                "labels":   [TEMPLATE_LABEL],
+            }, f, indent=2)
+
+        cfg.labels.append(TEMPLATE_LABEL)
+        cfg.save()
+        register_label(TEMPLATE_LABEL)
+
+        return {"success": True,
+                "message": f"'{name}' marked as a template ({len(disks_meta)} disk(s) saved to {tmpl_dir}).",
+                "template": name}
+
+    def remove_template(self, name: str) -> Dict[str, Any]:
+        """Delete a golden template's disk copy and un-tag the source VM if it still exists.
+
+        Gated behind a Yes/Cancel confirmation at the preflight layer (see
+        _PREFLIGHT_TOOLS/"remove_template" in the preflight validator) — this method itself
+        performs the deletion unconditionally once called, same as delete_vm.
+
+        Args:
+            name: Template name (matches the VM name it was created from).
+
+        Returns:
+            ``{"success": True, "message": str}`` or error dict.
+
+        Example::
+            >>> mgr.remove_template("vm_perfect_kali")
+            {"success": True, "message": "Template 'vm_perfect_kali' removed."}
+        """
+        tmpl_dir = _template_dir(name)
+        if not os.path.exists(tmpl_dir):
+            return {"success": False, "error": f"No template named '{name}'."}
+        shutil.rmtree(tmpl_dir)
+
+        try:
+            cfg = MachineConfig.load(name)
+        except FileNotFoundError:
+            return {"success": True, "message": f"Template '{name}' removed (source VM no longer exists)."}
+
+        if TEMPLATE_LABEL in cfg.labels:
+            cfg.labels = [l for l in cfg.labels if l != TEMPLATE_LABEL]
+            cfg.save()
+        return {"success": True, "message": f"Template '{name}' removed."}
+
+    def list_templates(self) -> List[Dict[str, Any]]:
+        """List every registered golden-image template.
+
+        Returns:
+            List of ``{"name": str, "os_type": str, "disks": int}`` dicts.
+
+        Example::
+            >>> mgr.list_templates()
+            [{"name": "vm_perfect_kali", "os_type": "linux", "disks": 1}]
+        """
+        if not os.path.isdir(TEMPLATES_DIR):
+            return []
+        result = []
+        for name in sorted(os.listdir(TEMPLATES_DIR)):
+            meta_path = os.path.join(TEMPLATES_DIR, name, "template.json")
+            if not os.path.isfile(meta_path):
+                continue
+            with open(meta_path) as f:
+                meta = json.load(f)
+            result.append({
+                "name":    name,
+                "os_type": meta.get("os_type", ""),
+                "disks":   len(meta.get("disks", [])),
+            })
+        return result
 
     # ------------------------------------------------------------------
     # Delete

@@ -6,12 +6,31 @@ Provides _VmStealthMixin which is composed into QemuManager.
 import json
 import os
 import threading
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .qemu_config import MachineConfig
 
 _CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _STEALTH_CFG = _CFG.get("stealth", {})
+
+
+# Gates a command that only applies to a non-standard VM parameter.
+# In: MachineConfig cfg, str feature (a bool attr on cfg), str name → Out: error dict | None
+def _require_vm_feature(cfg: MachineConfig, feature: str, name: str) -> Optional[Dict[str, Any]]:
+    """Return a standard rejection dict when VM ``name`` lacks the ``feature`` flag, else None.
+
+    Philosophy: any command unique to a non-standard VM parameter (stealth, hardened,
+    tpm, …) must refuse VMs created without that parameter instead of acting anyway.
+    Every feature-gated command calls this so the rejection is uniform across the codebase.
+
+    Example::
+        >>> _require_vm_feature(cfg, "stealth", "web")
+        {"success": False, "error": "VM 'web' is not a stealth VM — stealth-only command."}
+    """
+    if not getattr(cfg, feature, False):
+        return {"success": False,
+                "error": f"VM '{name}' is not a {feature} VM — {feature}-only command."}
+    return None
 
 
 class _VmStealthMixin:
@@ -41,6 +60,10 @@ class _VmStealthMixin:
             cfg = MachineConfig.load(name)
         except FileNotFoundError as e:
             return {"success": False, "error": str(e)}
+
+        gate = _require_vm_feature(cfg, "stealth", name)
+        if gate:
+            return gate
 
         vm_dir = os.path.expanduser(f"~/.qemu_vms/{name}")
         os.makedirs(vm_dir, exist_ok=True)
@@ -73,6 +96,15 @@ class _VmStealthMixin:
             >>> mgr.mark_stealth_done("my-linux")
             {"success": True, "message": "Stealth setup for 'my-linux' marked complete..."}
         """
+        try:
+            cfg = MachineConfig.load(name)
+        except FileNotFoundError as e:
+            return {"success": False, "error": str(e)}
+
+        gate = _require_vm_feature(cfg, "stealth", name)
+        if gate:
+            return gate
+
         vm_dir   = os.path.expanduser(f"~/.qemu_vms/{name}")
         sentinel = os.path.join(vm_dir, ".stealth_done")
         try:

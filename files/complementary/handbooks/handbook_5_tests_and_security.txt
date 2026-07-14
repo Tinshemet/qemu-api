@@ -1,5 +1,5 @@
 ================================================================================
-  QEMU-API  —  TEST SUITE AND SECURITY REFERENCE  (handbook part 5)
+  GORGON  —  TEST SUITE AND SECURITY REFERENCE  (handbook part 5)
 ================================================================================
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -428,7 +428,7 @@ Mechanism: HTTP Bearer token
 
 Token storage — client machine:
   Primary: API_TOKEN environment variable (highest priority)
-  Fallback: ~/.qemu-api.token file (chmod 0600 — owner-only read)
+  Fallback: ~/.gorgon.token file (chmod 0600 — owner-only read)
   The server refuses to start if neither is set.
 
 Token storage — provider machine:
@@ -597,7 +597,7 @@ attempt an SSH connection to the WSL2 Linux user. Mitigations:
 
 Scheduled task security:
   The task runs as SYSTEM (highest Windows privilege).
-  It only runs the helper script at C:\Windows\System32\qemu-api-wsl2-forward.ps1
+  It only runs the helper script at C:\Windows\System32\gorgon-wsl2-forward.ps1
   which only runs netsh commands. The script is written by setup_wsl2.ps1
   and only contains the portproxy commands — no user input is executed.
 

@@ -1,0 +1,25 @@
+
+# --- appended by qemu-api: automate Ubiquity (Mint's installer) except account
+# creation. Unlike Ubuntu's Subiquity, Ubiquity doesn't read a cloud-init
+# autoinstall volume — it's driven by debconf preseeding, same mechanism as
+# classic debian-installer, just with its own "ubiquity" template namespace on
+# top of the reused d-i partman/locale/keyboard keys. Needs boot=casper
+# automatic-ubiquity on the kernel cmdline for this to take effect at all.
+d-i debian-installer/locale string __LOCALE__
+d-i keyboard-configuration/xkb-keymap select __KEYBOARD__
+
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+ubiquity ubiquity/summary note
+ubiquity ubiquity/reboot boolean true
+ubiquity ubiquity/download_updates boolean false
+ubiquity ubiquity/use_nonfree boolean true
+ubiquity oem-config/enable boolean false
+
+# passwd/username, passwd/user-fullname, passwd/user-password* deliberately left
+# UNSET so Ubiquity still shows its account-creation ("Who are you?") page.

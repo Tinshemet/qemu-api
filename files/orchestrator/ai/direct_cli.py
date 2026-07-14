@@ -1,7 +1,7 @@
 """
 direct_cli.py — Direct sub-command CLI.
 
-Dispatches the non-interactive ``qemu-api <cmd>`` sub-commands (list, launch,
+Dispatches the non-interactive ``gorgon <cmd>`` sub-commands (list, launch,
 stop, snapshot, network, setup-done, …) to the manager / executor and renders
 their output. cli.py's __main__ imports cli_direct() from here when the process
 is invoked with arguments; the arg-less path stays in cli.py as the chat REPL.
@@ -29,7 +29,7 @@ from orchestrator.executor_client import (
 )
 from .session import clear_session
 from shared.display import (
-    console, render_compat, render_monitor, render_profiles,
+    console, render_compat, render_monitor, render_profiles, render_templates,
     render_snapshots, render_status, render_system, render_vm_list,
 )
 try:
@@ -75,7 +75,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
         f"  {setup_cmd}\n\n"
         f"{reboot}\n\n"
         f"When done, run on the host:\n"
-        f"  qemu-api setup-done {vm_name}"
+        f"  gorgon setup-done {vm_name}"
     )
     title = f"Stealth Setup: {vm_name}"
 
@@ -128,7 +128,7 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
 # Dispatches direct sub-commands (list, launch, stop, snapshot, network, etc.) to the manager and renders output.
 # In: List[str] args, bool verbose → Out: nothing
 def cli_direct(args: List[str], verbose: bool = False) -> None:
-    """Dispatch a direct ``qemu-api <cmd>`` sub-command and render its output."""
+    """Dispatch a direct ``gorgon <cmd>`` sub-command and render its output."""
     if manager is None:
         console.print("[bold yellow]Direct CLI requires the client package. In server-only mode use the AI chat — commands execute remotely via API_URL.[/bold yellow]")
         return
@@ -179,7 +179,7 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
             console.print(Panel(
                 f"[bold]Stealth guest setup required.[/bold] {how_line}\n\n"
                 f"[cyan]{setup_cmd}[/cyan]\n\n"
-                f"[dim]When done, run:[/dim] [bold]qemu-api setup-done {rest[0]}[/bold]",
+                f"[dim]When done, run:[/dim] [bold]gorgon setup-done {rest[0]}[/bold]",
                 title="Stealth Setup", border_style="yellow",
             ))
             _show_stealth_popup(rest[0], setup_cmd)
@@ -250,6 +250,9 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
 
     elif cmd == "profiles":
         render_profiles(list_profiles())
+
+    elif cmd == "templates":
+        render_templates(manager.list_templates())
 
     elif cmd == "check-profile" and rest:
         render_compat(check_profile_compatibility(rest[0]))
@@ -340,7 +343,7 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
             "[yellow]TLS OFF[/yellow] — use --cert / --key for HTTPS (required over untrusted networks)"
         )
         console.print(Panel(
-            f"[bold cyan]qemu-api executor service[/bold cyan]\n"
+            f"[bold cyan]gorgon executor service[/bold cyan]\n"
             f"Listening on [bold]{host}:{port}[/bold]\n"
             f"{tls_line}\n"
             f"[dim]Set API_TOKEN on this machine and on the AI provider before connecting.[/dim]",
@@ -443,32 +446,24 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
         tf_report(rest[0])
 
     else:
-        console.print(Panel(
-            "[bold]Direct CLI usage:[/bold]\n\n"
-            "  qemu-api list\n"
-            "  qemu-api status <name>\n"
-            "  qemu-api monitor <name|all>\n"
-            "  qemu-api launch <name> [display]\n"
-            "  qemu-api stop <name>\n"
-            "  qemu-api clone <source> <new>\n"
-            "  qemu-api config <name>\n"
-            "  qemu-api resize <name> <gb>\n"
-            "  qemu-api snapshot list|create|restore|delete <vm> [snap]\n"
-            "  qemu-api network list|create|delete|add [args]\n"
-            "  qemu-api limit <name> <cpu%> [mem_mb]\n"
-            "  qemu-api delete <name>\n"
-            "  qemu-api cmd <name> \"<qemu cmd>\"\n"
-            "  qemu-api profiles\n"
-            "  qemu-api check-profile <name>\n"
-            "  qemu-api system\n"
-            "  qemu-api isos\n"
-            "  qemu-api show-cmd <name>\n"
-            "  qemu-api clear-session\n"
-            "  qemu-api -tf <name>\n"
-            "  qemu-api serve [host] [port]    ← run as API computer\n\n"
-            "Add [bold]-v[/bold] anywhere for verbose/raw output.\n"
-            "Add [bold]-cu[/bold] to AI chat to skip product verification for custom machines.\n"
-            "Add [bold]-cs[/bold] to AI chat to clear the session before starting.",
-            border_style="cyan", title="qemu-api help",
-        ))
+        from shared.command_help import load_local_catalog, render_terminal_panel
+        try:
+            from orchestrator.executor_client import _ALLOWED_TOOLS
+            allowed = set(_ALLOWED_TOOLS) or None
+        except Exception:
+            allowed = None
+        catalog, order = load_local_catalog()
+        body = (render_terminal_panel(catalog, allowed, order) if catalog
+                else "[dim]Command list unavailable.[/dim]")
+        body += (
+            "\n\n[bold cyan]Direct-CLI extras[/bold cyan]\n"
+            "  limit <vm> <cpu%> \\[mem_mb]     Set CPU/memory resource limits\n"
+            "  cmd <vm> \"<monitor cmd>\"        Send a raw QEMU monitor command\n"
+            "  serve \\[host] \\[port]           Run this node as the executor API\n"
+            "  clear-session                  Wipe the saved AI session\n"
+            "  -tf <vm>                       Show a fingerprint report for a VM\n\n"
+            "[bold cyan]Flags[/bold cyan]\n"
+            "  -v   verbose / raw output      -cu  custom mode      -cs  clear session first"
+        )
+        console.print(Panel(body, border_style="cyan", title="gorgon help"))
 

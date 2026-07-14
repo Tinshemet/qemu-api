@@ -200,7 +200,7 @@ def __getattr__(name: str) -> object:
 
 
 
-def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
+def execute_tool(tool_name: str, args: dict, verbose: bool = False, log: bool = True) -> dict:
     """Wrapper around shared execute_tool that overrides local-only displays
     and enforces client tool/VM/profile access control.
 
@@ -208,6 +208,10 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
         tool_name: Name of the tool to call (e.g. ``"launch_vm"``).
         args:      Tool arguments dict.
         verbose:   Pass through to the underlying executor.
+        log:       Whether to record this call in the persistent event log.
+                   Set False for high-frequency internal polling (e.g. a
+                   dashboard auto-refresh) that isn't a real admin action —
+                   otherwise every poll tick permanently drowns out real events.
 
     Returns:
         Tool result dict, always containing ``"success": bool``.
@@ -260,7 +264,8 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False) -> dict:
     else:
         from orchestrator.pipeline import execute_tool as _orch_execute
         result = _orch_execute(tool_name, args, verbose)
-    _log_event(tool_name, args, result, (time.monotonic() - _t0) * 1000)
+    if log:
+        _log_event(tool_name, args, result, (time.monotonic() - _t0) * 1000)
 
     # In remote mode, patch open_display results so the client knows the real host
     if tool_name == "open_display" and API_URL and API_URL != "local":

@@ -535,7 +535,7 @@ def _t_execute_overrides_sdl_to_vnc() -> List[str]:
     client, token = _make_test_client()
     captured: Dict[str, Any] = {}
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
@@ -561,7 +561,7 @@ def _t_execute_overrides_gtk_to_vnc() -> List[str]:
     client, token = _make_test_client()
     captured: Dict[str, Any] = {}
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
@@ -584,7 +584,7 @@ def _t_execute_passthrough_vnc_injects_bind_local() -> List[str]:
     client, token = _make_test_client()
     captured: Dict[str, Any] = {}
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 12345, "display": "vnc"}
 
@@ -634,7 +634,7 @@ def _t_execute_preflight_auto_fix() -> List[str]:
     client, token = _make_test_client()
     captured: Dict[str, Any] = {}
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         captured["args"] = dict(args)
         return {"success": True, "name": args.get("name", "vm")}
 
@@ -702,25 +702,99 @@ def _t_execute_missing_tool_name() -> List[str]:
 
 
 def _t_execute_tool_not_in_allowlist() -> List[str]:
-    """missing (allowlist) — tool not in allowed_remote_tools → 403 Forbidden.
-    Requires patching _ALLOWED_TOOLS to a non-empty set; empty means unrestricted."""
+    """missing (allowlist) — tool not in allowed_remote_tools.
+
+    Enforcement lives solely in executor_client.execute_tool() now (the same point /chat has
+    always relied on with no pre-check of its own) — HTTP 200 with the violation embedded in the
+    result, same shape as any other tool-level failure, not a distinct 403. A prior duplicate
+    pre-check in api_server.py returned 403 with leakier wording; removed as part of the tool-
+    compartmentalization base-layer fix (2026-07-13) so /execute and /chat behave identically and
+    a blocked tool looks the same as one that "doesn't exist" rather than announcing itself.
+    Requires patching orchestrator.executor_client._ALLOWED_TOOLS (the real enforcement point) to
+    a non-empty set; empty means unrestricted."""
     client, token = _make_test_client()
-    with patch("server.http.api_server._ALLOWED_TOOLS", {"list_vms"}):
+    with patch("orchestrator.executor_client._ALLOWED_TOOLS", {"list_vms"}):
         resp = client.post(
             "/execute",
             json={"tool_name": "send_monitor_cmd", "args": {"name": "vm", "cmd": "info"}},
             headers={"Authorization": f"Bearer {token}"},
         )
-    if resp.status_code != 403:
-        return [f"Expected 403 for tool not in allowlist, got {resp.status_code}"]
+    if resp.status_code != 200:
+        return [f"Expected 200 (violation embedded in result), got {resp.status_code}"]
+    body = resp.json()
+    if body.get("ok") is not True:
+        return [f"Expected ok=True envelope, got {body.get('ok')!r}"]
+    result = body.get("result", {})
+    if result.get("success") is not False:
+        return [f"Expected result.success=False, got {result.get('success')!r}"]
+    if "not available" not in result.get("error", ""):
+        return [f"Expected vague 'not available' wording, got {result.get('error')!r}"]
+    if "allowed_remote_tools" in result.get("error", "") or "config.json" in result.get("error", ""):
+        return ["Error message leaks config details — should be vague, not explain how to unlock it"]
     return []
+
+
+def _t_execute_hidden_vm_indistinguishable_from_missing() -> List[str]:
+    """security (VM hiding) — a hidden VM must be indistinguishable from a nonexistent one.
+
+    Regression test for a real leak: preflight's own existence check for launch_vm (and any other
+    _PREFLIGHT_TOOLS entry) calls manager.list_vms() directly. In local mode, _manager_proxy() used
+    to return the raw, unfiltered QemuManager — so preflight would see a hidden (allowlist-filtered)
+    VM as real and skip straight to its ISO check instead of its "doesn't exist" abort, while a
+    genuinely-missing name hit that abort. The final executor_client-level error text happened to
+    both say "not found", but the *response shape* differed (preflight=True + correction text vs
+    not) — a distinguishing side channel that let probing reveal which VMs exist but are hidden.
+    After the fix, both cases should hit the exact same preflight abort path.
+    """
+    client, token = _make_test_client()
+    fake_vms = [
+        {"name": "allowed-vm", "status": "stopped"},
+        {"name": "hidden-vm",  "status": "stopped"},
+    ]
+
+    def _call(vm_name: str):
+        with patch("shared.executioner.tool_executor.manager") as mock_mgr, \
+             patch("orchestrator.http.api_server._ALLOWED_VMS", ["allowed-vm"]), \
+             patch("orchestrator.executor_client._ALLOWED_VMS", ["allowed-vm"]):
+            mock_mgr.list_vms.return_value = fake_vms
+            return client.post(
+                "/execute",
+                json={"tool_name": "launch_vm", "args": {"name": vm_name}},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    resp_hidden = _call("hidden-vm")       # real VM, filtered out by the allowlist
+    resp_fake   = _call("totally-fake-vm")  # never existed at all
+
+    issues = []
+    for label, resp in (("hidden-vm", resp_hidden), ("totally-fake-vm", resp_fake)):
+        if resp.status_code != 200:
+            issues.append(f"{label}: expected 200, got {resp.status_code}")
+
+    body_hidden = resp_hidden.json().get("result", {})
+    body_fake   = resp_fake.json().get("result", {})
+
+    if body_hidden.get("preflight") != body_fake.get("preflight"):
+        issues.append(
+            f"preflight flag differs: hidden={body_hidden.get('preflight')!r} "
+            f"fake={body_fake.get('preflight')!r} — a hidden VM must go through the SAME "
+            f"preflight path as a genuinely missing one"
+        )
+    if body_hidden.get("success") is not False or body_fake.get("success") is not False:
+        issues.append("both calls should report success=False")
+    # Neither response should ever surface "allowed-vm" (the one real, visible VM) as a fuzzy-match
+    # candidate would only appear if list_vms() leaked the full unfiltered set into preflight.
+    for label, body in (("hidden-vm", body_hidden), ("totally-fake-vm", body_fake)):
+        if "allowed-vm" in str(body.get("correction", "")) and "Did you mean" in body.get("error", ""):
+            issues.append(f"{label}: fuzzy-match candidates leaked into the response: {body}")
+    return issues
 
 
 def _t_execute_junk_extra_fields() -> List[str]:
     """junk — unknown extra JSON fields in body → ignored, request succeeds."""
     client, token = _make_test_client()
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         return {"success": True, "vms": []}
 
     with patch("orchestrator.executor_client.execute_tool", side_effect=fake_execute), \
@@ -747,7 +821,7 @@ def _t_execute_foreign_args() -> List[str]:
     client, token = _make_test_client()
     captured: Dict[str, Any] = {}
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         captured["args"] = dict(args)
         return {"success": True, "name": args.get("name", "vm")}
 
@@ -780,7 +854,7 @@ def _t_execute_conflict_display_and_bind_local() -> List[str]:
     client, token = _make_test_client()
     captured: Dict[str, Any] = {}
 
-    def fake_execute(tool_name, args, verbose=False):
+    def fake_execute(tool_name, args, verbose=False, log=True):
         captured["args"] = dict(args)
         return {"success": True, "name": "test-vm", "pid": 1, "display": "vnc"}
 
@@ -1333,8 +1407,14 @@ REMOTE_SPLIT_TESTS: List[RemoteSplitTest] = [
     RemoteSplitTest(
         id="rs_execute_tool_not_in_allowlist",
         tags=["remote_split", "execute", "missing"],
-        description="/execute tool not in allowed_remote_tools → 403",
+        description="/execute tool not in allowed_remote_tools → 200, vague error embedded in result",
         fn=_t_execute_tool_not_in_allowlist,
+    ),
+    RemoteSplitTest(
+        id="rs_execute_hidden_vm_indistinguishable_from_missing",
+        tags=["remote_split", "execute", "security"],
+        description="A hidden (allowlist-filtered) VM must look identical to a genuinely nonexistent one through preflight",
+        fn=_t_execute_hidden_vm_indistinguishable_from_missing,
     ),
     RemoteSplitTest(
         id="rs_execute_junk_extra_fields",

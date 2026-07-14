@@ -14,7 +14,7 @@ import os
 from typing import List, Optional, Tuple
 
 from shared.display import console, render_vm_specs
-from orchestrator.executor_client import execute_tool, API_URL
+from orchestrator.executor_client import execute_tool, API_URL, _VM_TOOLS
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
 from orchestrator.preflight.validator import _preflight_check, _show_preflight_warning
 from .context_assistant import check_context
@@ -243,7 +243,11 @@ def _context_assistant_gate(tool_name: str, raw_args: dict, user_input: str,
     """
     if state.context_assistant_fired:
         return raw_args, GateOutcome.PROCEED
-    hint = check_context(user_input, tool_name, raw_args, recent_context=recent_context)
+    known_names = None
+    if tool_name in _VM_TOOLS:
+        known_names = {v["name"] for v in execute_tool("list_vms", {}, verbose=True, log=False)}
+    hint = check_context(user_input, tool_name, raw_args, recent_context=recent_context,
+                          known_names=known_names)
     if not hint:
         return raw_args, GateOutcome.PROCEED
     state.context_assistant_fired = True

@@ -15,7 +15,7 @@ import os
 
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
 from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
-from orchestrator.executor_client import execute_tool
+from orchestrator.executor_client import execute_tool, _VM_TOOLS
 from orchestrator.preflight.validator import _preflight_check
 from .ollama_client import _call_ollama
 from .context_assistant import check_context, extract_slots
@@ -29,6 +29,9 @@ except ImportError:
 _CFG          = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _LOOP_MAX     = get_loop_max()
 _ACTION_WORDS = set(_CFG["action_words"])
+# State/read-query words — folded into the "wants a tool" trigger so factual
+# questions get grounded in a tool call instead of answered from memory.
+_STATE_QUERY_WORDS = set(_CFG.get("state_query_words", []))
 _OS_KEYWORDS  = set(_CFG["os_keywords_gate"])
 _CONFIRM_YN   = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
 _CONFIRM_NAME = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
@@ -73,7 +76,9 @@ def process_message(
     messages.append({"role": "user", "content": user_input})
 
     _ui = user_input.lower().strip()
-    _user_wants_action = bool(set(_ui.split()) & _ACTION_WORDS)
+    # "action" = any tool-worthy intent (an action OR a state/read query), so
+    # factual questions get grounded in a tool call rather than confabulated.
+    _user_wants_action = bool({t.strip('.,!?;:') for t in _ui.split()} & (_ACTION_WORDS | _STATE_QUERY_WORDS))
     _tools_called_this_turn   = False
     _tool_executed_this_turn  = False
     _context_assistant_fired  = False
@@ -133,7 +138,11 @@ def process_message(
             ]
             _recent_context = " ".join(_recent_user_msgs[-6:])
             if not _context_assistant_fired:
-                _ca_hint = check_context(user_input, tool_name, raw_args, recent_context=_recent_context)
+                _known_names = None
+                if tool_name in _VM_TOOLS:
+                    _known_names = {v["name"] for v in execute_tool("list_vms", {}, verbose=True, log=False)}
+                _ca_hint = check_context(user_input, tool_name, raw_args, recent_context=_recent_context,
+                                          known_names=_known_names)
                 if _ca_hint:
                     _context_assistant_fired = True
                     if "never mentioned it" in _ca_hint:

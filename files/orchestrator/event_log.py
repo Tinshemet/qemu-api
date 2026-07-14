@@ -1,5 +1,5 @@
 """
-event_log.py — Structured event logger for qemu-api server
+event_log.py — Structured event logger for gorgon server
 
 Writes one JSON line per event to ~/.qemu_vms/events.log.
 Each entry records the tool called, key args, outcome, and duration.

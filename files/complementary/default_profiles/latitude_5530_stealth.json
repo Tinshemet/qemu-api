@@ -1,0 +1,16 @@
+{
+  "memory_mb": 8192,
+  "cpu_cores": 4,
+  "disk_size_gb": 250,
+  "description": "Dell Latitude 5530 with stealth mode enabled",
+  "uefi": true,
+  "cpu_threads": 4,
+  "os_type": "linux",
+  "network_mode": "nat",
+  "display": "sdl",
+  "stealth": true,
+  "hugepages": false,
+  "kvm": true,
+  "_custom": true,
+  "_name": "latitude_5530_stealth"
+}

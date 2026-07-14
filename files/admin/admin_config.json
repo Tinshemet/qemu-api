@@ -3,6 +3,6 @@
   "font_size":           20,
   "refresh_rate_s":      1.0,
   "default_port":        8080,
-  "log_path":            "/tmp/qemu-api-server.log",
+  "log_path":            "/tmp/gorgon-server.log",
   "events_display_limit": 200
 }

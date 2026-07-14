@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from .shared import ContextAssistantTest, TestResult, check_context
 from orchestrator.ai.context_assistant import scan_tool_hints
 
-_CFG_PATH = pathlib.Path(__file__).parents[1] / "server" / "ai" / "context_assistant_config.json"
+_CFG_PATH = pathlib.Path(__file__).parents[1] / "orchestrator" / "ai" / "context_assistant_config.json"
 with _CFG_PATH.open() as _f:
     _CA_CFG = json.load(_f)
 
@@ -33,6 +33,7 @@ _TYPE_SIGNATURES: Dict[str, str] = {
     "hallucinated":   "never mentioned it",
     "high_stakes":    "high-stakes",
     "contradictory":  "contradictory",
+    "unknown_vm":     "no VM with that name exists",
 }
 
 
@@ -332,6 +333,58 @@ CA_TESTS: List[ContextAssistantTest] = [
         args={"name": "dev-box", "delete_disks": False},
         expect_fired=False,
     ),
+
+    # ── Unknown VM reference (registry ground-truth check) ────────────
+    ContextAssistantTest(
+        id="ca_unknown_vm_reference_fires",
+        tags=["context_assistant", "unknown_vm"],
+        description="AI names a VM absent from the supplied registry — must fire",
+        prompt="stop ghost-box",
+        tool_name="stop_vm",
+        args={"name": "ghost-box"},
+        known_names=["dev-box", "prod-server"],
+        expect_fired=True,
+        expect_type="unknown_vm",
+    ),
+    ContextAssistantTest(
+        id="ca_unknown_vm_reference_known_name_passes",
+        tags=["context_assistant", "unknown_vm", "clean"],
+        description="Name IS in the supplied registry — must pass silently",
+        prompt="stop dev-box",
+        tool_name="stop_vm",
+        args={"name": "dev-box"},
+        known_names=["dev-box", "prod-server"],
+        expect_fired=False,
+    ),
+    ContextAssistantTest(
+        id="ca_unknown_vm_reference_all_sentinel_exempt",
+        tags=["context_assistant", "unknown_vm", "clean"],
+        description="name='all' is stop_vm's stop-everything sentinel, not a real name — exempt",
+        prompt="stop all vms",
+        tool_name="stop_vm",
+        args={"name": "all"},
+        known_names=["dev-box", "prod-server"],
+        expect_fired=False,
+    ),
+    ContextAssistantTest(
+        id="ca_unknown_vm_reference_no_registry_skips_check",
+        tags=["context_assistant", "unknown_vm", "clean"],
+        description="No known_names supplied (default None) — check is skipped, preserving old behavior",
+        prompt="stop ghost-box",
+        tool_name="stop_vm",
+        args={"name": "ghost-box"},
+        expect_fired=False,
+    ),
+    ContextAssistantTest(
+        id="ca_unknown_vm_reference_create_vm_not_checked",
+        tags=["context_assistant", "unknown_vm", "clean"],
+        description="create_vm names a brand-new VM, not a reference — never checked against the registry",
+        prompt="create a vm called ghost-box",
+        tool_name="create_vm",
+        args={"name": "ghost-box", "os_type": "linux"},
+        known_names=["dev-box", "prod-server"],
+        expect_fired=False,
+    ),
 ]
 
 
@@ -501,7 +554,8 @@ def run_ca_test(tc: ContextAssistantTest) -> TestResult:
     issues: List[str] = []
     detail: Dict[str, Any] = {}
     try:
-        result = check_context(tc.prompt, tc.tool_name, tc.args)
+        known_names = set(tc.known_names) if tc.known_names is not None else None
+        result = check_context(tc.prompt, tc.tool_name, tc.args, known_names=known_names)
         detail["hint"] = result
 
         if tc.expect_fired:

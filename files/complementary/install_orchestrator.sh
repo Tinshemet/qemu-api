@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  install_orchestrator.sh — qemu-api ORCHESTRATOR machine setup
+#  install_orchestrator.sh — gorgon ORCHESTRATOR machine setup
 #
 #  The orchestrator machine hosts:
 #    • Ollama (AI model runner)
-#    • qemu-api HTTP API  (uvicorn on port 8080)
+#    • gorgon HTTP API  (uvicorn on port 8080)
 #    • Sanitizer, preflight, context gate
 #
 #  It does NOT need QEMU/KVM.  VM execution happens on the executor machine.
@@ -18,9 +18,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$HOME/qemu-env"
-START_SCRIPT="$HOME/start-qemu-api-orchestrator.sh"
-SERVICE_FILE="$HOME/.config/systemd/user/qemu-api-orchestrator.service"
-TOKEN_FILE="$HOME/.qemu-api.token"
+START_SCRIPT="$HOME/start-gorgon-orchestrator.sh"
+SERVICE_FILE="$HOME/.config/systemd/user/gorgon-orchestrator.service"
+TOKEN_FILE="$HOME/.gorgon.token"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:7b}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -33,7 +33,7 @@ header() { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${RESET}"; }
 
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${CYAN}║   qemu-api — ORCHESTRATOR machine setup      ║${RESET}"
+echo -e "${BOLD}${CYAN}║   gorgon — ORCHESTRATOR machine setup      ║${RESET}"
 echo -e "${BOLD}${CYAN}║   Ollama + HTTP API (no QEMU)                ║${RESET}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
@@ -171,7 +171,7 @@ if [[ -n "${EXECUTOR_TOKEN:-}" ]]; then
     ok "Using EXECUTOR_TOKEN from environment"
 elif [[ -n "$EXEC_URL" ]]; then
     echo "  This must match the token shown at the end of install_executor.sh"
-    echo "  (saved on the executor machine at ~/.qemu-api-executor.token)."
+    echo "  (saved on the executor machine at ~/.gorgon-executor.token)."
     read -r -p "  Executor token: " EXEC_TOKEN
 else
     EXEC_TOKEN=""
@@ -261,15 +261,15 @@ chmod +x "$START_SCRIPT"
 ok "Created $START_SCRIPT"
 
 header "Shell Integration"
-sed -i '/# qemu-api orchestrator start/,/# qemu-api orchestrator end/d' "$SHELL_RC" 2>/dev/null || true
+sed -i '/# gorgon orchestrator start/,/# gorgon orchestrator end/d' "$SHELL_RC" 2>/dev/null || true
 cat >> "$SHELL_RC" << SHELLEOF
 
-# qemu-api orchestrator start
+# gorgon orchestrator start
 source "$VENV_DIR/bin/activate"
 export PATH="\$HOME/.local/bin:\$PATH"
-alias qemu-api-serve='$START_SCRIPT'
-alias qemu-api='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
-# qemu-api orchestrator end
+alias gorgon-serve='$START_SCRIPT'
+alias gorgon='PYTHONPATH=$FILES_DIR python3 $FILES_DIR/client/client_wrapper.py'
+# gorgon orchestrator end
 SHELLEOF
 ok "Added aliases to $SHELL_RC"
 info "For the admin dashboard, run: bash files/complementary/install_admin.sh"
@@ -279,7 +279,7 @@ if [[ "$IS_WSL" == false ]]; then
     mkdir -p "$(dirname "$SERVICE_FILE")"
     cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
-Description=qemu-api Orchestrator HTTP Server
+Description=gorgon Orchestrator HTTP Server
 After=network.target
 
 [Service]
@@ -292,12 +292,12 @@ Environment=HOME=$HOME
 WantedBy=default.target
 SVCEOF
     systemctl --user daemon-reload
-    systemctl --user enable qemu-api-orchestrator
-    systemctl --user start  qemu-api-orchestrator
+    systemctl --user enable gorgon-orchestrator
+    systemctl --user start  gorgon-orchestrator
     ok "systemd service enabled and started"
     loginctl enable-linger "$USER" 2>/dev/null || warn "loginctl enable-linger failed"
 else
-    nohup "$START_SCRIPT" > /tmp/qemu-api-orchestrator.log 2>&1 &
+    nohup "$START_SCRIPT" > /tmp/gorgon-orchestrator.log 2>&1 &
     sleep 2
     pgrep -f "api_server" > /dev/null && ok "Server running" || warn "Server may not have started"
 fi
