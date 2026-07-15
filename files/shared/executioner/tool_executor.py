@@ -227,7 +227,7 @@ def _execute_create_vm(args: Dict[str, Any], verbose: bool, raw_os_type: str,
               "serial_number", "board_product", "bios_vendor", "smbios_type",
               "uefi", "kvm", "battery", "hugepages", "machine_type", "os_type", "os_name",
               "hardened", "stealth", "tpm", "bios", "template", "randomize_root_password",
-              "randomize_user_password", "new_username"):
+              "randomize_user_password", "new_username", "randomize_hostname", "guest_agent"):
         if f in args and args[f] is not None and args[f] != "":
             setattr(cfg, f, args[f])
 
@@ -463,6 +463,8 @@ def _execute_create_vm(args: Dict[str, Any], verbose: bool, raw_os_type: str,
                     f"[yellow]  New '{result.get('randomized_username')}' password: "
                     f"{result['user_password']} (unique to this clone — write it down)[/yellow]"
                 )
+            if result.get("hostname"):
+                console.print(f"[dim]  New hostname: {result['hostname']}[/dim]")
             if cfg.stealth:
                 manager.generate_guest_setup(name)
                 console.print(
@@ -739,6 +741,53 @@ def _run(
         result = manager.vm_status(args["name"])
         if not verbose:
             render_status(result)
+        return result
+
+    elif tool_name == "run_guest_command":
+        result = manager.run_guest_command(
+            args["name"], args["command"], timeout=args.get("timeout")
+        )
+        if not verbose:
+            if result.get("success"):
+                if result.get("stdout"):
+                    console.print(result["stdout"], end="" if result["stdout"].endswith("\n") else "\n")
+                if result.get("stderr"):
+                    console.print(f"[red]{result['stderr']}[/red]", end="")
+                console.print(f"[dim]exit code: {result.get('exit_code')}[/dim]")
+            else:
+                console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
+        return result
+
+    elif tool_name == "guest_ping":
+        result = manager.guest_ping(args["name"])
+        if not verbose:
+            if result.get("success"):
+                style = "green" if result.get("alive") else "yellow"
+                state = "alive" if result.get("alive") else "not responding"
+                console.print(f"[{style}]{args['name']}: guest agent {state}[/{style}]")
+            else:
+                console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
+        return result
+
+    elif tool_name == "generate_guest_agent_setup":
+        result = manager.generate_guest_agent_setup(args["name"])
+        if not verbose:
+            if result.get("success"):
+                console.print(
+                    f"[green]✓ Guest agent setup script ready: {result['path']}[/green]\n"
+                    f"[dim]  Run inside the VM: {result['cmd_template']}[/dim]"
+                )
+            else:
+                console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
+        return result
+
+    elif tool_name == "provision_guest_agent_offline":
+        result = manager.provision_guest_agent_offline(args["name"])
+        if not verbose:
+            if result.get("success"):
+                console.print(f"[green]✓ Stealth serial-agent provisioned offline on '{args['name']}'[/green]")
+            else:
+                console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
         return result
 
     elif tool_name == "monitor_vm":

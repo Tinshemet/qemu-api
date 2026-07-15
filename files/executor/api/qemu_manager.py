@@ -18,6 +18,7 @@ import psutil
 
 from ._vm_constants  import VM_BASE_DIR
 from ._vm_diagnostics import _VmDiagnosticsMixin
+from ._vm_guest      import _VmGuestMixin
 from ._vm_lifecycle  import _VmLifecycleMixin
 from ._vm_monitoring import _VmMonitoringMixin
 from ._vm_operations import _VmOperationsMixin
@@ -31,6 +32,7 @@ class QemuManager(
     _VmStealthMixin,
     _VmOperationsMixin,
     _VmDiagnosticsMixin,
+    _VmGuestMixin,
     _VmMonitoringMixin,
     _VmRuntimeMixin,
     _VmLifecycleMixin,

@@ -372,7 +372,7 @@ class MachineConfig:
     gpu_passthrough_pci: str       = ""   # host PCI addr (e.g. "01:00.0") for vfio-pci passthrough
     display:         str           = _MC["display"]
     vnc_port:        Optional[int] = None
-    vnc_bind_local:  bool          = False   # True → bind to 127.0.0.1 + require password (remote mode)
+    vnc_bind_local:  bool          = False   # True → bind to 127.0.0.1 + require password (remote mode); forced True whenever hardened (see __post_init__)
     spice_port:      Optional[int] = None
     opengl:          bool          = _MC["opengl"]
     resolution:      str           = _MC["resolution"]
@@ -420,6 +420,8 @@ class MachineConfig:
     user_password:   Optional[str] = None  # set when randomize_user_password succeeds
     randomized_username: Optional[str] = None  # which account user_password applies to (auto-detected)
     new_username:    Optional[str] = None  # rename the cloned disk's primary user to this (Linux templates only)
+    randomize_hostname: bool = False  # offline-edit the cloned disk's OS-level hostname/computer name
+    new_hostname:    Optional[str] = None  # set when randomize_hostname succeeds (auto-generated if not given)
     # ARM / non-x86 support
     qemu_binary:     str           = _MC["qemu_binary"]
     machine_arch:    str           = _MC["machine_arch"]
@@ -430,6 +432,15 @@ class MachineConfig:
     qmp_tcp_port:     int = field(default=0)
     monitor_tcp_port: int = field(default=0)
     serial_tcp_port:  int = field(default=0)
+    # Guest agent — in-VM command channel (opt-in; off by default). Non-stealth VMs use
+    # the standard qemu-guest-agent over virtio-serial (qga_socket); stealth VMs use a
+    # dedicated serial-console port instead (serial_agent_socket) to avoid the virtio tell.
+    guest_agent:     bool          = False
+    qga_socket:      str           = field(default="", repr=False)
+    qga_tcp_port:    int           = field(default=0)
+    serial_agent_socket: str       = field(default="", repr=False)
+    serial_agent_tcp_port: int     = field(default=0)
+    guest_agent_psk: str           = field(default="", repr=False)  # per-VM PSK for the stealth serial channel
 
     # Coerces int fields and auto-falls back to SeaBIOS if OVMF is absent.
     # In: self (post-construction) → Out: nothing (self-mutation)
@@ -440,6 +451,14 @@ class MachineConfig:
         self.memory_mb   = int(self.memory_mb)
         if self.stealth:
             self.hardened = True   # stealth implies hardened
+        if self.hardened:
+            # Hardened/stealth VMs never get an open, unauthenticated VNC — force
+            # this unconditionally (not just when display=="vnc" right now) since
+            # launch_vm's per-call display override happens after __post_init__
+            # and would otherwise bypass a display-gated check here. Harmless
+            # when display isn't vnc: both consumers (qemu_arg_builder, the
+            # post-launch QMP set_password step) already gate on display=="vnc".
+            self.vnc_bind_local = True
         if self.bios in ("ovmf", "ovmf_ms"):
             if OVMF["available"]:
                 self.uefi = True   # bios=ovmf always implies uefi=True
@@ -475,6 +494,22 @@ class MachineConfig:
             return f"tcp:127.0.0.1:{self.monitor_tcp_port}"
         return os.path.join(self.get_vm_dir(), "monitor.sock")
 
+    # Returns the qemu-guest-agent socket — Unix path on Linux/macOS, tcp:host:port on Windows.
+    # In: nothing → Out: str
+    def get_qga_socket(self) -> str:
+        """Return the guest-agent (QGA) socket path (or TCP address on Windows)."""
+        if sys.platform == "win32" and self.qga_tcp_port:
+            return f"tcp:127.0.0.1:{self.qga_tcp_port}"
+        return os.path.join(self.get_vm_dir(), "qga.sock")
+
+    # Returns the stealth serial-agent socket path (Unix; the second COM port's chardev).
+    # In: nothing → Out: str
+    def get_serial_agent_socket(self) -> str:
+        """Return the stealth serial-agent chardev socket path (or TCP address on Windows)."""
+        if sys.platform == "win32" and self.serial_agent_tcp_port:
+            return f"tcp:127.0.0.1:{self.serial_agent_tcp_port}"
+        return os.path.join(self.get_vm_dir(), "serial_agent.sock")
+
     # Serializes the config to a dict, stripping runtime-only fields (pid, sockets).
     # In: nothing → Out: dict
     def to_dict(self) -> Dict[str, Any]:
@@ -483,6 +518,8 @@ class MachineConfig:
         d.pop("pid", None)
         d.pop("monitor_socket", None)
         d.pop("qmp_socket", None)
+        d.pop("qga_socket", None)
+        d.pop("serial_agent_socket", None)
         return d
 
     # Writes the config to ~/.qemu_vms/<name>/config.json.

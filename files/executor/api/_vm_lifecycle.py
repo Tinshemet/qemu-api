@@ -5,6 +5,7 @@ Provides _VmLifecycleMixin which is composed into QemuManager.
 """
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import uuid as _uuid
@@ -236,6 +237,25 @@ class _VmLifecycleMixin:
             except Exception as _e:
                 user_password_warning = str(_e)
 
+        # Hostname/computer-name randomization applies to both Linux and
+        # Windows template clones (unlike the credential fields above, which
+        # are Linux-only since Windows credentials need a different tool).
+        hostname_warning = None
+        new_hostname = None
+        if config.randomize_hostname and template_meta and config.disks:
+            _disk_path = os.path.expanduser(config.disks[0].path)
+            _is_windows_template = "windows" in template_meta.get("os_type", "").lower()
+            try:
+                if _is_windows_template:
+                    from ._vm_hostname import randomize_windows_hostname
+                    new_hostname = randomize_windows_hostname(_disk_path, config.new_hostname)
+                else:
+                    from ._vm_hostname import randomize_linux_hostname
+                    new_hostname = randomize_linux_hostname(_disk_path, config.new_hostname)
+                config.new_hostname = new_hostname
+            except Exception as _e:
+                hostname_warning = str(_e)
+
         if template_meta and not config.os_type:
             config.os_type = template_meta.get("os_type", config.os_type)
 
@@ -254,6 +274,16 @@ class _VmLifecycleMixin:
         # Infer os_name from ISO filename when not explicitly provided
         if config.iso_path and not config.os_name:
             config.os_name = infer_os_name(config.iso_path, config.os_type)
+
+        # Stealth VMs can't use the standard virtio-serial QGA channel (a
+        # hypervisor tell), so they get a PSK-authenticated serial-agent
+        # channel instead (see _vm_guest.py / qemu_arg_builder._serial_agent).
+        # Generate the PSK once, here, at creation time — never lazily in
+        # generate_guest_agent_setup, which can be called repeatedly to
+        # re-serve the install script and must keep handing out the same PSK
+        # the guest was actually provisioned with.
+        if config.stealth and config.guest_agent and not config.guest_agent_psk:
+            config.guest_agent_psk = secrets.token_hex(32)
 
         config.save()
         _iso_basename = os.path.basename(config.iso_path) if config.iso_path else ""
@@ -274,6 +304,10 @@ class _VmLifecycleMixin:
             _message += f" New '{randomized_username}' password: {new_user_password}"
         elif user_password_warning:
             _message += f" (user password NOT randomized — {user_password_warning})"
+        if new_hostname:
+            _message += f" New hostname: {new_hostname}"
+        elif hostname_warning:
+            _message += f" (hostname NOT randomized — {hostname_warning})"
         result = {
             "success":  True,
             "name":     config.name,
@@ -292,6 +326,8 @@ class _VmLifecycleMixin:
         if new_user_password:
             result["user_password"] = new_user_password
             result["randomized_username"] = randomized_username
+        if new_hostname:
+            result["hostname"] = new_hostname
         return result
 
     # ------------------------------------------------------------------
@@ -352,6 +388,29 @@ class _VmLifecycleMixin:
         for net in src_cfg.networks:
             net.mac = None
             net.__post_init__()
+
+        # A clone is a disposable, ordinary VM — not the protected golden
+        # image it was cut from. Strip the "template" tag so delete_vm and
+        # any other template-aware logic don't mistake the clone for one.
+        src_cfg.labels = [l for l in src_cfg.labels if l != TEMPLATE_LABEL]
+
+        # The source's disk is already installed — a clone must boot straight
+        # into it, never repeat the source's install-time boot path (which
+        # would re-run the OS installer against the fresh CoW disk instead of
+        # booting the OS already on it).
+        src_cfg.unattended  = False
+        src_cfg.iso_path    = ""
+        src_cfg.kernel_path = ""
+        src_cfg.initrd_path = ""
+        src_cfg.kernel_cmdline = ""
+
+        # A clone must not share the source's stealth serial-agent PSK — that
+        # secret, if the source ever had generate_guest_agent_setup run
+        # against it, would let two different guests authenticate as the same
+        # channel. Clear it here; the clone's disk (copied byte-for-byte from
+        # the source) may still have the OLD PSK installed in-guest until
+        # generate_guest_agent_setup is re-run and the setup script re-served.
+        src_cfg.guest_agent_psk = ""
 
         src_cfg.save()
         return {"success": True,
@@ -527,6 +586,7 @@ class _VmLifecycleMixin:
 
         shutil.rmtree(vm_dir)
         self._state.set_stopped(name)
+        self.iso_nets.remove_vm_from_all_networks(name)
         msg = f"VM '{name}' deleted."
         if disk_errors:
             msg += f" Warning: could not remove disk(s): {'; '.join(disk_errors)}"

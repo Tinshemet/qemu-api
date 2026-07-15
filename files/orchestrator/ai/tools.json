@@ -195,6 +195,7 @@
                     "description":  {"type": "string"},
                     "hardened":     {"type": "boolean", "description": "Enable hardened mode: hides hypervisor CPUID, QEMU seccomp sandbox, forces NAT, disables balloon. Use for security isolation of untrusted guests."},
                     "stealth":      {"type": "boolean", "description": "Enable stealth mode (implies hardened). Applies full hardware fingerprint masking so the VM passes inxi -F as bare-metal hardware: SMBIOS chassis/board/BIOS overrides, PCI vendor spoofing (cirrus-vga, nec-usb-xhci), ACPI OEM ID, CPU flag hiding. Also auto-generates and serves a guest setup script on first launch (Firefox WebGL spoof + qemu_fw_cfg blacklist). Use when the VM must appear as real hardware to the OS and browser fingerprinting."},
+                    "guest_agent":  {"type": "boolean", "description": "Enable in-VM command execution (run_guest_command) and liveness checks (guest_ping). Off by default. Non-stealth VMs use the standard qemu-guest-agent over virtio-serial; stealth VMs transparently use a separate PSK-authenticated serial channel instead (no virtio device, so no hardware-fingerprint tell) — same tools, same behavior either way. Only set when the user asks to enable the guest agent / in-VM command execution."},
                     "overwrite":    {"type": "boolean", "description": "If true and a VM with this name already exists, delete it and recreate. Only set this when the user explicitly said to overwrite or replace the existing VM."},
                     "extra_args":   {"type": "array", "items": {"type": "string"}},
                     "manual":       {"type": "boolean", "description": "Set to true when the user said 'manual' and wants to configure each VM individually during batch creation. The CLI will prompt for os_type, memory_mb, cpu_cores, and disk_size_gb before creating each VM."},
@@ -203,6 +204,7 @@
                     "randomize_root_password": {"type": "boolean", "description": "When cloning from a Linux template, offline-edit the new disk's root password to a fresh random value (via virt-customize) instead of inheriting the template's exact password. Only applies with 'template' set on a Linux template; ignored for Windows. Only set when the user asks for a unique/randomized/different password per clone."},
                     "randomize_user_password": {"type": "boolean", "description": "Same as randomize_root_password, but for the disk's primary (non-root) user account instead — the username is auto-detected from the disk (first account with UID >= 1000). Only applies with 'template' set on a Linux template; ignored for Windows. Only set when the user asks for a unique/randomized user-account password per clone."},
                     "new_username":  {"type": "string", "description": "Rename the cloned disk's primary (non-root) user account to this — the old username is auto-detected from the disk. Only applies with 'template' set on a Linux template; ignored for Windows. Only set when the user explicitly asks for a unique/different/renamed username per clone. Must be a valid lowercase Linux username."},
+                    "randomize_hostname": {"type": "boolean", "description": "When cloning from a template (Linux or Windows), offline-edit the new disk's OS-level hostname/computer name to a fresh randomized value instead of inheriting the template's exact one — every clone otherwise shares the identical hostname, a cross-clone fingerprint. Only applies with 'template' set. Only set when the user asks for a unique/randomized/different hostname per clone."},
                     "unattended":            {"type": "boolean", "description": "Fully automate OS installation instead of showing the interactive installer (Windows and Linux both supported). WIPES the target disk. Only set when the user explicitly asks for unattended/automated/hands-off install."},
                     "unattended_username":   {"type": "string", "description": "Account username for the unattended install. Ignored if unattended_skip_user is true."},
                     "unattended_password":   {"type": "string", "description": "Account password for the unattended install. Ignored if unattended_skip_user is true."},
@@ -309,6 +311,58 @@
         "function": {
             "name": "monitor_vm",
             "description": "Deep activity report. Use name='all' for all VMs.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_guest_command",
+            "description": "Run a command inside a VM via its guest agent and return stdout/stderr/exit_code. Requires the VM to be running with guest_agent enabled (see create_vm's guest_agent flag). Works for stealth VMs too, via a separate serial channel — same call either way.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name":    {"type": "string", "description": "VM name."},
+                    "command": {"type": "string", "description": "Shell line to run (executed via /bin/sh -c), e.g. 'uptime' or 'df -h'."},
+                    "timeout": {"type": "integer", "description": "Seconds to wait for the command to finish before giving up (default from config, currently 30s)."}
+                },
+                "required": ["name", "command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "guest_ping",
+            "description": "Check whether a VM's guest agent answers — confirms the guest OS itself is alive and responsive, not just that the QEMU process is running. Use for liveness checks distinct from vm_status.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_guest_agent_setup",
+            "description": "Write a guest-side script that installs and enables qemu-guest-agent inside a Linux VM. Call this when the user wants to enable guest-agent command execution on a VM that doesn't have it running yet. Not available for Windows guests (manual MSI install required).",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "provision_guest_agent_offline",
+            "description": "Install the stealth serial-agent (daemon + PSK + systemd unit) directly onto a stopped stealth VM's disk — no boot required, unlike generate_guest_agent_setup which needs a human to run a script inside a live session. Only applies to stealth VMs (non-stealth VMs use generate_guest_agent_setup's qemu-guest-agent path instead). The VM must be stopped first.",
             "parameters": {
                 "type": "object",
                 "properties": {"name": {"type": "string"}},

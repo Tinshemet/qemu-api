@@ -17,7 +17,9 @@
     "port_range": 50,
     "qmp_port_start": 9000,
     "monitor_port_start": 9100,
-    "serial_port_start": 9200
+    "serial_port_start": 9200,
+    "qga_port_start": 9300,
+    "serial_agent_port_start": 9400
   },
   "timeouts": {
     "qemu_version": 5,
@@ -27,12 +29,18 @@
     "cpu_pinning_delay": 1,
     "monitor_recv_sleep": 0.3,
     "launch_liveness_check": 0.3,
-    "unattended_boot_keys": 25
+    "unattended_boot_keys": 25,
+    "qga_connect": 5,
+    "qga_command": 30,
+    "serial_agent_connect": 5,
+    "serial_agent_command": 30
   },
   "buffers": {
     "qmp": 4096,
     "monitor_recv": 8192,
-    "monitor_send": 4096
+    "monitor_send": 4096,
+    "qga": 65536,
+    "serial_agent": 65536
   },
   "iso_desktop_subdirs": [
     "images",
@@ -333,7 +341,8 @@
     "mac_address",
     "vnc_password",
     "cpu_pinning",
-    "cpu_smt"
+    "cpu_smt",
+    "guest_agent"
   ],
   "monitor_allowed_cmds": [
     "info ",

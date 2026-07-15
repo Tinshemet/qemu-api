@@ -8,6 +8,7 @@ other but NOT to the internet.
 
 import json
 import os
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,11 @@ _NET  = _CFG["network"]
 
 VM_BASE_DIR      = os.path.expanduser(_DIRS["vm_base"])
 ISOLATED_NET_DIR = os.path.join(VM_BASE_DIR, _DIRS["isolated_net"])
+
+# Same vendor-OUI pool NetworkConfig._generate_mac draws from, so an isolated-net
+# NIC looks as real as a VM's main NIC instead of announcing itself as QEMU.
+_VENDOR_OUI_MAP = _CFG["vendor_oui_map"]
+_ALL_OUIS       = [oui for ouis in _VENDOR_OUI_MAP.values() for oui in ouis]
 
 
 class IsolatedNetManager:
@@ -83,6 +89,42 @@ class IsolatedNetManager:
         """Return all defined networks."""
         return list(self._nets.values())
 
+    # Drops a VM from every network's member list — called by delete_vm so a
+    # deleted VM doesn't linger as a phantom member (e.g. get counted, or have
+    # its name reused by an unrelated future VM that then appears to already
+    # belong to a network it was never added to).
+    # In: str vm_name → Out: nothing
+    def remove_vm_from_all_networks(self, vm_name: str) -> None:
+        """Remove vm_name from every network's members list; no-op if absent."""
+        changed = False
+        for net in self._nets.values():
+            if vm_name in net["members"]:
+                net["members"].remove(vm_name)
+                changed = True
+        if changed:
+            self._save()
+
+    # Generates a locally-unique MAC from a real vendor OUI — QEMU assigns the
+    # same hardcoded default (52:54:00:12:34:56) to every unmarked
+    # virtio-net-pci device, so every VM on an isolated net needs its own MAC
+    # to avoid collision, but a raw "52:54:00:xx:xx:xx" MAC is itself a
+    # hypervisor tell (QEMU's assigned OUI) to anything on the same L2
+    # segment. Draw from the same real-vendor pool NetworkConfig._generate_mac
+    # uses instead, optionally matched to the VM's own manufacturer_hint so
+    # the isolated-net NIC looks consistent with its main NIC.
+    # In: Optional[str] hint → Out: str
+    @staticmethod
+    def _random_mac(hint: Optional[str] = None) -> str:
+        """Return a fresh real-vendor-OUI MAC for an isolated-net NIC."""
+        pool = next(
+            (ouis for key, ouis in _VENDOR_OUI_MAP.items() if key in (hint or "").lower()),
+            _ALL_OUIS,
+        )
+        import random
+        oui    = random.choice(pool)
+        device = uuid.uuid4().bytes[:3]
+        return oui + ":" + ":".join(f"{b:02x}" for b in device)
+
     # Returns the -netdev socket,mcast=... QEMU args to attach a VM to the network.
     # In: str net_name, str vm_name → Out: List[str] | None
     def get_netdev_args(self, net_name: str, vm_name: str) -> Optional[List[str]]:
@@ -96,9 +138,15 @@ class IsolatedNetManager:
         addr  = net["mcast_addr"]
         port  = net["mcast_port"]
         netid = f"iso_{net_name}"
+        hint  = None
+        try:
+            src_cfg = MachineConfig.load(vm_name)
+            hint = src_cfg.networks[0].manufacturer_hint if src_cfg.networks else None
+        except FileNotFoundError:
+            pass  # best-effort hint lookup — fall back to any real vendor OUI
         return [
             "-netdev", f"socket,id={netid},mcast={addr}:{port}",
-            "-device", f"virtio-net-pci,netdev={netid}",
+            "-device", f"virtio-net-pci,netdev={netid},mac={self._random_mac(hint)}",
         ]
 
     # Appends the isolation network args to a stopped VM's extra_args and saves its config.
@@ -115,9 +163,10 @@ class IsolatedNetManager:
         addr  = net["mcast_addr"]
         port  = net["mcast_port"]
         netid = f"iso_{net_name}"
+        hint  = cfg.networks[0].manufacturer_hint if cfg.networks else None
         iso_args = [
             "-netdev", f"socket,id={netid},mcast={addr}:{port}",
-            "-device", f"virtio-net-pci,netdev={netid}",
+            "-device", f"virtio-net-pci,netdev={netid},mac={self._random_mac(hint)}",
         ]
         for arg in iso_args:
             if arg not in cfg.extra_args:

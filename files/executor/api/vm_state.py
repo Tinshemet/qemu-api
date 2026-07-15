@@ -4,6 +4,14 @@ vm_state.py — VM State Persistence Layer
 Persists running VM PIDs to ~/.qemu_vms/.state.json so the manager
 can reconnect after a terminal restart. Also provides _PsutilProcWrapper
 which makes a psutil.Process behave like subprocess.Popen.
+
+Every read re-loads the file rather than trusting an in-memory snapshot —
+this file is the one shared source of truth across every process that holds
+a QemuManager (a short-lived CLI invocation, a long-running server, a test
+script), and a long-lived singleton (e.g. the orchestrator server's) must
+see a VM some other process launched, not just what existed when it was
+constructed. The file is small and reads are infrequent enough that this
+costs nothing in practice.
 """
 
 import json
@@ -23,7 +31,6 @@ STATE_FILE  = os.path.join(VM_BASE_DIR, _DIRS["state_file"])
 class VMState:
     def __init__(self):
         os.makedirs(VM_BASE_DIR, exist_ok=True)
-        self._data: Dict[str, Dict] = self._load()
 
     # Reads .state.json from disk; returns empty dict on failure.
     # In: nothing → Out: dict
@@ -37,32 +44,35 @@ class VMState:
                 pass  # corrupt/unreadable state file — start from empty rather than crash the server
         return {}
 
-    # Writes current state to .state.json.
-    # In: nothing → Out: nothing
-    def _save(self) -> None:
-        """Persist the VM-state map to disk."""
+    # Writes the given state to .state.json.
+    # In: dict data → Out: nothing
+    def _save(self, data: Dict) -> None:
+        """Persist the given VM-state map to disk."""
         with open(STATE_FILE, "w") as f:
-            json.dump(self._data, f, indent=2)
+            json.dump(data, f, indent=2)
 
     # Records a VM as running with its PID and start timestamp.
     # In: str name, int pid → Out: nothing
     def set_running(self, name: str, pid: int) -> None:
         """Record a VM as running with its PID and start time."""
-        self._data[name] = {"pid": pid, "started": datetime.now().isoformat()}
-        self._save()
+        data = self._load()
+        data[name] = {"pid": pid, "started": datetime.now().isoformat()}
+        self._save(data)
 
     # Removes a VM from the running state and saves.
     # In: str name → Out: nothing
     def set_stopped(self, name: str) -> None:
         """Remove a VM from the running-state map."""
-        self._data.pop(name, None)
-        self._save()
+        data = self._load()
+        data.pop(name, None)
+        self._save(data)
 
     # Returns the PID for a VM if the process is still alive; cleans up state if dead.
     # In: str name → Out: int | None
     def get_pid(self, name: str) -> Optional[int]:
         """Return the recorded PID for a VM, or None."""
-        entry = self._data.get(name)
+        data  = self._load()
+        entry = data.get(name)
         if not entry:
             return None
         pid = entry.get("pid")
@@ -79,7 +89,7 @@ class VMState:
     def all_running(self) -> Dict[str, int]:
         """Return {name: pid} for all VMs that are actually still running."""
         live = {}
-        for name in list(self._data.keys()):
+        for name in list(self._load().keys()):
             pid = self.get_pid(name)
             if pid:
                 live[name] = pid
