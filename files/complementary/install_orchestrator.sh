@@ -54,7 +54,11 @@ PKGS=(python3-venv "python${PY_VER}-venv" python3-pip curl openssh-server)
 
 MISSING=()
 for pkg in "${PKGS[@]}"; do
-    dpkg -l "$pkg" &>/dev/null || MISSING+=("$pkg")
+    # dpkg -l returns success (and a "not installed" row) for packages dpkg
+    # merely *knows about* — purged/removed/never-configured — not just ones
+    # that are actually installed, so it under-reports what's missing.
+    # dpkg-query's Status field is the reliable check.
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "^install ok installed" || MISSING+=("$pkg")
 done
 if [[ ${#MISSING[@]} -gt 0 ]]; then
     sudo apt-get update -qq
@@ -64,14 +68,32 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
         done
     }
 fi
+# curl isn't optional — the Ollama install below and the health check at the
+# end both hard-depend on it. Fail loudly here instead of letting a silently
+# "skipped" package surface as a confusing "curl: command not found" deep
+# inside the Ollama step.
+command -v curl >/dev/null 2>&1 || {
+    echo "ERROR: curl is required but could not be installed. Install it manually and re-run." >&2
+    exit 1
+}
 ok "System packages done"
 
 header "Python Virtual Environment"
-if [[ ! -d "$VENV_DIR" ]]; then
-    python3 -m venv "$VENV_DIR"
-    ok "Created venv at $VENV_DIR"
-else
+if [[ -f "$VENV_DIR/bin/activate" ]]; then
     ok "Venv already exists at $VENV_DIR"
+else
+    # A previous failed attempt (e.g. the matching python3.X-venv package
+    # wasn't installed, so ensurepip couldn't run) can leave $VENV_DIR
+    # existing but incomplete — no bin/activate. Checking for activate
+    # itself, not just the directory, catches that instead of silently
+    # reusing a broken venv.
+    rm -rf "$VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+    [[ -f "$VENV_DIR/bin/activate" ]] || {
+        echo "ERROR: venv creation failed — is python3-venv installed for this Python version?" >&2
+        exit 1
+    }
+    ok "Created venv at $VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
 pip install --quiet --upgrade pip
@@ -308,6 +330,28 @@ if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
     ok "Orchestrator API responding at http://127.0.0.1:8080/health"
 else
     warn "API not yet responding — check: curl http://127.0.0.1:8080/health"
+fi
+
+# ── operator-only mode ────────────────────────────────────────────────────────
+# Skipped when called as a sub-step of install.sh (the single-machine
+# installer) — that script asks this exact question once, itself, at the very
+# end, after the client is set up too. Standalone/split-mode use of this
+# script (no install.sh wrapping it) asks here instead.
+if [[ "${GORGON_SKIP_OPERATOR_PROMPT:-0}" != "1" ]]; then
+    header "Operator-Only Mode"
+    echo "  By default, anyone with a shell on this machine or the API_TOKEN"
+    echo "  above can use gorgon — no per-user identity."
+    echo ""
+    echo "  Operator-only mode requires logging in with a username/password"
+    echo "  before gorgon (CLI or chat) works at all. You can turn this on"
+    echo "  later any time by running: gorgon login"
+    echo ""
+    read -r -p "  Enable operator-only mode now? [y/N]: " ENABLE_OPERATOR
+    if [[ "$ENABLE_OPERATOR" =~ ^[Yy] ]]; then
+        PYTHONPATH="$FILES_DIR" python3 -m orchestrator.ai.cli login
+    else
+        info "Staying operatorless for now — run 'gorgon login' any time to enable it."
+    fi
 fi
 
 LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'unknown')"

@@ -56,7 +56,7 @@ PKGS=(
     ovmf socat python3-venv "python${PY_VER}-venv" python3-pip
     acpica-tools genisoimage mtools swtpm
     cpu-checker bridge-utils curl
-    libguestfs-tools
+    libguestfs-tools libwin-hivex-perl
 )
 if [[ "$IS_WSL" == false ]]; then
     PKGS+=(libvirt-daemon-system libvirt-clients virt-viewer tigervnc-viewer)
@@ -64,7 +64,11 @@ fi
 
 MISSING=()
 for pkg in "${PKGS[@]}"; do
-    dpkg -l "$pkg" &>/dev/null || MISSING+=("$pkg")
+    # dpkg -l returns success (and a "not installed" row) for packages dpkg
+    # merely *knows about* — purged/removed/never-configured — not just ones
+    # that are actually installed, so it under-reports what's missing.
+    # dpkg-query's Status field is the reliable check.
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "^install ok installed" || MISSING+=("$pkg")
 done
 if [[ ${#MISSING[@]} -gt 0 ]]; then
     sudo apt-get update -qq
@@ -74,6 +78,12 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
         done
     }
 fi
+# curl isn't optional — the health check at the end of this script depends
+# on it. Fail loudly here instead of a confusing failure much later.
+command -v curl >/dev/null 2>&1 || {
+    echo "ERROR: curl is required but could not be installed. Install it manually and re-run." >&2
+    exit 1
+}
 ok "System packages done"
 
 header "KVM Permissions"
@@ -124,11 +134,21 @@ else
 fi
 
 header "Python Virtual Environment"
-if [[ ! -d "$VENV_DIR" ]]; then
-    python3 -m venv "$VENV_DIR"
-    ok "Created venv at $VENV_DIR"
-else
+if [[ -f "$VENV_DIR/bin/activate" ]]; then
     ok "Venv already exists at $VENV_DIR"
+else
+    # A previous failed attempt (e.g. the matching python3.X-venv package
+    # wasn't installed, so ensurepip couldn't run) can leave $VENV_DIR
+    # existing but incomplete — no bin/activate. Checking for activate
+    # itself, not just the directory, catches that instead of silently
+    # reusing a broken venv.
+    rm -rf "$VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+    [[ -f "$VENV_DIR/bin/activate" ]] || {
+        echo "ERROR: venv creation failed — is python3-venv installed for this Python version?" >&2
+        exit 1
+    }
+    ok "Created venv at $VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
 pip install --quiet --upgrade pip

@@ -79,7 +79,9 @@ fi
 # ── run orchestrator setup ────────────────────────────────────────────────────
 header "Orchestrator Setup (Ollama + HTTP API)"
 
-API_TOKEN="$TOKEN" bash "$SCRIPT_DIR/install_orchestrator.sh"
+# Suppress install_orchestrator.sh's own operator-mode prompt — asked once,
+# below, after the client is set up too (not mid-way through this combined install).
+GORGON_SKIP_OPERATOR_PROMPT=1 API_TOKEN="$TOKEN" bash "$SCRIPT_DIR/install_orchestrator.sh"
 
 # ── run executor setup ────────────────────────────────────────────────────────
 header "Executor Setup (QEMU + executor server)"
@@ -90,6 +92,23 @@ EXECUTOR_TOKEN="$TOKEN" bash "$SCRIPT_DIR/install_executor.sh"
 header "Client Setup (AI Chat UI → localhost)"
 
 SERVER_URL="http://localhost:8080" API_TOKEN="$TOKEN" bash "$SCRIPT_DIR/setup_client.sh"
+
+# ── operator-only mode ────────────────────────────────────────────────────────
+FILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+header "Operator-Only Mode"
+echo "  By default, anyone with a shell on this machine or the API_TOKEN"
+echo "  above can use gorgon — no per-user identity."
+echo ""
+echo "  Operator-only mode requires logging in with a username/password"
+echo "  before gorgon (CLI or chat) works at all. You can turn this on"
+echo "  later any time by running: gorgon login"
+echo ""
+read -r -p "  Enable operator-only mode now? [y/N]: " ENABLE_OPERATOR
+if [[ "$ENABLE_OPERATOR" =~ ^[Yy] ]]; then
+    PYTHONPATH="$FILES_DIR" python3 "$FILES_DIR/client/client_wrapper.py" login
+else
+    echo "  Staying operatorless for now — run 'gorgon login' any time to enable it."
+fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
 echo ""
