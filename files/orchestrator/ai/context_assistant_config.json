@@ -201,28 +201,7 @@
     "it", "me", "i", "please", "can", "you", "just"
   ],
 
-  "protected_names": [
-    "called", "named",
-    "create", "delete", "launch", "start", "stop", "run", "boot", "halt",
-    "pause", "suspend", "kill", "destroy", "wipe", "erase", "remove", "drop",
-    "clone", "copy", "duplicate", "mirror", "replicate",
-    "resize", "expand", "grow", "enlarge", "extend",
-    "snapshot", "snap", "backup", "checkpoint", "restore", "revert", "rollback",
-    "update", "configure", "reconfigure", "config", "configuration", "setting", "settings",
-    "monitor", "watch", "observe", "status", "state",
-    "logs", "log", "debug", "diagnose",
-    "list", "show", "view", "display", "print",
-    "command", "cmd", "hmp", "qmp",
-    "network", "profile", "iso", "disk", "drive", "shell", "console",
-    "system", "hardware", "resource", "limit",
-    "new", "add", "build", "make", "deploy", "provision", "setup", "spin",
-    "open", "connect", "attach", "link", "join",
-    "check", "scan", "find", "search",
-    "vm", "virtual", "machine", "window", "terminal", "screen", "gui",
-    "up", "down", "off", "on", "out", "into", "back", "over",
-    "running", "alive", "active", "doing", "going",
-    "all", "some", "any", "every"
-  ],
+  "protected_names": [],
 
   "opposing_pairs": [
     ["create_vm",       "delete_vm"],

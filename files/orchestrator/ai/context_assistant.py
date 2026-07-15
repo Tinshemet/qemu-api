@@ -115,15 +115,25 @@ def scan_tool_hints(prompt: str) -> List[str]:
 
 # ── Slot extractor ─────────────────────────────────────────────────────────────
 
-# These two "name" patterns have no anchor word signaling "the next token is a
-# name" — they fire on any "vm <word>" / "on <word>" substring, including status
-# questions like "is vm running" or "turn on X". Unlike anchored patterns
-# (called/named/quoted), a bare-pattern capture is only trusted if it looks like
-# a real identifier (contains a digit, dash, or underscore — e.g. probe9_min,
-# dev-box) rather than relying on an ever-growing denylist of English words.
-_BARE_NAME_PATTERNS = {
-    r"\bvm ([\w][\w\-_\.]*)",
-    r"\bon ([\w][\w\-_\.]*)",
+# A "name" capture is only trusted when we're confident the token really is a
+# name. Two signals establish that: an ANCHORED pattern (called/named/quoted)
+# whose anchor word explicitly announces the next token as a name, OR — for
+# every other, unanchored name pattern (`vm X`, `on X`, `for X`, verb+X) — the
+# token LOOKING like an identifier (contains a digit, dash, or underscore, e.g.
+# probe9_min / dev-box). Real VM/entity names in this codebase always carry that
+# shape; the false captures these bare patterns produce ("is vm running", "stop
+# status", "make room for logs") never do. This anchored-exempt + shape-check-
+# the-rest rule replaces what used to be an ever-growing 112-word denylist of
+# English words (`protected_names`, now empty) — see project memory
+# project-protected-names-heuristic. Listing the ANCHORED patterns (rather than
+# the bare ones) also fails safe: if a pattern string ever drifts out of sync
+# with the config, the token gets shape-checked (stricter) instead of silently
+# re-opening the false-capture hole the way the old bare-list did.
+_ANCHORED_NAME_PATTERNS = {
+    r'\bcalled ([\w][\w\-_\.]*)',
+    r'\bnamed ([\w][\w\-_\.]*)',
+    r'"([\w][\w\-_\.]*)"',
+    r"'([\w][\w\-_\.]*)'",
 }
 _IDENTIFIER_SHAPE = re.compile(r"[-_0-9]")
 
@@ -146,7 +156,10 @@ def extract_slots(prompt: str) -> Dict[str, Optional[str]]:
                     candidate = m.group(1)
                     if candidate in _STOPWORDS or candidate in _PROTECTED_NAMES:
                         continue
-                    if p in _BARE_NAME_PATTERNS and not _IDENTIFIER_SHAPE.search(candidate):
+                    # Unanchored name captures must look like an identifier;
+                    # anchored ones (called/named/quoted) are trusted as-is.
+                    if (field == "name" and p not in _ANCHORED_NAME_PATTERNS
+                            and not _IDENTIFIER_SHAPE.search(candidate)):
                         continue
                     found = candidate
                     break
