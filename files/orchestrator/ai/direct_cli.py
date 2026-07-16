@@ -31,8 +31,9 @@ from orchestrator.executor_client import (
 from orchestrator.auth import store as _auth_store, sessions as _auth_sessions
 from .session import clear_session
 from shared.display import (
-    console, render_compat, render_monitor, render_profiles, render_templates,
-    render_snapshots, render_status, render_system, render_vm_list,
+    console, render_compat, render_fleet, render_fleets, render_monitor,
+    render_profiles, render_templates, render_snapshots, render_status,
+    render_system, render_vm_list,
 )
 try:
     from shared.executioner.tool_executor import manager
@@ -129,6 +130,9 @@ def _show_stealth_popup(vm_name: str, setup_cmd: str) -> None:
 
 # login/logout bypass the gate itself (nothing to check a session against
 # yet); everything else — including "operator" management — is held to it.
+# Mirror of client/cli/commands.py's _operator_gate_ok: that module is the
+# OTHER in-process path to `manager` (client_wrapper.py routes `gorgon <cmd>`
+# there, not here), so any change to this gate must be made in both files.
 _AUTH_EXEMPT_COMMANDS = {"login", "logout"}
 
 
@@ -417,6 +421,48 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
         if r.get("stderr"):
             console.print(f"[error]{r['stderr']}[/error]", end="")
         console.print(f"[dim]exit code: {r.get('exit_code')}[/dim]")
+
+    elif cmd == "label":
+        # label add <vm> <label> · label remove <vm> <label> · label list
+        sub = rest[0] if rest else None
+        if sub in ("add", "remove") and len(rest) >= 3:
+            r = (manager.add_label if sub == "add" else manager.remove_label)(rest[1], rest[2])
+            style = "success" if r.get("success") else "error"
+            console.print(f"[{style}]{r.get('message', r.get('error', 'unknown error'))}[/{style}]")
+        elif sub == "list":
+            render_fleets(manager.list_labels().get("usage", {}))
+        else:
+            console.print("[error]Usage: gorgon label add|remove <vm> <label>  |  "
+                          "gorgon label list[/error]")
+
+    elif cmd == "fleet":
+        # fleet                       → list current fleets (labels → member VMs)
+        # fleet <label>               → preview members of one fleet
+        # fleet <label> exec <cmd...> → run a command on every member
+        # fleet <label> stop|launch|ping|status → broadcast that action
+        if not rest:
+            render_fleets(manager.list_labels().get("usage", {}))
+            return
+        label  = rest[0]
+        action = rest[1] if len(rest) > 1 else None
+        if action is None:
+            # Preview: show the members of this fleet (status action, read-only)
+            r = manager.fleet(label, "status")
+            render_fleet(r) if r.get("results") else console.print(
+                f"[warn]{r.get('error', 'No members.')}[/warn]")
+            return
+        if action == "exec":
+            if len(rest) < 3:
+                console.print("[error]Usage: gorgon fleet <label> exec <command>[/error]")
+                return
+            r = manager.fleet(label, "exec", command=" ".join(rest[2:]))
+        elif action in ("ping", "status", "stop", "launch"):
+            r = manager.fleet(label, action)
+        else:
+            console.print(f"[error]Unknown fleet action '{action}'. "
+                          f"Use: exec, ping, status, stop, launch.[/error]")
+            return
+        render_fleet(r)
 
     elif cmd == "guest-agent-enable" and rest:
         r = manager.update_config(rest[0], {"guest_agent": True})

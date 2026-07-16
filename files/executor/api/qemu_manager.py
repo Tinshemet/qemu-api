@@ -5,8 +5,11 @@ QemuManager is the single public façade for all VM lifecycle operations:
 create, clone, launch, stop, status, monitor, snapshots, disk resize,
 resource limits, network, display, shell, config, and log analysis.
 
-Delegates to five focused mixin classes; this file provides only the
-shared state, private helpers, and __init__.
+Delegates to eight focused mixin classes (stealth, operations, diagnostics,
+fleet, guest, monitoring, runtime, lifecycle); this file provides only the
+shared state, private helpers, and __init__. Per-clone hostname, credential, and
+offline-guest provisioning live in sibling function modules (_vm_hostname,
+_vm_credentials, _vm_guest_offline) imported lazily where used, not mixed in.
 """
 import json
 import os
@@ -18,6 +21,7 @@ import psutil
 
 from ._vm_constants  import VM_BASE_DIR
 from ._vm_diagnostics import _VmDiagnosticsMixin
+from ._vm_fleet      import _VmFleetMixin
 from ._vm_guest      import _VmGuestMixin
 from ._vm_lifecycle  import _VmLifecycleMixin
 from ._vm_monitoring import _VmMonitoringMixin
@@ -32,6 +36,7 @@ class QemuManager(
     _VmStealthMixin,
     _VmOperationsMixin,
     _VmDiagnosticsMixin,
+    _VmFleetMixin,
     _VmGuestMixin,
     _VmMonitoringMixin,
     _VmRuntimeMixin,

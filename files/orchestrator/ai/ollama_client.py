@@ -14,6 +14,7 @@ from typing import Dict, List
 import requests
 
 from orchestrator.executor_client import get_ovmf as _get_ovmf, get_profiles as list_profiles
+from .active_library import LIBRARY
 from .tools        import TOOLS
 from shared.display import console
 import orchestrator.preflight.host_probe as _host_probe
@@ -35,6 +36,15 @@ def _build_system_prompt() -> str:
         "\nCUSTOM MODE ACTIVE (-cu): product_name and manufacturer can be any fictional values. "
         "Skip all warnings about unverifiable hardware."
     ) if _host_probe._CUSTOM_MODE else ""
+
+    # Active Library: current system state + relations, so the model resolves
+    # references ("same OS as test1", "all redteam VMs") from ground truth
+    # instead of re-deriving them from chat history. Refreshed every turn.
+    _digest = LIBRARY.ai_digest()
+    state_section = (
+        f"\n\n═══ CURRENT STATE (live registry — resolve any reference against this) ═══\n{_digest}\n"
+        if _digest else ""
+    )
 
     return f"""You are the DOORMAN — a Doorman-class assistant: the front desk of gorgon, its friendly, supervised, non-cyber face. A human operator is always in the loop; you assist them and act on their behalf, never autonomously, and you are not a security agent.
 You are an expert at managing virtual machines using QEMU/KVM. Respond concisely and use tools immediately.{custom_note}
@@ -109,7 +119,7 @@ ARM/Pi  → kvm=false + qemu_binary=qemu-system-aarch64 + machine_type=virt
     "don't", "forget it", or any clear refusal — accept it immediately with one word:
     "Understood." Do NOT rephrase the question, offer the same action again, or ask
     "are you sure?". Drop the topic entirely and wait for the next request.
-"""
+{state_section}"""
 
 
 # POSTs the full chat payload (with tools) to the Ollama API and returns the parsed JSON response.

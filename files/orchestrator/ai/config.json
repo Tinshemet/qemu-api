@@ -1,7 +1,7 @@
 {
     "ollama": {
         "url": "http://localhost:11434",
-        "model": "qwen2.5:7b",
+        "model": "llama3.1:8b",
         "temperature": 0.0,
         "num_ctx": 8192,
         "timeout": 120
@@ -155,6 +155,10 @@
         "count",
         "check"
     ],
+    "fleet_confirm_actions": [
+        "exec",
+        "stop"
+    ],
     "confirm_yn": {
         "update_config": [
             "name",
@@ -270,5 +274,5 @@
         "critical_consec":   6,
         "warn_consec":       3
     },
-    "model": "qwen2.5:7b"
+    "model": "llama3.1:8b"
 }

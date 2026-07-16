@@ -61,6 +61,8 @@ try:
         render_compat,
         render_snapshots,
         render_system,
+        render_fleet,
+        render_fleets,
     )
 except ImportError:
     from rich.console import Console
@@ -78,6 +80,8 @@ except ImportError:
     render_compat    = _render_json
     render_snapshots = _render_json
     render_system    = _render_json
+    render_fleet     = _render_json
+    render_fleets    = _render_json
 
 _CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
 try:
@@ -544,6 +548,53 @@ def run(args: List[str], verbose: bool = False) -> None:
                 f.write(cfg_str)
 
         console.print(f"[bold green]✓ {vm_name} bundle extracted to {dest_dir}/{vm_name}[/bold green]")
+
+    elif cmd == "label":
+        # label add <vm> <label> · label remove <vm> <label> · label list
+        _require_manager()
+        sub = rest[0] if rest else None
+        if sub in ("add", "remove") and len(rest) >= 3:
+            r = (manager.add_label if sub == "add" else manager.remove_label)(rest[1], rest[2])
+            style = "green" if r.get("success") else "red"
+            console.print(f"[bold {style}]{r.get('message', r.get('error', 'unknown error'))}[/bold {style}]")
+            pp(r)
+        elif sub == "list":
+            render_fleets(manager.list_labels().get("usage", {}))
+        else:
+            console.print("[bold red]Usage: gorgon label add|remove <vm> <label>  |  "
+                          "gorgon label list[/bold red]")
+
+    elif cmd == "fleet":
+        # fleet                       → list current fleets (labels → member VMs)
+        # fleet <label>               → preview members of one fleet
+        # fleet <label> exec <cmd...> → run a command on every member
+        # fleet <label> stop|launch|ping|status → broadcast that action
+        _require_manager()
+        if not rest:
+            render_fleets(manager.list_labels().get("usage", {}))
+            return
+        label  = rest[0]
+        action = rest[1] if len(rest) > 1 else None
+        if action is None:
+            r = manager.fleet(label, "status")
+            if r.get("results"):
+                render_fleet(r)
+            else:
+                console.print(f"[yellow]{r.get('error', 'No members.')}[/yellow]")
+            return
+        if action == "exec":
+            if len(rest) < 3:
+                console.print("[bold red]Usage: gorgon fleet <label> exec <command>[/bold red]")
+                return
+            r = manager.fleet(label, "exec", command=" ".join(rest[2:]))
+        elif action in ("ping", "status", "stop", "launch"):
+            r = manager.fleet(label, action)
+        else:
+            console.print(f"[bold red]Unknown fleet action '{action}'. "
+                          f"Use: exec, ping, status, stop, launch.[/bold red]")
+            return
+        render_fleet(r)
+        pp(r)
 
     elif cmd == "login":
         if _auth_store is None:

@@ -349,6 +349,23 @@
     {
         "type": "function",
         "function": {
+            "name": "fleet",
+            "description": "Broadcast ONE action to every VM carrying a label (a 'fleet') and return per-VM results. The label matches either an auto-flag (stealth/hardened/bridge/vpn) or a user label (e.g. 'redteam'). Use this instead of calling per-VM tools in a loop when the user wants to act on a whole group at once ('run X on all my redteam VMs', 'stop the stealth fleet', 'ping every work_vm'). action='exec' runs a guest command on each member (needs 'command'; each member must be running with guest_agent enabled); 'ping'/'status' observe; 'stop'/'launch' control lifecycle. To just see which VMs are in a fleet, use list_vms with the label filter instead.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label":   {"type": "string", "description": "Flag or user label selecting the fleet members (e.g. 'redteam', 'stealth')."},
+                    "action":  {"type": "string", "enum": ["exec", "ping", "status", "stop", "launch"], "description": "The single action to apply to every member."},
+                    "command": {"type": "string", "description": "Shell line to run on each member when action='exec' (executed via /bin/sh -c)."},
+                    "timeout": {"type": "integer", "description": "Per-command timeout in seconds for action='exec' (default from config)."}
+                },
+                "required": ["label", "action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "generate_guest_agent_setup",
             "description": "Write a guest-side script that installs and enables qemu-guest-agent inside a Linux VM. Call this when the user wants to enable guest-agent command execution on a VM that doesn't have it running yet. Not available for Windows guests (manual MSI install required).",
             "parameters": {

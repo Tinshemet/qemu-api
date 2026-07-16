@@ -36,7 +36,7 @@ from executor.api.qemu_manager import QemuManager
 # This module has no orchestrator imports — it runs on executor-only machines.
 from shared.display import (
     console,
-    render_compat, render_monitor, render_profiles, render_templates,
+    render_compat, render_fleet, render_monitor, render_profiles, render_templates,
     render_snapshots, render_status, render_system,
     render_vm_failure, render_vm_list,
 )
@@ -767,6 +767,17 @@ def _run(
                 console.print(f"[{style}]{args['name']}: guest agent {state}[/{style}]")
             else:
                 console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
+        return result
+
+    elif tool_name == "fleet":
+        result = manager.fleet(
+            args["label"], args["action"],
+            command=args.get("command"),
+            args=args.get("args"),
+            timeout=args.get("timeout"),
+        )
+        if not verbose:
+            render_fleet(result)
         return result
 
     elif tool_name == "generate_guest_agent_setup":

@@ -66,6 +66,18 @@ COMMAND_CATALOG: List[Dict[str, Any]] = [
      "related": ["delete", "remove", "destroy", "wipe"],
      "ai_example": "delete dev", "category": "VM lifecycle"},
 
+    # ── Fleet ───────────────────────────────────────────────────────────────
+    {"command": "label", "tools": ["add_label", "remove_label", "list_labels"],
+     "args": "add|remove <vm> <label>  |  list",
+     "desc": "Add or remove a VM's fleet label, or list all labels and their members.",
+     "related": ["label", "tag", "untag", "unlabel", "group vm", "add label", "remove label"],
+     "ai_example": "tag hackerman with redteam", "category": "Fleet"},
+    {"command": "fleet", "tools": ["fleet"],
+     "args": "[label] [exec <cmd> | stop | launch | ping | status]",
+     "desc": "Broadcast one action across every VM in a labeled fleet; no args lists your fleets.",
+     "related": ["fleet", "broadcast", "group", "run on all", "act on all", "whole fleet"],
+     "ai_example": "run 'uptime' on all my redteam VMs", "category": "Fleet"},
+
     # ── Disk & snapshots ────────────────────────────────────────────────────
     {"command": "resize", "tools": ["resize_disk"], "args": "<vm> <gb>",
      "desc": "Grow the VM's disk to <gb> GB.",
@@ -141,6 +153,6 @@ COMMAND_CATALOG: List[Dict[str, Any]] = [
 
 # Header order for grouping in the rendered help.
 CATEGORY_ORDER: List[str] = [
-    "VM lifecycle", "Disk & snapshots", "Networking",
+    "VM lifecycle", "Fleet", "Disk & snapshots", "Networking",
     "Inspect", "Stealth", "Transfer",
 ]

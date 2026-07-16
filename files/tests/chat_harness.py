@@ -164,6 +164,17 @@ def run_chat(
     _seam("_preflight_check", _preflight_check)
     _seam("check_context", _check_context)
     _seam("extract_slots", _extract_slots)
+    # Stub the Active Library like every other external seam: unbuilt, so the
+    # context-assistant falls back to its live list_vms probe (the behavior these
+    # characterization tests pin), and snapshot/apply are inert. The Library's own
+    # behavior is covered by test_active_library.
+    class _StubLibrary:
+        built = False
+        def snapshot(self, manager=None): return self
+        def apply(self, *_a, **_k):        return False
+        def known_names(self):             return set()
+        def ai_digest(self):               return ""
+    _seam("LIBRARY", _StubLibrary())
     _seam("load_session", lambda: [])
     _seam("save_session", _save)
     _seam("detect_drift", lambda _m: None)

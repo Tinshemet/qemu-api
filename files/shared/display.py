@@ -358,3 +358,67 @@ def render_vnc_connect(con: Console, result: dict) -> None:
         border_style="green",
         title=f"[bold]VNC Connection — port {port}[/bold]",
     ))
+
+
+def _fleet_member_summary(action: str, res: Dict) -> str:
+    """One-line, per-member outcome cell for the fleet results table."""
+    if not isinstance(res, dict):
+        return "[red]bad result[/red]"
+    if res.get("success") is False or res.get("error"):
+        return f"[red]{res.get('error', 'failed')}[/red]"
+    if action == "exec":
+        out = (res.get("stdout") or "").strip().replace("\n", " ⏎ ")
+        if len(out) > 60:
+            out = out[:57] + "…"
+        code = res.get("exit_code")
+        tail = f" [dim](exit {code})[/dim]" if code not in (0, None) else ""
+        return f"{out or '[dim](no output)[/dim]'}{tail}"
+    if action == "ping":
+        return "[green]alive[/green]" if res.get("alive") else "[yellow]not responding[/yellow]"
+    if action == "status":
+        return res.get("state", "?")
+    return "[green]ok[/green]"  # stop / launch
+
+
+def render_fleet(result: Dict) -> None:
+    """Render a fleet broadcast result: header line + per-member outcome table."""
+    if not result.get("results"):
+        console.print(f"[warn]{result.get('error', 'No fleet members matched.')}[/warn]")
+        return
+
+    action = result.get("action", "")
+    label  = result.get("label", "")
+    ok, failed, count = result.get("ok", 0), result.get("failed", 0), result.get("count", 0)
+    fail_txt = f" · [red]{failed} failed[/red]" if failed else ""
+    console.print(
+        f"[bold]fleet {action}[/bold] on [cyan]{label}[/cyan] — "
+        f"{count} VM(s): [green]{ok} ok[/green]{fail_txt}"
+    )
+
+    t = Table(box=box.ROUNDED, border_style="cyan", header_style="bold cyan")
+    t.add_column("VM", style="bold white")
+    t.add_column("Result")
+    for name, res in result["results"].items():
+        t.add_row(name, _fleet_member_summary(action, res))
+    console.print(t)
+
+
+def render_fleets(usage: Dict[str, List[str]]) -> None:
+    """Render the current fleets — each label and the VMs that carry it.
+
+    ``usage`` is the ``list_labels()["usage"]`` map ({label: [vm, ...]}).
+    """
+    fleets = {lb: vms for lb, vms in (usage or {}).items() if vms}
+    if not fleets:
+        console.print("[warn]No fleets yet.[/warn] "
+                      "[dim]Label VMs (e.g. `gorgon label add <vm> redteam`) to form one.[/dim]")
+        return
+    t = Table(box=box.ROUNDED, border_style="cyan", header_style="bold cyan",
+              title="[bold]Your fleets[/bold]")
+    t.add_column("Fleet", style="bold cyan")
+    t.add_column("#", style="dim", justify="right", width=3)
+    t.add_column("VMs", style="white")
+    for label in sorted(fleets):
+        vms = fleets[label]
+        t.add_row(label, str(len(vms)), ", ".join(vms))
+    console.print(t)

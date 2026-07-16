@@ -22,6 +22,7 @@ from .session import (
     save_session, set_auto_clear, set_loop_max, get_loop_max,
 )
 from shared.display import console, print_banner
+from .active_library     import LIBRARY
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots
 from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
@@ -197,6 +198,10 @@ def chat_loop(verbose: bool = False) -> None:
         console.print("[dim]Session auto-cleared (auto_clear=true in config).[/dim]")
 
     messages = load_session()
+
+    # Build the Active Library once at session start; the per-turn system prompt
+    # reads its digest, and each executed tool keeps it current via apply().
+    LIBRARY.snapshot()
 
     drift_result = detect_drift(messages)
     if drift_result:

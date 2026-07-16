@@ -17,6 +17,7 @@ from shared.display import console, render_vm_specs
 from orchestrator.executor_client import execute_tool, API_URL, _VM_TOOLS
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
 from orchestrator.preflight.validator import _preflight_check, _show_preflight_warning
+from .active_library import LIBRARY
 from .context_assistant import check_context
 
 _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
@@ -36,7 +37,44 @@ _CONFIRM_YN     = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
 _CONFIRM_NAME   = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
 _RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
 _CRITICAL_TOOLS = set(_CFG.get("critical_tools", ["delete_vm"]))   # irreversible → double-confirm
+_FLEET_CONFIRM_ACTIONS = set(_CFG.get("fleet_confirm_actions", ["exec", "stop"]))  # fleet actions needing y/n
 _RECENT_CONTEXT_WINDOW = _CFG["chat"].get("recent_context_window", 6)  # msgs kept for multi-turn context
+
+
+def _fleet_confirm(raw_args: dict, state: "TurnState", cancel) -> GateOutcome:
+    """y/n confirm for the high-stakes fleet actions (exec + stop).
+
+    ``exec`` runs a command on every member and ``stop`` halts the whole group,
+    so both warrant an explicit confirm; ``ping``/``status``/``launch`` pass
+    straight through. Confirmed once per (action, label, command) within a turn,
+    matching the batch-skip behavior of the y/n gate.
+
+    Returns EXIT (Ctrl-C/EOF), CANCELLED (declined), or PROCEED.
+    """
+    action = (raw_args.get("action") or "").strip().lower()
+    if action not in _FLEET_CONFIRM_ACTIONS:
+        return GateOutcome.PROCEED
+    label   = raw_args.get("label", "")
+    command = raw_args.get("command", "")
+    key = ("fleet", action, label, command)
+    if key in state.confirmed_values:
+        return GateOutcome.PROCEED
+
+    if action == "exec":
+        what = f"run [bold]{command or '(no command)'}[/bold] on every VM labeled [bold]{label}[/bold]"
+    else:
+        what = f"stop every VM labeled [bold]{label}[/bold]"
+    console.print(f"\n[yellow]⚠  fleet {action}: {what}[/yellow]")
+    try:
+        answer = console.input("[bold cyan]Proceed? (y/n):[/bold cyan] ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return GateOutcome.EXIT
+    if answer not in ("y", "yes", "1"):
+        cancel()
+        return GateOutcome.CANCELLED
+    state.confirmed_values.add(key)
+    return GateOutcome.PROCEED
 
 
 def _safety_gate(tool_name: str, raw_args: dict, state: "TurnState",
@@ -56,14 +94,6 @@ def _safety_gate(tool_name: str, raw_args: dict, state: "TurnState",
         _safety_gate("delete_vm", {"name": "box"}, state, messages)
         # prompts YES + name; → GateOutcome.PROCEED once both match
     """
-    conf_entry = _CONFIRM_YN.get(tool_name) or _CONFIRM_NAME.get(tool_name)
-    if not conf_entry:
-        return GateOutcome.PROCEED
-    field, verb = conf_entry
-    proposed = raw_args.get(field, "")
-    if (field, proposed) in state.clarified_values or (field, proposed) in state.confirmed_values:
-        return GateOutcome.PROCEED
-
     def cancel() -> None:
         """Append the cancellation messages and mark the operation cancelled."""
         messages.append({
@@ -76,6 +106,21 @@ def _safety_gate(tool_name: str, raw_args: dict, state: "TurnState",
             "content": "_INTERNAL_ The user cancelled this operation. Ask what they would like to do instead.",
         })
         state.op_cancelled = True
+
+    # Fleet broadcast is action-conditional: exec (runs a command across the whole
+    # group) and stop (halts the whole group) get a y/n confirm; ping/status/launch
+    # pass through. A plain _CONFIRM_YN entry is per-tool, not per-action, so it
+    # can't express this — handle it explicitly.
+    if tool_name == "fleet":
+        return _fleet_confirm(raw_args, state, cancel)
+
+    conf_entry = _CONFIRM_YN.get(tool_name) or _CONFIRM_NAME.get(tool_name)
+    if not conf_entry:
+        return GateOutcome.PROCEED
+    field, verb = conf_entry
+    proposed = raw_args.get(field, "")
+    if (field, proposed) in state.clarified_values or (field, proposed) in state.confirmed_values:
+        return GateOutcome.PROCEED
 
     if _is_critical(tool_name, raw_args):
         # Double confirm: YES → VM name
@@ -245,7 +290,10 @@ def _context_assistant_gate(tool_name: str, raw_args: dict, user_input: str,
         return raw_args, GateOutcome.PROCEED
     known_names = None
     if tool_name in _VM_TOOLS:
-        known_names = {v["name"] for v in execute_tool("list_vms", {}, verbose=True, log=False)}
+        # Ground truth from the Active Library (no live list_vms round-trip);
+        # fall back to a live query only if the Library hasn't been built.
+        known_names = (LIBRARY.known_names() if LIBRARY.built
+                       else {v["name"] for v in execute_tool("list_vms", {}, verbose=True, log=False)})
     hint = check_context(user_input, tool_name, raw_args, recent_context=recent_context,
                           known_names=known_names)
     if not hint:
@@ -560,6 +608,9 @@ def _process_tool_call(tc: dict, user_input: str, ui: str, state: "TurnState",
     else:
         result = execute_tool(tool_name, raw_args, verbose)
         state.tool_executed = True
+        # Keep the Active Library current: targeted update of just the entity
+        # this tool touched (no-op for read-only tools).
+        LIBRARY.apply(tool_name, raw_args)
 
     # Remote VNC launch — render connection panel and strip from tool result.
     if (

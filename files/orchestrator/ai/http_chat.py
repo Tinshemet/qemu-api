@@ -18,6 +18,7 @@ from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from orchestrator.executor_client import execute_tool, _VM_TOOLS
 from orchestrator.preflight.validator import _preflight_check
 from .ollama_client import _call_ollama
+from .active_library import LIBRARY
 from .context_assistant import check_context, extract_slots
 from .session import get_loop_max
 from .chat_turn import _is_critical
@@ -35,6 +36,7 @@ _STATE_QUERY_WORDS = set(_CFG.get("state_query_words", []))
 _OS_KEYWORDS  = set(_CFG["os_keywords_gate"])
 _CONFIRM_YN   = {k: tuple(v) for k, v in _CFG["confirm_yn"].items()}
 _CONFIRM_NAME = {k: tuple(v) for k, v in _CFG["confirm_name"].items()}
+_FLEET_CONFIRM_ACTIONS = set(_CFG.get("fleet_confirm_actions", ["exec", "stop"]))  # fleet actions needing y/n
 
 
 def process_message(
@@ -74,6 +76,11 @@ def process_message(
 
     messages = list(messages)
     messages.append({"role": "user", "content": user_input})
+
+    # Active Library: build once (server process is long-lived; apply() keeps it
+    # fresh per action thereafter). The system prompt reads its digest each turn.
+    if not LIBRARY.built:
+        LIBRARY.snapshot()
 
     _ui = user_input.lower().strip()
     # "action" = any tool-worthy intent (an action OR a state/read query), so
@@ -140,7 +147,8 @@ def process_message(
             if not _context_assistant_fired:
                 _known_names = None
                 if tool_name in _VM_TOOLS:
-                    _known_names = {v["name"] for v in execute_tool("list_vms", {}, verbose=True, log=False)}
+                    _known_names = (LIBRARY.known_names() if LIBRARY.built
+                                    else {v["name"] for v in execute_tool("list_vms", {}, verbose=True, log=False)})
                 _ca_hint = check_context(user_input, tool_name, raw_args, recent_context=_recent_context,
                                           known_names=_known_names)
                 if _ca_hint:
@@ -216,6 +224,37 @@ def process_message(
                 raw_args = dict(raw_args)
                 raw_args["force"] = True
 
+            # ── Fleet broadcast confirm (action-conditional: exec + stop) ──
+            # fleet isn't in _CONFIRM_YN (that map is per-tool, not per-action),
+            # so it's gated here explicitly — mirrors _fleet_confirm in chat_turn.
+            if tool_name == "fleet":
+                _fa   = (raw_args.get("action") or "").strip().lower()
+                _fkey = ("fleet", _fa, raw_args.get("label", ""), raw_args.get("command", ""))
+                if _fa in _FLEET_CONFIRM_ACTIONS and _fkey not in _confirmed_values:
+                    if not auto_confirm:
+                        if _fa == "exec":
+                            _fq = (f"Run '{raw_args.get('command','')}' on every VM "
+                                   f"labeled '{raw_args.get('label','')}'?")
+                        else:
+                            _fq = f"Stop every VM labeled '{raw_args.get('label','')}'?"
+                        messages.pop()
+                        return {
+                            "text": "",
+                            "messages": messages,
+                            "tool_results": _tool_results,
+                            "needs_input": {
+                                "type":      "confirm_yn",
+                                "question":  _fq,
+                                "options":   ["Yes", "Cancel"],
+                                "field":     "action",
+                                "tool_name": "fleet",
+                                "proposed":  _fa,
+                            },
+                            "pending_tool": {"tool_name": tool_name, "args": raw_args,
+                                             "critical": False},
+                        }
+                    _confirmed_values.add(_fkey)
+
             # ── Safety confirmation gate ───────────────────────────────────
             _conf_entry = _CONFIRM_YN.get(tool_name) or _CONFIRM_NAME.get(tool_name)
             if _conf_entry:
@@ -290,6 +329,7 @@ def process_message(
                 result = execute_tool(tool_name, raw_args, verbose)
                 _tool_executed_this_turn = True
                 _tool_results.append({"tool": tool_name, "args": raw_args, "result": result})
+                LIBRARY.apply(tool_name, raw_args)   # targeted registry update
 
             # Clarify response from executor — pause and return to client.
             if isinstance(result, dict) and result.get("clarify"):
