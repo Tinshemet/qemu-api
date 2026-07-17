@@ -229,6 +229,10 @@ REVERT_TOOLS:     frozenset       = frozenset(t for t, s in TOOL_SPECS.items() i
 TOOL_EFFECTS:     Dict[str, Any]  = {t: s["effect"] for t, s in TOOL_SPECS.items() if s["effect"]}
 REQUIRED_FIELDS:  Dict[str, list] = {t: s["req"] for t, s in TOOL_SPECS.items() if s["req"]}
 
+# Which arg names the VM a tool's effect targets (default "name"; clone writes the
+# NEW vm). Tool metadata → lives WITH the tool data; imported by the Active Library.
+TOOL_NAME_ARG:    Dict[str, str]  = {"clone_vm": "new_name"}
+
 # Single-source link, enforced: TOOL_SPECS is THE authority for which tools exist;
 # COMMAND_CATALOG only REFERENCES them. A command may name only registry tools
 # (client-side commands use tools:[]). Fails LOUD at import if the catalog ever

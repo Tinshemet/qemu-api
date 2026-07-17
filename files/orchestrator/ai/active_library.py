@@ -39,20 +39,16 @@ def _local_manager():
         return None
 
 
-# ── Tool → compartment effect map (targeted updates) ───────────────────────────
-# Each mutating tool touches exactly one entity/compartment; read-only tools are
-# absent → no update. The VM-name argument differs per tool (clone writes a new
-# name), so the effect records where to read it from.
-_VM_NAME_ARG = {"clone_vm": "new_name"}          # default is "name"
-
-# Derived from the canonical tool registry (executor/command_catalog.py) — which
-# compartment each tool's effect refreshes. No hand-maintained copy (this map used
-# to miss newly-added tools like `fleet`, leaving the digest stale after a
-# fleet stop/launch). Guarded so an orchestrator-only checkout degrades to no-op.
+# ── Tool metadata — DERIVED from the canonical registry (executor/command_catalog) ─
+# _TOOL_EFFECTS = which compartment each mutating tool refreshes (read-only tools
+# absent → no update); _VM_NAME_ARG = which arg names the VM its effect targets
+# (clone writes a new name). Both are tool metadata → single-sourced in the
+# registry, not hand-kept here (the effect map used to miss `fleet`). Guarded so an
+# orchestrator-only checkout (no executor/) degrades gracefully.
 try:
-    from executor.command_catalog import TOOL_EFFECTS as _TOOL_EFFECTS
+    from executor.command_catalog import TOOL_EFFECTS as _TOOL_EFFECTS, TOOL_NAME_ARG as _VM_NAME_ARG
 except ImportError:
-    _TOOL_EFFECTS = {}
+    _TOOL_EFFECTS, _VM_NAME_ARG = {}, {"clone_vm": "new_name"}
 
 
 class ActiveLibrary:
