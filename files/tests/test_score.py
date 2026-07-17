@@ -113,6 +113,15 @@ def main():
     r = run_score("ponder", call_model=scripted_model({})[0], execute=stub_exec()[0], tools=_TOOLS)
     check("no tool call → no_action", r["root"]["status"] == "no_action")
 
+    print("\nlate-step grounding: progress carry-forward")
+    from orchestrator.ai.score import _progress_summary
+    led = [{"tool": "create_vm", "args": {"name": "probe"}, "ok": True},
+           {"tool": "create_network", "args": {"net_name": "labnet"}, "ok": True}]
+    ps = _progress_summary(led)
+    check("progress names the created entities", "probe" in ps and "labnet" in ps)
+    check("failed steps are marked", "FAILED" in _progress_summary([{"tool": "launch_vm", "args": {"name": "x"}, "ok": False}]))
+    check("empty ledger → empty progress", _progress_summary([]) == "")
+
     print("\nmeta-tool shape")
     check("decompose tool requires ordered steps",
           DECOMPOSE_TOOL["function"]["parameters"]["required"] == ["steps"])

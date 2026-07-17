@@ -70,6 +70,23 @@ def _norm(s: str) -> str:
     return " ".join(str(s).lower().split())
 
 
+def _progress_summary(ledger: List[Dict[str, Any]]) -> str:
+    """What earlier steps in THIS plan already did — so a later step ('launch probe')
+    knows the entity it references was just created, and uses its exact name instead
+    of re-discovering (and mis-picking) it. This is the ledger's carry-forward.
+    """
+    if not ledger:
+        return ""
+    lines = []
+    for e in ledger:
+        a = e.get("args", {})
+        name = a.get("name") or a.get("new_name") or a.get("net_name") or a.get("label") or ""
+        mark = "" if e.get("ok") else "  (FAILED)"
+        lines.append(f"- {e['tool']}: {name}{mark}" if name else f"- {e['tool']}{mark}")
+    return ("PLAN PROGRESS — steps ALREADY done (use these EXACT names; do NOT re-create "
+            "or re-discover them):\n" + "\n".join(lines))
+
+
 def _first_tool_call(resp: Any) -> tuple:
     """Extract (name, args) of the model's first tool call, or (None, None)."""
     msg = (resp or {}).get("message", {}) if isinstance(resp, dict) else {}
@@ -130,6 +147,11 @@ def run_score(
             ctx = build_context(node_goal, path)
             if ctx:
                 system += "\n\n" + ctx
+        # Carry-forward: what earlier steps in this plan already produced, so late
+        # steps ground references ("launch probe") to the real entity they created.
+        prog = _progress_summary(ledger)
+        if prog:
+            system += "\n\n" + prog
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"Goal: {node_goal}"}]
         base = select_tools(node_goal, tools) if select_tools else list(tools)
