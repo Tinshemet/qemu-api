@@ -63,23 +63,10 @@ if not _TOKEN:
     )
 
 # ── Known tools (derived from tool_executor.py's dispatch table) ──────────────
-_KNOWN_TOOLS: set = {
-    "revert", "clarify",
-    "check_system", "scan_isos",
-    "list_vms", "list_profiles", "check_profile_compatibility",
-    "create_profile", "delete_profile",
-    "create_vm", "clone_vm", "delete_vm",
-    "launch_vm", "stop_vm", "vm_status", "monitor_vm",
-    "show_config", "update_config",
-    "resize_disk",
-    "snapshot_create", "snapshot_list", "snapshot_restore", "snapshot_delete",
-    "set_resource_limits",
-    "create_network", "delete_network", "list_networks", "add_vm_to_network",
-    "open_display", "open_shell",
-    "check_disk", "get_vm_logs", "print_command",
-    "fingerprint_vm", "send_monitor_cmd",
-    "setup_done", "generate_guest_setup",
-}
+# Derived from the canonical tool registry (executor/command_catalog.py) — the
+# single source of truth for which tools exist. No hand-maintained copy (this set
+# used to drift and reject every newly-added tool over HTTP).
+from executor.command_catalog import KNOWN_TOOLS as _KNOWN_TOOLS
 
 app   = FastAPI(title="gorgon executor", version="1.0")
 _auth = HTTPBearer(auto_error=False)

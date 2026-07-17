@@ -26,6 +26,13 @@ with open(os.path.join(_here, "context_assistant_config.json")) as _f:
 
 _TOOL_HINTS:        Dict[str, List[str]] = _CFG["tool_hints"]
 _SLOT_PATTERNS:     Dict[str, List[str]] = _CFG["slot_patterns"]
+# NOTE (single-source audit, 2026-07-17): this is a DIFFERENT concept from the
+# tool registry's required-fields, so it is NOT derived from it. The registry's
+# `req` = "fields the tool needs to RUN" (name + os_type for create_vm); THIS list
+# = "fields that must be literally GROUNDED in the prompt or they're a
+# hallucination" — a deliberately narrower set that EXCLUDES fields with sensible
+# defaults (os_type defaults to linux, so an ungrounded os_type is a fine default,
+# not a hallucination). Two distinct facts → two legitimate sources, not drift.
 _REQUIRED_FIELDS:   Dict[str, List[str]] = _CFG["required_fields"]
 _HIGH_STAKES:       Dict[str, List[str]] = _CFG["high_stakes_optional"]
 _SPECIFICITY_RULES: List[Tuple[str, str]] = [tuple(r) for r in _CFG["specificity_rules"]]
@@ -172,6 +179,36 @@ def extract_slots(prompt: str) -> Dict[str, Optional[str]]:
         slots[field] = found
 
     return slots
+
+
+# ── Proactive pre-pass (upstream, deterministic) ────────────────────────────────
+
+def proactive_prep(user_input: str) -> str:
+    """Deterministic guidance computed BEFORE the model acts, to cut the first
+    wrong step (churn matters more once the Score runs many small steps).
+
+    Reuses the same deterministic signals the post-hoc check uses — literal slot
+    extraction + trigger-word tool hints — with NO model call and NO inference, so
+    it contrasts a chaotic system rather than adding to it. Returns "" when there's
+    nothing confident to add (never guesses). Meant to be injected transiently
+    into the prompt, not persisted.
+
+    >>> proactive_prep("create a ubuntu vm called dev")
+    'GUIDANCE (grounded, deterministic — trust it): likely tool(s): create_vm; user specified: name=dev.'
+    """
+    try:
+        hints = scan_tool_hints(user_input)
+        slots = {k: v for k, v in extract_slots(user_input).items() if v}
+    except Exception:
+        return ""
+    parts: List[str] = []
+    if hints:
+        parts.append("likely tool(s): " + ", ".join(sorted(hints)))
+    if slots:
+        parts.append("user specified: " + ", ".join(f"{k}={v}" for k, v in sorted(slots.items())))
+    if not parts:
+        return ""
+    return "GUIDANCE (grounded, deterministic — trust it): " + "; ".join(parts) + "."
 
 
 # ── Reconciler ─────────────────────────────────────────────────────────────────

@@ -175,6 +175,10 @@ def run_chat(
         def known_names(self):             return set()
         def ai_digest(self):               return ""
     _seam("LIBRARY", _StubLibrary())
+    # Auth: run tests pre-bootstrap (operator gate OFF), independent of whatever
+    # operator accounts happen to exist on the test machine — else the chat_loop
+    # login gate fires and returns before any tool runs.
+    add(patch.object(cli._auth_store, "operators_exist", lambda: False))
     _seam("load_session", lambda: [])
     _seam("save_session", _save)
     _seam("detect_drift", lambda _m: None)

@@ -183,11 +183,10 @@ def check_profile_compatibility(profile_name: str) -> dict:
     """
     return execute_tool("check_profile_compatibility", {"profile_name": profile_name})
 
-_VM_TOOLS = {"launch_vm", "stop_vm", "delete_vm", "clone_vm", "resize_disk",
-             "vm_status", "create_snapshot", "restore_snapshot", "delete_snapshot",
-             "list_snapshots", "show_qemu_cmd", "setup_done", "generate_guest_setup",
-             "run_guest_command", "guest_ping", "generate_guest_agent_setup",
-             "provision_guest_agent_offline"}
+# Derived from the canonical tool registry — which tools are VM-scoped (get the
+# _ALLOWED_VMS allowlist check). No hand-maintained copy (this set had stale
+# snapshot names that silently bypassed the access-control check).
+from executor.command_catalog import VM_SCOPED_TOOLS as _VM_TOOLS
 
 from orchestrator.event_log import log_event as _log_event  # noqa: E402
 

@@ -129,12 +129,15 @@ COMMAND_CATALOG: List[Dict[str, Any]] = [
      "ai_example": "is the dell_g15 profile compatible", "category": "Inspect"},
 
     # ── Stealth (stealth VMs only) ──────────────────────────────────────────
-    {"command": "guest-setup", "tools": ["generate_guest_setup"], "args": "<vm>",
+    # guest-setup / setup-done are client-side ops (manager-direct, not server-
+    # dispatched tools) → tools:[] like bundle/fetch, so they don't claim a tool
+    # name absent from the registry.
+    {"command": "guest-setup", "tools": [], "args": "<vm>",
      "desc": "Generate/serve the in-guest stealth script (stealth VMs only).",
      "related": ["guest-setup", "stealth script", "guest stealth"],
      "ai_example": "generate the guest stealth setup for work-laptop",
      "category": "Stealth", "feature": "stealth"},
-    {"command": "setup-done", "tools": ["setup_done"], "args": "<vm>",
+    {"command": "setup-done", "tools": [], "args": "<vm>",
      "desc": "Mark in-guest stealth setup complete (stealth VMs only).",
      "related": ["setup-done", "stealth done", "mark done"],
      "ai_example": "mark stealth setup done for work-laptop",
@@ -156,3 +159,94 @@ CATEGORY_ORDER: List[str] = [
     "VM lifecycle", "Fleet", "Disk & snapshots", "Networking",
     "Inspect", "Stealth", "Transfer",
 ]
+
+
+# ── CANONICAL TOOL REGISTRY (single source of truth for the tool regime) ─────────
+# One authored place for every executor tool + its metadata. Everything that used
+# to keep its own hand-maintained copy (server _KNOWN_TOOLS, executor_client
+# _VM_TOOLS, active_library _TOOL_EFFECTS, tool_executor _REVERT_AWARE_TOOLS, the
+# gate's required-fields, the confirm maps) DERIVES from this via the accessors
+# below — add a tool HERE once and every consumer updates. Keys MUST match
+# tool_executor._run's dispatch exactly (asserted by tests/test_tool_registry.py).
+#
+# Per tool:  req = required arg names · vm = operates on a specific existing VM
+# (allowlist-scoped) · effect = Active-Library compartment to refresh after it runs
+# (None = read-only) · rev = revert-aware (mutating) · confirm = chat confirmation
+# policy ("yn" | "name" | "critical" | "fleet" | None).
+TOOL_SPECS: Dict[str, Dict[str, Any]] = {
+    "add_label":                     {"req": ["name", "label"],          "vm": True,  "effect": ("vm_reload",),            "rev": False, "confirm": None},
+    "add_vm_to_network":             {"req": ["net_name", "vm_name"],    "vm": True,  "effect": ("networks",),            "rev": False, "confirm": None},
+    "check_disk":                    {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "check_profile_compatibility":   {"req": ["profile_name"],           "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "check_system":                  {"req": [],                          "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "clarify":                       {"req": ["question"],               "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "clone_vm":                      {"req": ["source_name", "new_name"],"vm": True,  "effect": ("vm_reload",),            "rev": True,  "confirm": "yn"},
+    "create_network":                {"req": ["net_name"],               "vm": False, "effect": ("networks",),            "rev": True,  "confirm": None},
+    "create_profile":                {"req": ["profile_name", "description"], "vm": False, "effect": ("profiles",),        "rev": True,  "confirm": None},
+    "create_vm":                     {"req": ["name", "os_type"],        "vm": False, "effect": ("vm_reload",),            "rev": True,  "confirm": "yn"},
+    "delete_network":                {"req": ["net_name"],               "vm": False, "effect": ("networks",),            "rev": True,  "confirm": "name"},
+    "delete_profile":                {"req": ["profile_name"],           "vm": False, "effect": ("profiles",),            "rev": False, "confirm": "name"},
+    "delete_vm":                     {"req": ["name"],                    "vm": True,  "effect": ("vm_remove",),            "rev": True,  "confirm": "critical"},
+    "fingerprint_vm":                {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "fleet":                         {"req": ["label", "action"],        "vm": False, "effect": ("fleet_members",),        "rev": False, "confirm": "fleet"},
+    "generate_guest_agent_setup":    {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "get_vm_logs":                   {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "guest_ping":                    {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "launch_vm":                     {"req": ["name"],                    "vm": True,  "effect": ("vm_status",),            "rev": True,  "confirm": "yn"},
+    "list_labels":                   {"req": [],                          "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "list_networks":                 {"req": [],                          "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "list_profiles":                 {"req": [],                          "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "list_templates":                {"req": [],                          "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "list_vms":                      {"req": [],                          "vm": False, "effect": None,                     "rev": False, "confirm": None},
+    "mark_as_template":              {"req": ["name"],                    "vm": True,  "effect": ("vm_reload", "templates"),"rev": False, "confirm": None},
+    "monitor_vm":                    {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "open_display":                  {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "open_shell":                    {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "print_command":                 {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "provision_guest_agent_offline": {"req": ["name"],                    "vm": True,  "effect": ("vm_reload",),            "rev": False, "confirm": None},
+    "remove_label":                  {"req": ["name", "label"],          "vm": True,  "effect": ("vm_reload",),            "rev": False, "confirm": None},
+    "remove_template":               {"req": ["name"],                    "vm": True,  "effect": ("vm_reload", "templates"),"rev": False, "confirm": None},
+    "resize_disk":                   {"req": ["name", "new_size_gb"],    "vm": True,  "effect": ("vm_reload",),            "rev": True,  "confirm": "yn"},
+    "revert":                        {"req": [],                          "vm": False, "effect": None,                     "rev": True,  "confirm": None},
+    "run_guest_command":             {"req": ["name", "command"],        "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "scan_isos":                     {"req": [],                          "vm": False, "effect": ("isos",),                "rev": False, "confirm": None},
+    "send_monitor_cmd":              {"req": ["name", "cmd"],            "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "set_resource_limits":           {"req": ["name"],                    "vm": True,  "effect": ("vm_reload",),            "rev": False, "confirm": "yn"},
+    "show_config":                   {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "snapshot_create":               {"req": ["name", "snap_name"],      "vm": True,  "effect": None,                     "rev": True,  "confirm": None},
+    "snapshot_delete":               {"req": ["name", "snap_name"],      "vm": True,  "effect": None,                     "rev": True,  "confirm": "name"},
+    "snapshot_list":                 {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+    "snapshot_restore":              {"req": ["name", "snap_name"],      "vm": True,  "effect": None,                     "rev": True,  "confirm": "name"},
+    "stop_vm":                       {"req": ["name"],                    "vm": True,  "effect": ("vm_status",),            "rev": True,  "confirm": "yn"},
+    "update_config":                 {"req": ["name", "updates"],        "vm": True,  "effect": ("vm_reload",),            "rev": True,  "confirm": "yn"},
+    "vm_status":                     {"req": ["name"],                    "vm": True,  "effect": None,                     "rev": False, "confirm": None},
+}
+
+# Derived views — consumers import THESE, never hand-maintained copies.
+KNOWN_TOOLS:      frozenset       = frozenset(TOOL_SPECS)
+VM_SCOPED_TOOLS:  frozenset       = frozenset(t for t, s in TOOL_SPECS.items() if s["vm"])
+REVERT_TOOLS:     frozenset       = frozenset(t for t, s in TOOL_SPECS.items() if s["rev"])
+TOOL_EFFECTS:     Dict[str, Any]  = {t: s["effect"] for t, s in TOOL_SPECS.items() if s["effect"]}
+REQUIRED_FIELDS:  Dict[str, list] = {t: s["req"] for t, s in TOOL_SPECS.items() if s["req"]}
+
+# Single-source link, enforced: TOOL_SPECS is THE authority for which tools exist;
+# COMMAND_CATALOG only REFERENCES them. A command may name only registry tools
+# (client-side commands use tools:[]). Fails LOUD at import if the catalog ever
+# drifts from the registry — you can't reference a tool that isn't real.
+_unknown_refs = {t for e in COMMAND_CATALOG for t in e.get("tools", []) if t not in TOOL_SPECS}
+assert not _unknown_refs, f"command_catalog references non-registry tools: {sorted(_unknown_refs)}"
+
+# Trigger words per TOOL, derived from each command's `related` words mapped
+# through its tools — the single source for the context-assistant's tool hints
+# (so adding a command's alias updates the assistant automatically).
+def tool_trigger_words() -> Dict[str, list]:
+    """command `related` words → per-tool trigger lists (derived, not hand-kept)."""
+    out: Dict[str, list] = {}
+    for e in COMMAND_CATALOG:
+        words = e.get("related") or []
+        for t in (e.get("tools") or []):
+            out.setdefault(t, [])
+            for w in words:
+                if w not in out[t]:
+                    out[t].append(w)
+    return out

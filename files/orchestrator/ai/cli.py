@@ -24,7 +24,7 @@ from .session import (
 from shared.display import console, print_banner
 from .active_library     import LIBRARY
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
-from .context_assistant  import check_context, extract_slots
+from .context_assistant  import check_context, extract_slots, proactive_prep
 from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
 from orchestrator.executor_client import execute_tool, API_URL, _VERIFY
@@ -264,9 +264,17 @@ def chat_loop(verbose: bool = False) -> None:
         # query — so factual questions get grounded in a tool call, not confabulated.
         state = TurnState(user_wants_action=bool({t.strip('.,!?;:') for t in _ui.split()} & (_ACTION_WORDS | _STATE_QUERY_WORDS)))
 
+        # Proactive pre-pass: deterministic guidance (likely tool + literal slots)
+        # injected ONLY on the first round — the initial step where a wrong pick
+        # costs a whole churn round — and transiently (never persisted to history).
+        _guidance = "" if _is_synthetic else proactive_prep(user_input)
+
         # Agentic tool loop — up to _LOOP_MAX rounds per user turn
         for _loop_iter in range(_LOOP_MAX):
-            response = _call_ollama(messages)
+            _call_msgs = messages
+            if _loop_iter == 0 and _guidance:
+                _call_msgs = messages + [{"role": "user", "content": "_INTERNAL_ " + _guidance}]
+            response = _call_ollama(_call_msgs)
             if not response:
                 console.print("[warn]No response from Ollama.[/warn]")
                 break

@@ -19,7 +19,7 @@ from orchestrator.executor_client import execute_tool, _VM_TOOLS
 from orchestrator.preflight.validator import _preflight_check
 from .ollama_client import _call_ollama
 from .active_library import LIBRARY
-from .context_assistant import check_context, extract_slots
+from .context_assistant import check_context, extract_slots, proactive_prep
 from .session import get_loop_max
 from .chat_turn import _is_critical
 try:
@@ -96,8 +96,14 @@ def process_message(
     _last_had_tools             = False
     _tool_results: list         = []
 
+    # Proactive pre-pass: deterministic guidance injected on the first round only,
+    # transiently (not persisted) — cuts the first wrong step. Mirrors chat_turn.
+    _guidance = proactive_prep(user_input)
     for _loop_iter in range(_LOOP_MAX):
-        response = _call_ollama(messages)
+        _call_msgs = messages
+        if _loop_iter == 0 and _guidance:
+            _call_msgs = messages + [{"role": "user", "content": "_INTERNAL_ " + _guidance}]
+        response = _call_ollama(_call_msgs)
         if not response:
             break
 
@@ -329,7 +335,7 @@ def process_message(
                 result = execute_tool(tool_name, raw_args, verbose)
                 _tool_executed_this_turn = True
                 _tool_results.append({"tool": tool_name, "args": raw_args, "result": result})
-                LIBRARY.apply(tool_name, raw_args)   # targeted registry update
+                LIBRARY.apply(tool_name, raw_args, result=result)   # log txn + targeted update
 
             # Clarify response from executor — pause and return to client.
             if isinstance(result, dict) and result.get("clarify"):

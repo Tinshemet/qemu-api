@@ -58,12 +58,8 @@ _last_revert_action: Dict[str, Any] = {}
 # Tools that manage _last_revert_action themselves (set it on success, or
 # explicitly clear it) — excluded from the blanket clear below so a failed
 # attempt doesn't wipe out a still-valid revert from an earlier success.
-_REVERT_AWARE_TOOLS = {
-    "revert", "create_vm", "clone_vm", "launch_vm", "stop_vm",
-    "create_profile", "update_config", "snapshot_create", "create_network",
-    "resize_disk", "snapshot_restore", "snapshot_delete", "delete_network",
-    "delete_vm",
-}
+# Derived from the canonical tool registry (single source of truth).
+from executor.command_catalog import REVERT_TOOLS as _REVERT_AWARE_TOOLS
 
 
 # Corporate suffixes / filler that must never be treated as a product-match token

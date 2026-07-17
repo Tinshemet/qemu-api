@@ -26,6 +26,7 @@ Local mode pulls from the in-process manager; remote-split mode should refresh
 from /sync (seam marked below — not yet wired).
 """
 
+import time
 from typing import Any, Dict, List, Optional, Set
 
 
@@ -44,33 +45,14 @@ def _local_manager():
 # name), so the effect records where to read it from.
 _VM_NAME_ARG = {"clone_vm": "new_name"}          # default is "name"
 
-_TOOL_EFFECTS = {
-    # vm added / fully reloaded
-    "create_vm":          ("vm_reload",),
-    "clone_vm":           ("vm_reload",),
-    "update_config":      ("vm_reload",),
-    "resize_disk":        ("vm_reload",),
-    "set_resource_limits":("vm_reload",),
-    "add_label":          ("vm_reload",),
-    "remove_label":       ("vm_reload",),
-    # vm status only (cheap)
-    "launch_vm":          ("vm_status",),
-    "stop_vm":            ("vm_status",),
-    # vm removed
-    "delete_vm":          ("vm_remove",),
-    # template compartment (+ the source vm's label set)
-    "mark_as_template":   ("vm_reload", "templates"),
-    "remove_template":    ("vm_reload", "templates"),
-    # profile compartment
-    "create_profile":     ("profiles",),
-    "delete_profile":     ("profiles",),
-    # network compartment (members carry the vm relation)
-    "create_network":     ("networks",),
-    "delete_network":     ("networks",),
-    "add_vm_to_network":  ("networks",),
-    # iso compartment
-    "scan_isos":          ("isos",),
-}
+# Derived from the canonical tool registry (executor/command_catalog.py) — which
+# compartment each tool's effect refreshes. No hand-maintained copy (this map used
+# to miss newly-added tools like `fleet`, leaving the digest stale after a
+# fleet stop/launch). Guarded so an orchestrator-only checkout degrades to no-op.
+try:
+    from executor.command_catalog import TOOL_EFFECTS as _TOOL_EFFECTS
+except ImportError:
+    _TOOL_EFFECTS = {}
 
 
 class ActiveLibrary:
@@ -82,6 +64,10 @@ class ActiveLibrary:
         self._networks:  Dict[str, Dict[str, Any]] = {}
         self._templates: Dict[str, Dict[str, Any]] = {}
         self._isos:      List[Dict[str, Any]]       = []
+        # Append-only session transaction/event log — what HAPPENED, alongside the
+        # current-state registry above (what IS). The seed of the Conductor ledger;
+        # lives here until the ledger exists. Every apply() records one entry.
+        self._transactions: List[Dict[str, Any]] = []
         self.built = False
 
     # ── record builders ────────────────────────────────────────────────────────
@@ -121,6 +107,7 @@ class ActiveLibrary:
         """Build the whole registry from scratch. Call once at session start."""
         mgr = manager or _local_manager()
         self._vms, self._profiles, self._networks, self._templates, self._isos = {}, {}, {}, {}, []
+        self._transactions = []
         if mgr is None:
             self.built = False   # remote/unavailable — callers fall back to a live query
             return self
@@ -190,11 +177,15 @@ class ActiveLibrary:
     def remove_vm(self, name: str) -> None:
         self._vms.pop(name, None)
 
-    def apply(self, tool_name: str, args: Dict[str, Any], manager=None) -> bool:
-        """Post-execution hook: targeted update for the compartment a tool touched.
+    def apply(self, tool_name: str, args: Dict[str, Any], manager=None, result=None) -> bool:
+        """Post-execution hook: record the transaction + targeted state update.
 
-        Returns True if the Library was updated, False for read-only/unknown tools.
+        Records EVERY executed tool call (incl. read-only ones) in the session
+        transaction log, then applies the targeted compartment update. Returns True
+        if the Library's STATE was updated, False for read-only/unknown tools (the
+        transaction is still logged either way).
         """
+        self._record_transaction(tool_name, args, result)
         effects = _TOOL_EFFECTS.get(tool_name)
         if not effects:
             return False
@@ -215,7 +206,46 @@ class ActiveLibrary:
                 self._refresh_templates(mgr)
             elif effect == "isos":
                 self._refresh_isos(mgr)
+            elif effect == "fleet_members" and mgr:
+                # A fleet stop/launch changes the status of every VM carrying the
+                # label — refresh just those, keyed off the label (fleet has no
+                # single "name" arg).
+                label = args.get("label")
+                if label:
+                    try:
+                        for _vm in mgr.list_vms(label=label):
+                            self.update_vm_status(_vm["name"], mgr)
+                    except Exception:
+                        pass
         return True
+
+    # ── transaction / event log (what HAPPENED) ────────────────────────────────
+    _TX_ARG_KEYS = ("name", "new_name", "label", "action", "command", "os_type")
+
+    def _record_transaction(self, tool_name: str, args: Dict[str, Any], result: Any) -> None:
+        """Append one executed tool call to the session log (compact, whitelisted args)."""
+        ok = None
+        err = None
+        if isinstance(result, dict):
+            ok = result.get("success", True) is not False and not result.get("error")
+            err = result.get("error")
+        entry: Dict[str, Any] = {
+            "t":    time.time(),
+            "tool": tool_name,
+            "args": {k: v for k, v in (args or {}).items() if k in self._TX_ARG_KEYS},
+            "ok":   ok,
+        }
+        if err:
+            entry["error"] = err
+        self._transactions.append(entry)
+
+    def transactions(self) -> List[Dict[str, Any]]:
+        """The full session transaction/event log, oldest first."""
+        return self._transactions
+
+    def recent_transactions(self, n: int = 8) -> List[Dict[str, Any]]:
+        """The last n transactions (most recent last)."""
+        return self._transactions[-n:]
 
     # ── relation indices (derived on demand) ───────────────────────────────────
     def fleets(self) -> Dict[str, List[str]]:
@@ -299,6 +329,14 @@ class ActiveLibrary:
         # Library (self._profiles) for the context-assistant's ground truth.
         if self._templates:
             lines.append("TEMPLATES: " + ", ".join(sorted(self._templates)))
+        if self._transactions:
+            def _fmt(e: Dict[str, Any]) -> str:
+                a = e.get("args", {})
+                label = a.get("name") or a.get("new_name") or a.get("label") or a.get("action") or ""
+                mark = "" if e.get("ok") in (True, None) else "✗"
+                return f"{e['tool']}({label}){mark}" if label else f"{e['tool']}{mark}"
+            lines.append("RECENT ACTIONS this session (oldest→newest, ✗=failed): " +
+                         " · ".join(_fmt(e) for e in self._transactions[-6:]))
         return "\n".join(lines)
 
 

@@ -608,9 +608,9 @@ def _process_tool_call(tc: dict, user_input: str, ui: str, state: "TurnState",
     else:
         result = execute_tool(tool_name, raw_args, verbose)
         state.tool_executed = True
-        # Keep the Active Library current: targeted update of just the entity
-        # this tool touched (no-op for read-only tools).
-        LIBRARY.apply(tool_name, raw_args)
+        # Keep the Active Library current: log the transaction + targeted update
+        # of just the entity this tool touched (no-op for read-only tools).
+        LIBRARY.apply(tool_name, raw_args, result=result)
 
     # Remote VNC launch — render connection panel and strip from tool result.
     if (

@@ -106,6 +106,18 @@ def main():
     lib.apply("delete_vm", {"name": "alib-d"})
     check("delete_vm drops the VM", "alib-d" not in lib.known_names())
 
+    print("\ntransaction / event log")
+    tx = lib.transactions()
+    check("every apply() logged a transaction", len(tx) >= 6)
+    kinds = [e["tool"] for e in tx]
+    check("read-only tools are logged too", "list_vms" in kinds)
+    check("mutating tools are logged", "add_label" in kinds and "delete_vm" in kinds)
+    lib.apply("stop_vm", {"name": "alib-a"}, result={"success": False, "error": "boom"})
+    last = lib.transactions()[-1]
+    check("result outcome recorded (ok False + error)", last["ok"] is False and last.get("error") == "boom")
+    check("recent_transactions returns the tail", lib.recent_transactions(2)[-1] is last)
+    check("digest surfaces RECENT ACTIONS", "RECENT ACTIONS" in lib.ai_digest())
+
     for n in NAMES + ["alib-d"]:
         _rm(n)
     print(f"\n{'='*48}\n  {_PASS} passed, {_FAIL} failed\n{'='*48}")
