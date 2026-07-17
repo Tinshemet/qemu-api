@@ -273,6 +273,10 @@
       "create_vm"
     ],
     [
+      "create_network",
+      "add_vm_to_network"
+    ],
+    [
       "fleet",
       "stop_vm"
     ],

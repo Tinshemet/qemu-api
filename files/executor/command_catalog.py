@@ -260,7 +260,10 @@ def tool_trigger_words() -> Dict[str, list]:
 # Moved here from context_assistant_config.json so trigger words live with the
 # rest of the tool data (one source). Keys are validated against TOOL_SPECS below.
 TOOL_TRIGGERS: Dict[str, List[str]] = {
-    'add_vm_to_network': ['add to network', 'connect to network', 'join network', 'attach to network', 'link to network', 'put vm on network'],
+    # Gapped ('~') triggers: the VM name sits between verb and "network" in real
+    # prompts ("put PROBE on the new network"), so match the words in order with a
+    # small gap rather than as a rigid contiguous phrase. See _trigger_in.
+    'add_vm_to_network': ['add~to~network', 'connect~to~network', 'join~network', 'join~to~network', 'attach~to~network', 'link~to~network', 'put~on~network', 'move~to~network', 'place~on~network'],
     'check_profile_compatibility': ['check profile', 'profile compatible', 'is profile compatible', 'can i use profile', 'profile compatibility', 'will profile work'],
     'check_system': ['check system', 'system check', 'system info', 'system capabilities', 'what can my machine', 'hardware check', 'can my system', 'check hardware', 'kvm support', 'what does my machine support'],
     'clone_vm': ['clone', 'copy vm', 'duplicate vm', 'mirror vm', 'replicate'],
@@ -297,3 +300,17 @@ TOOL_TRIGGERS: Dict[str, List[str]] = {
 }
 _bad_trig = [t for t in TOOL_TRIGGERS if t not in TOOL_SPECS]
 assert not _bad_trig, f"TOOL_TRIGGERS references non-registry tools: {_bad_trig}"
+
+# Create→attach relationships: once an entity of `kind` has been CREATED earlier in
+# a plan, a later step that references it should ATTACH to the existing one, not
+# re-create it. The Score engine reads this to make per-node tool selection
+# LEDGER-AWARE: after `creator` ran, a node mentioning `keyword` (or the created
+# name) is offered `attach` and NOT the creator, closing the "put probe on the new
+# network → re-creates the network" gap. `name_arg` is the creator arg holding the
+# created entity's name (so the node can be matched by that name too).
+POST_CREATE_ATTACH: Dict[str, Dict[str, str]] = {
+    "create_network": {"attach": "add_vm_to_network", "name_arg": "net_name", "keyword": "network"},
+}
+_bad_pca = [t for t in POST_CREATE_ATTACH if t not in TOOL_SPECS] + \
+           [v["attach"] for v in POST_CREATE_ATTACH.values() if v["attach"] not in TOOL_SPECS]
+assert not _bad_pca, f"POST_CREATE_ATTACH references non-registry tools: {_bad_pca}"

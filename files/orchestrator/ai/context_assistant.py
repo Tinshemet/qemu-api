@@ -99,9 +99,23 @@ def _name_near_triggers(prompt: str, name: str, triggers: List[str]) -> bool:
 # one of its hyphenated segments (e.g. name="build-box", trigger="build")
 # must not be mistaken for the user invoking that trigger. Require that
 # neither side of the match be a word character OR a dash/underscore.
+# A "~" in a trigger opts that trigger into GAPPED matching: the segments must
+# appear IN ORDER with up to _TRIGGER_GAP intervening words between them, instead
+# of contiguously. This is how "put~on~network" catches "put probe on the new
+# network" — real prompts interpose the VM name between the verb and "network",
+# which a rigid contiguous phrase ("put vm on network") can never match. Opt-in
+# per trigger, so the plain contiguous triggers keep their exactness.
+_TRIGGER_GAP = 3
+
+
 def _trigger_in(text: str, trigger: str) -> bool:
-    """Return True if any trigger phrase occurs in the text."""
-    pattern = r"(?<![\w-])" + re.escape(trigger) + r"(?![\w-])"
+    """Return True if the trigger occurs in the text (contiguous, or gapped if '~')."""
+    if "~" in trigger:
+        segs = [re.escape(s.strip()) for s in trigger.split("~") if s.strip()]
+        joiner = r"(?:\W+\w+){0,%d}\W+" % _TRIGGER_GAP
+        pattern = r"(?<![\w-])" + joiner.join(segs) + r"(?![\w-])"
+    else:
+        pattern = r"(?<![\w-])" + re.escape(trigger) + r"(?![\w-])"
     return re.search(pattern, text) is not None
 
 

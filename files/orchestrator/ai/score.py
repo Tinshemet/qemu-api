@@ -23,6 +23,16 @@ context anchors the weak model.
 """
 from typing import Any, Callable, Dict, List, Optional
 
+# Ledger-aware attach steering (data-driven from the tool registry). Optional so the
+# engine still imports in orchestrator-only checkouts / pure-unit tests without the
+# executor package — steering is simply skipped then.
+try:
+    from executor.command_catalog import POST_CREATE_ATTACH as _POST_CREATE_ATTACH
+    from orchestrator.ai.context_assistant import _NARROW_CORE_TOOLS
+except ImportError:
+    _POST_CREATE_ATTACH: Dict[str, Dict[str, str]] = {}
+    _NARROW_CORE_TOOLS = frozenset()
+
 
 # The meta-tool the model calls to say "this isn't one primitive — here are the steps".
 DECOMPOSE_TOOL: Dict[str, Any] = {
@@ -85,6 +95,41 @@ def _progress_summary(ledger: List[Dict[str, Any]]) -> str:
         lines.append(f"- {e['tool']}: {name}{mark}" if name else f"- {e['tool']}{mark}")
     return ("PLAN PROGRESS — steps ALREADY done (use these EXACT names; do NOT re-create "
             "or re-discover them):\n" + "\n".join(lines))
+
+
+def _attach_steer(base: List[Dict], node_goal: str, ledger: List[Dict[str, Any]],
+                  tools: List[Dict]) -> tuple:
+    """Ledger-aware tool steering (data-driven from POST_CREATE_ATTACH).
+
+    Once a creator (e.g. create_network) has run in THIS plan, a later node that
+    references the created entity should ATTACH to it, not re-create it. So we
+    return a TIGHT set — the attach tool + always-available core — with the creator
+    dropped, removing the re-create temptation that made 'put probe on the new
+    network' resolve to create_network again. VERIFIED to flip that node (and
+    'add probe to labnet') to add_vm_to_network with correct args, 4/4 (2026-07-17).
+
+    Returns (tools, steered). When steered is True the node is an attach-to-existing,
+    which is inherently ONE primitive — the caller drops decompose so the weak model
+    can't over-decompose it into a spurious 're-create then attach'. When nothing is
+    referenced, returns (base, False) unchanged.
+    """
+    if not _POST_CREATE_ATTACH:
+        return base, False
+    low = node_goal.lower()
+    by_name = {t.get("function", {}).get("name"): t for t in tools}
+    for creator, spec in _POST_CREATE_ATTACH.items():
+        made = [e["args"].get(spec["name_arg"]) for e in ledger
+                if e.get("tool") == creator and e.get("ok")]
+        made = [n for n in made if n]
+        if not made:
+            continue
+        referenced = spec["keyword"] in low or any(str(n).lower() in low for n in made)
+        attach = by_name.get(spec["attach"])
+        if referenced and attach is not None:
+            core = [t for t in tools if t.get("function", {}).get("name") in _NARROW_CORE_TOOLS]
+            tight = [attach] + [t for t in core if t is not attach]
+            return tight, True
+    return base, False
 
 
 def _first_tool_call(resp: Any) -> tuple:
@@ -155,7 +200,11 @@ def run_score(
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"Goal: {node_goal}"}]
         base = select_tools(node_goal, tools) if select_tools else list(tools)
-        offered = base + ([DECOMPOSE_TOOL] if allow_decompose else [])
+        # Ledger-aware: after a network (etc.) was created earlier in THIS plan, steer
+        # a node referencing it to ATTACH, not re-create. An attach-to-existing is one
+        # primitive, so when steered we drop decompose to stop over-decomposition.
+        base, steered = _attach_steer(base, node_goal, ledger, tools)
+        offered = base + ([DECOMPOSE_TOOL] if allow_decompose and not steered else [])
         name, args = _first_tool_call(call_model(messages, offered))
 
         if name is None:
