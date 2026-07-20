@@ -88,8 +88,15 @@ class Findings:
     def __init__(self):
         self._f: Dict[str, Dict[str, Any]] = {}
 
-    def record(self, fact: str, value: Any, source: Optional[str] = None) -> None:
-        self._f[fact] = {"value": value, "source": source}
+    def record(self, fact: str, value: Any, source: Optional[str] = None,
+               evidence: Optional[str] = None) -> None:
+        entry: Dict[str, Any] = {"value": value, "source": source}
+        # An UNVERIFIED claim (a type with no probe) carries `evidence` — the
+        # operator's note on where/how they found it. The machine can't confirm the
+        # fact, so it preserves the human's audit trail instead of pretending proof.
+        if evidence:
+            entry["evidence"] = evidence
+        self._f[fact] = entry
 
     def has(self, fact: str) -> bool:
         return fact in self._f
@@ -112,8 +119,21 @@ class Findings:
     def get(self, fact: str) -> Any:
         return (self._f.get(fact) or {}).get("value")
 
+    def evidence(self, fact: str) -> Optional[str]:
+        return (self._f.get(fact) or {}).get("evidence")
+
     def facts(self):
         return list(self._f)
+
+    def claims_for_review(self):
+        """The unverified claims a HUMAN still needs to check — every fact carrying
+        `evidence` (a machine-unverifiable claim the operator vouched for). Returns
+        [{fact, value, evidence, source}], sorted, so a run can surface exactly what
+        the machine couldn't confirm and where the claimant said to look."""
+        return [
+            {"fact": k, "value": v["value"], "evidence": v["evidence"], "source": v.get("source")}
+            for k, v in sorted(self._f.items()) if v.get("evidence")
+        ]
 
     def render(self) -> str:
         """Compact grounding for the planner: what's already known (don't re-learn it)."""

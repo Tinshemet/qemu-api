@@ -296,6 +296,9 @@ def run_autonomous(
     result["events"] = events
     result["disposition"] = _contract.disposition()
     result["findings"] = {f: findings.get(f) for f in findings.facts()}
+    # Unverified claims the run recorded — what no probe could confirm, plus the
+    # operator's evidence pointer for each, so a human can close the loop by hand.
+    result["claims_for_review"] = findings.claims_for_review()
     # Reward-cost economics: price the run (μ, σ², CE, cost, reward) using the
     # contract's per-tool risk as the cost source. Makes the tree reward-cost-aware.
     result["economics"] = _economics(result["root"], cost_of=_contract.tool_risk,

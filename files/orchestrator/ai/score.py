@@ -601,7 +601,12 @@ def run_score(
                 else:
                     _confirmed = False
             if _confirmed:
-                findings.record(fact, _extract_value(result, findings_schema[name]), source=name)
+                # An unverified claim carries `evidence` (the operator's note on where
+                # they found it) through the result — preserve it on the ledger entry
+                # so a human can check what no probe could.
+                _ev = result.get("evidence") if isinstance(result, dict) else None
+                findings.record(fact, _extract_value(result, findings_schema[name]),
+                                source=name, evidence=_ev)
             else:
                 new_finding = False   # unconfirmed → not learned; don't credit anti-rediscovery
         # Staleness fix: a state-mutating call (a tool the contract assessed as risky)

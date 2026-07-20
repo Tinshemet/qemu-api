@@ -706,7 +706,7 @@
   "type": "function",
   "function": {
    "name": "claim_finding",
-   "description": "Record a discovered fact of a known TYPE into the findings ledger. For a type that has a check (path, dir, port_open, process, user, service, tool, writable, executable, setuid, reachable, connection) the fact is GROUNDED — recorded only if a read-only probe confirms it in `vm` (a false claim is dropped). Other types (phone_number, email, balance, hostname, note) record as your claim. `type` is the claim type; `value` is the discovered value; `vm` is the VM to verify in; `operand` is a second value for two-operand types (e.g. reachable's port).",
+   "description": "Record a discovered fact of a known TYPE into the findings ledger. For a type that has a check (path, dir, port_open, process, user, service, tool, writable, executable, setuid, reachable, connection) the fact is GROUNDED — recorded only if a read-only probe confirms it in `vm` (a false claim is dropped). Other types (phone_number, email, balance, hostname, note) can't be probe-verified, so they record as your CLAIM and REQUIRE `evidence` — a short note on where/how you found it (e.g. 'in /etc/passwd line 4', 'from the invoice PDF') so a human can check it. `type` is the claim type; `value` is the discovered value; `vm` is the VM to verify in; `operand` is a second value for two-operand types (e.g. reachable's port); `evidence` is required for unverifiable types.",
    "parameters": {
     "type": "object",
     "properties": {
@@ -721,6 +721,10 @@
      },
      "operand": {
       "type": "string"
+     },
+     "evidence": {
+      "type": "string",
+      "description": "Required for types with no probe (phone_number, email, balance, hostname, note): where/how you found the value, so a human can verify it."
      }
     },
     "required": [

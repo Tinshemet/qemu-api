@@ -102,6 +102,27 @@ def main():
               tools=T, findings=f, findings_schema=_SCHEMA)
     check("re-read RUNS again (not skipped as stale) and re-learns", calls2 == ["get_vm_ip"] and f.get("ip(web)") == "10.0.0.2")
 
+    print("\nevidence: an unverified claim carries a human-checkable pointer")
+    f = Findings()
+    f.record("port_open(80)", 80, source="claim_finding")                       # grounded, no evidence
+    f.record("email(bob@x)", "bob@x", source="claim_finding", evidence="/etc/aliases:12")
+    f.record("balance(5000)", 5000, source="claim_finding", evidence="invoice.pdf")
+    check("grounded fact has no evidence", f.evidence("port_open(80)") is None)
+    check("claim keeps its evidence", f.evidence("email(bob@x)") == "/etc/aliases:12")
+    review = f.claims_for_review()
+    check("only evidenced claims are up for review", {r["fact"] for r in review} == {"email(bob@x)", "balance(5000)"})
+    check("review carries value + evidence", all(r["value"] is not None and r["evidence"] for r in review))
+    check("grounded fact stays out of review", "port_open(80)" not in {r["fact"] for r in review})
+
+    print("\nevidence threads from a tool result into the ledger")
+    f = Findings()
+    SCH = {"claim_finding": {"value": "value"}}
+    TL = [{"type": "function", "function": {"name": "claim_finding", "parameters": {}}}]
+    run_score("record the finance email", call_model=scripted("claim_finding", {"type": "email", "value": "cfo@x"}),
+              execute=lambda t, a: {"success": True, "value": "cfo@x", "grounded": False, "evidence": "payroll export row 3"},
+              tools=TL, findings=f, findings_schema=SCH)
+    check("claim recorded with its evidence", f.get("email(cfo@x)") == "cfo@x" and f.evidence("email(cfo@x)") == "payroll export row 3")
+
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)
 

@@ -806,10 +806,19 @@ def _run(
                           "error": f"claim value {args.get('value')!r} is not a {spec.get('value_type')}"}
             else:
                 grounded = bool(spec.get("assertion"))
-                result = {"success": True, "value": val, "type": args.get("type"), "grounded": grounded}
-                if not verbose:
-                    tag = "pending probe" if grounded else "UNVERIFIED claim"
-                    console.print(f"[dim]claim {args.get('type')}={val} ({tag})[/dim]")
+                evidence = (args.get("evidence") or "").strip()
+                if not grounded and not evidence:
+                    # No probe CAN confirm this type, so a human must — and can't
+                    # without knowing where to look. Require the evidence up front.
+                    result = {"success": False,
+                              "error": f"'{args.get('type')}' can't be probe-verified — "
+                                       f"provide `evidence` (where/how you found it) so a human can check it."}
+                else:
+                    result = {"success": True, "value": val, "type": args.get("type"),
+                              "grounded": grounded, "evidence": evidence or None}
+                    if not verbose:
+                        tag = "pending probe" if grounded else f"UNVERIFIED claim · evidence: {evidence}"
+                        console.print(f"[dim]claim {args.get('type')}={val} ({tag})[/dim]")
         return result
 
     elif tool_name == "fleet":
