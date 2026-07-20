@@ -1,219 +1,230 @@
 {
-    "ollama": {
-        "url": "http://localhost:11434",
-        "model": "llama3.1:8b",
-        "temperature": 0.0,
-        "num_ctx": 8192,
-        "timeout": 120
-    },
-    "session": {
-        "file": "~/.qemu_vms/.session.json",
-        "max_history": 10,
-        "auto_clear": true
-    },
-    "chat": {
-        "tool_loop_max": 15,
-        "tool_loop_max_override": 100,
-        "recent_context_window": 6
-    },
-    "exit_commands": [
-        "exit",
-        "quit",
-        "bye",
-        "goodbye",
-        "q",
-        ":q",
-        ":q!",
-        "stop",
-        "leave",
-        "close",
-        "done",
-        "end",
-        "out",
-        "exit()",
-        "quit()",
-        "i want to exit",
-        "i want to quit",
-        "please exit",
-        "please quit"
+  "ollama": {
+    "url": "http://localhost:11434",
+    "model": "llama3.1:8b",
+    "temperature": 0.0,
+    "num_ctx": 8192,
+    "timeout": 120
+  },
+  "session": {
+    "file": "~/.qemu_vms/.session.json",
+    "max_history": 10,
+    "auto_clear": true,
+    "verbose": false
+  },
+  "chat": {
+    "tool_loop_max": 15,
+    "tool_loop_max_override": 100,
+    "recent_context_window": 6
+  },
+  "exit_commands": [
+    "exit",
+    "quit",
+    "bye",
+    "goodbye",
+    "q",
+    ":q",
+    ":q!",
+    "stop",
+    "leave",
+    "close",
+    "done",
+    "end",
+    "out",
+    "exit()",
+    "quit()",
+    "i want to exit",
+    "i want to quit",
+    "please exit",
+    "please quit"
+  ],
+  "shortcut_commands": {
+    "list": [
+      "list",
+      "vms",
+      "list vms",
+      "show vms",
+      "ls",
+      "list all",
+      "show all",
+      "list all vms",
+      "show all vms"
     ],
-    "shortcut_commands": {
-        "list": [
-            "list",
-            "vms",
-            "list vms",
-            "show vms",
-            "ls",
-            "list all",
-            "show all",
-            "list all vms",
-            "show all vms"
-        ],
-        "system": [
-            "system",
-            "system info",
-            "check system",
-            "show system"
-        ],
-        "profiles": [
-            "profiles",
-            "list profiles",
-            "show profiles"
-        ],
-        "templates": [
-            "templates",
-            "list templates",
-            "show templates"
-        ],
-        "clear_session": [
-            "clear session",
-            "forget"
-        ],
-        "drift": [
-            "drift",
-            "check drift",
-            "drift check",
-            "drift status",
-            "drift report"
-        ],
-        "auto_clear_on": [
-            "auto clear on",
-            "enable auto clear",
-            "autoclear on"
-        ],
-        "auto_clear_off": [
-            "auto clear off",
-            "disable auto clear",
-            "autoclear off"
-        ],
-        "loop_limit": [
-            "loop limit",
-            "set loop limit",
-            "loop max",
-            "set loop max",
-            "tool loop limit",
-            "tool loop max"
-        ]
-    },
-    "rendered_tools": [
-        "list_vms",
-        "list_profiles",
-        "check_system",
-        "vm_status",
-        "monitor_vm",
-        "snapshot_list",
-        "check_profile_compatibility"
+    "system": [
+      "system",
+      "system info",
+      "check system",
+      "show system"
     ],
-    "action_words": [
-        "create",
-        "make",
-        "build",
-        "launch",
-        "start",
-        "run",
-        "stop",
-        "kill",
-        "delete",
-        "remove",
-        "destroy",
-        "clone",
-        "resize",
-        "snapshot",
-        "update",
-        "list"
+    "profiles": [
+      "profiles",
+      "list profiles",
+      "show profiles"
     ],
-    "state_query_words": [
-        "running",
-        "stopped",
-        "status",
-        "state",
-        "alive",
-        "up",
-        "which",
-        "show",
-        "logs",
-        "log",
-        "monitor",
-        "monitoring",
-        "snapshot",
-        "snapshots",
-        "profile",
-        "profiles",
-        "network",
-        "networks",
-        "info",
-        "details",
-        "config",
-        "configuration",
-        "resources",
-        "resource",
-        "exists",
-        "existing",
-        "current",
-        "currently",
-        "many",
-        "count",
-        "check"
+    "templates": [
+      "templates",
+      "list templates",
+      "show templates"
     ],
-    "os_keywords_gate": [
-        "linux",
-        "windows",
-        "win",
-        "ubuntu",
-        "debian",
-        "fedora",
-        "arch",
-        "kali",
-        "mint",
-        "centos",
-        "rhel",
-        "macos",
-        "mac",
-        "osx",
-        "android",
-        "freebsd",
-        "openbsd",
-        "other"
+    "clear_session": [
+      "clear session",
+      "forget"
     ],
-    "theme": {
-        "tool": "bold cyan",
-        "success": "bold green",
-        "error": "bold red",
-        "warn": "bold yellow",
-        "info": "dim cyan",
-        "ai": "bold white",
-        "user": "bold blue",
-        "dim": "dim white",
-        "header": "bold magenta"
-    },
-    "fingerprint": {
-        "vm_bios_vendors": [
-            "seabios",
-            "ovmf",
-            "tianocore",
-            "edk ii",
-            "bochs"
-        ],
-        "vm_manufacturers": ["qemu", "bochs", "vmware", "virtualbox", "xen"],
-        "vm_nic_models":    ["virtio-net-pci", "virtio-net", "vmxnet3"],
-        "vm_chassis_types": [
-            "other",
-            "unspecified",
-            ""
-        ],
-        "qemu_oui_prefixes": [
-            "52:54:00",
-            "00:1a:4a"
-        ],
-        "score_good": 80,
-        "score_warn": 50
-    },
-    "drift_thresholds": {
-        "min_user_turns":    4,
-        "critical_ratio":    0.65,
-        "warn_ratio":        0.40,
-        "critical_consec":   6,
-        "warn_consec":       3
-    },
-    "model": "llama3.1:8b"
+    "drift": [
+      "drift",
+      "check drift",
+      "drift check",
+      "drift status",
+      "drift report"
+    ],
+    "auto_clear_on": [
+      "auto clear on",
+      "enable auto clear",
+      "autoclear on"
+    ],
+    "auto_clear_off": [
+      "auto clear off",
+      "disable auto clear",
+      "autoclear off"
+    ],
+    "loop_limit": [
+      "loop limit",
+      "set loop limit",
+      "loop max",
+      "set loop max",
+      "tool loop limit",
+      "tool loop max"
+    ]
+  },
+  "rendered_tools": [
+    "list_vms",
+    "list_profiles",
+    "check_system",
+    "vm_status",
+    "monitor_vm",
+    "snapshot_list",
+    "check_profile_compatibility"
+  ],
+  "action_words": [
+    "create",
+    "make",
+    "build",
+    "launch",
+    "start",
+    "run",
+    "stop",
+    "kill",
+    "delete",
+    "remove",
+    "destroy",
+    "clone",
+    "resize",
+    "snapshot",
+    "update",
+    "list"
+  ],
+  "state_query_words": [
+    "running",
+    "stopped",
+    "status",
+    "state",
+    "alive",
+    "up",
+    "which",
+    "show",
+    "logs",
+    "log",
+    "monitor",
+    "monitoring",
+    "snapshot",
+    "snapshots",
+    "profile",
+    "profiles",
+    "network",
+    "networks",
+    "info",
+    "details",
+    "config",
+    "configuration",
+    "resources",
+    "resource",
+    "exists",
+    "existing",
+    "current",
+    "currently",
+    "many",
+    "count",
+    "check"
+  ],
+  "os_keywords_gate": [
+    "linux",
+    "windows",
+    "win",
+    "ubuntu",
+    "debian",
+    "fedora",
+    "arch",
+    "kali",
+    "mint",
+    "centos",
+    "rhel",
+    "macos",
+    "mac",
+    "osx",
+    "android",
+    "freebsd",
+    "openbsd",
+    "other"
+  ],
+  "theme": {
+    "tool": "bold cyan",
+    "success": "bold green",
+    "error": "bold red",
+    "warn": "bold yellow",
+    "info": "dim cyan",
+    "ai": "bold white",
+    "user": "bold blue",
+    "dim": "dim white",
+    "header": "bold magenta"
+  },
+  "fingerprint": {
+    "vm_bios_vendors": [
+      "seabios",
+      "ovmf",
+      "tianocore",
+      "edk ii",
+      "bochs"
+    ],
+    "vm_manufacturers": [
+      "qemu",
+      "bochs",
+      "vmware",
+      "virtualbox",
+      "xen"
+    ],
+    "vm_nic_models": [
+      "virtio-net-pci",
+      "virtio-net",
+      "vmxnet3"
+    ],
+    "vm_chassis_types": [
+      "other",
+      "unspecified",
+      ""
+    ],
+    "qemu_oui_prefixes": [
+      "52:54:00",
+      "00:1a:4a"
+    ],
+    "score_good": 80,
+    "score_warn": 50
+  },
+  "drift_thresholds": {
+    "min_user_turns": 4,
+    "critical_ratio": 0.65,
+    "warn_ratio": 0.4,
+    "critical_consec": 6,
+    "warn_consec": 3
+  },
+  "model": "llama3.1:8b"
 }

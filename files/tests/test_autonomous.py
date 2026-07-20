@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from orchestrator.ai.autonomous import run_autonomous, make_library_verifier
+from orchestrator.ai.mission import Mission
 
 _PASS = 0
 _FAIL = 0
@@ -110,6 +111,33 @@ def main():
     check("running true", v("running", "launch_vm", {"name": "web"}, {}) is True)
     check("running false when absent", v("running", "launch_vm", {"name": "db"}, {}) is False)
     check("unknown criterion passes", v("mystery", "x", {"name": "web"}, {}) is True)
+
+    print("\nMISSION end-to-end: declared sub_goals seed the tree, α credits them, verbose economics")
+    w = World()
+    # NOTE: the model script has NO decompose for the goal — the mission's sub_goals must
+    # drive the decomposition (via the method-cache hard-seed), proving it's guaranteed.
+    model = scripted({
+        "create web": ("create_vm", {"name": "web", "os_type": "linux"}),
+        "launch web": ("launch_vm", {"name": "web"}),
+    })
+    m = Mission({"title": "stand up web", "goal": "stand up web",
+                 "sub_goals": ["create web", "launch web"],
+                 "reward": 10.0, "importance": 2.0,
+                 "reward_cost": {"alpha": 0.5}}, agent="barenboim")
+    r = run_autonomous("stand up web", call_model=model, execute=w.execute, tools=_TOOLS,
+                       vms_getter=lambda: w.vms, mission=m, verbose=True)
+    kids = r["root"].get("children", [])
+    check("mission sub_goals became the tree's top level (hard-seeded, not model-decomposed)",
+          [c.get("goal") for c in kids] == ["create web", "launch web"])
+    check("root closed and world changed", r["root"]["status"] == "done" and w.vms["web"]["status"] == "running")
+    check("mission reward = base×importance flows into economics (R=20)", r["economics"]["reward"] == 20.0)
+    check("verbose adds a PER-NODE economics tree", "economics_tree" in r
+          and [c["goal"] for c in r["economics_tree"]["children"]] == ["create web", "launch web"])
+    check("each closed sub-goal carries its own worth-it CE (α partial credit)",
+          all("ce" in c for c in r["economics_tree"]["children"]))
+    check("non-verbose run omits the per-node tree",
+          "economics_tree" not in run_autonomous("stand up web", call_model=model, execute=World().execute,
+                                                  tools=_TOOLS, vms_getter=lambda: {}, mission=m))
 
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)

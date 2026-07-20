@@ -26,7 +26,10 @@ from . import contract as _contract
 from .method_cache import seeded as _seeded_cache
 from .findings import Findings, DEFAULT_SCHEMA
 from .reward_cost import (economics as _economics, p_self_estimate as _p_self, dials as _dials,
-                          cfg_with as _cfg_with, leaf_cost as _leaf_cost, ce as _ce)
+                          cfg_with as _cfg_with, leaf_cost as _leaf_cost, ce as _ce,
+                          tool_counts as _tool_counts, merge_counts as _merge_counts,
+                          p_world_estimate as _p_world_estimate, p_world_lookup as _p_world_lookup,
+                          compound_ce as _compound_ce, economics_tree as _economics_tree)
 from .watchdog import Watchdog
 from .engine import Engine
 from .killswitch import KillSwitch
@@ -139,16 +142,22 @@ def make_goal_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]], find
     return verify_goal
 
 
-def make_ce_estimator(call_model, tools, cost_of, cfg=None, reward=None, p_of=None):
+def make_ce_estimator(call_model, tools, cost_of, cfg=None, reward=None, p_of=None, compound_p=None):
     """A per-alternative CE estimator for OR ordering/pruning (gauntlet C).
 
     For an alternative sub-goal, PEEK at which primitive the model would use (a model
     call with NO execution) and price THAT tool deterministically: CE = μ − (λ/2)σ²
     with μ = p·R − cost, cost = leaf_cost(cost_of(tool)). The model proposes the tool;
-    the HARNESS prices the value — no p_self self-rating (the design's firewall). An
-    alternative the model would DECOMPOSE (compound) can't be cheaply priced → None
-    (kept, never pruned). Reward is the goal-closing payoff, common to all alternatives,
-    so ranking prefers the cheaper / more-reliable route to the SAME goal.
+    the HARNESS prices the value — no p_self self-rating (the design's firewall). Reward
+    is the goal-closing payoff, common to all alternatives, so ranking prefers the cheaper
+    / more-reliable route to the SAME goal.
+
+    A COMPOUND alternative (the model would DECOMPOSE) is priced by its α-credited backed-
+    up CE from the peeked step count — so a deep-but-reliable route competes on merit
+    instead of being fizzled to ~0 (this is how superadditive α steers LIVE planning, not
+    just the post-run economics). Only when α > 0: at α = 0 a compound route stays unpriced
+    (kept, never pruned) — the original act-observe-correct default. A nested-OR
+    (`alternatives`) peek is still unpriced (too deep to cost cheaply here).
     """
     c = _cfg_with(cfg)
     R = c.get("R", 1.0) if reward is None else reward
@@ -156,15 +165,33 @@ def make_ce_estimator(call_model, tools, cost_of, cfg=None, reward=None, p_of=No
     def estimate(alt_goal: str, depth: int) -> Optional[float]:
         msgs = [{"role": "system", "content": _NODE_SYSTEM},
                 {"role": "user", "content": f"Goal: {alt_goal}"}]
-        name, _ = _first_tool_call(call_model(msgs, list(tools) + [DECOMPOSE_TOOL]))  # PEEK, no execute
-        if not name or name in ("decompose", "alternatives"):
-            return None                                   # compound / no-op → don't price, don't prune
+        name, args = _first_tool_call(call_model(msgs, list(tools) + [DECOMPOSE_TOOL]))  # PEEK, no execute
+        if not name or name == "alternatives":
+            return None                                   # no-op / nested OR → don't price, don't prune
+        if name == "decompose":
+            n_steps = len([s for s in (args.get("steps") or []) if s])
+            if c["alpha"] <= 0 or n_steps <= 0:
+                return None                               # α off → keep the old unpriced default
+            # price the deep route with per-step partial credit. Unknown sub-tools → the
+            # LEARNED-AVERAGE p_world (`compound_p`, the mean of this env's observed tool
+            # reliability) when available, else the static default; plus a nominal per-step cost.
+            return _compound_ce(n_steps, c, reward=R, p=compound_p, cost=_leaf_cost(None, c))
         cost = _leaf_cost(cost_of(name), c)
         p = p_of(name) if p_of else c["p_world"]
         mu = p * R - cost
         var = p * (1 - p) * R * R
         return _ce(mu, var, c)
     return estimate
+
+
+def render_mission_plan(steps: List[str]) -> str:
+    """The mission's declared sub_goals as an intended ROOT decomposition. Injected into
+    planning context so the plan tree forms along these steps — which is what makes them
+    reward-bearing: reward-cost's α books each CLOSED step its share of the mission reward
+    (vs. the model decomposing however it likes and α crediting emergent branches)."""
+    lines = "\n  ".join(f"{i + 1}. {s}" for i, s in enumerate(steps))
+    return ("MISSION PLAN — decompose the goal along these steps; each step you CLOSE "
+            f"earns its share of the reward:\n  {lines}")
 
 
 def render_state(vms: Dict[str, Dict[str, Any]]) -> str:
@@ -229,6 +256,7 @@ def run_autonomous(
     persist_claims: bool = False,
     agent_key: Optional[str] = None,
     mission=None,
+    verbose: bool = False,
 ) -> Dict[str, Any]:
     """Run `goal` autonomously with the active agent's contract. No human in the loop.
 
@@ -238,6 +266,12 @@ def run_autonomous(
     executed tool call), `disposition`, and a `summary` (executed / halted / unverified
     / rolled_back). `gate` defaults to the active agent's contract.gate_action, so an
     autonomous .grgn halts red lines and checkpoints destructive leaves for real.
+
+    Also returns the reward-cost outputs: `economics` (μ/σ²/CE/cost priced with the
+    LEARNED per-tool p_world), `reliability` (the p_self dials to feed the next run as
+    `prior=`), and `tool_counts` / `p_world` (the accumulated tallies and learned world-
+    success rates). `prior=` feeds a previous run's reliability + tool_counts forward;
+    tool_counts also persist durably in the findings store when `persist_claims`.
     """
     events: List[Dict[str, Any]] = []
 
@@ -284,12 +318,27 @@ def run_autonomous(
     ) if vms_getter else None
     # Ground planning in BOTH state (what is) and findings (what's known) — the two
     # externalized memories that stop the weak model acting on the nonexistent or
-    # re-discovering what it already learned.
-    if build_context is None and vms_getter:
+    # re-discovering what it already learned. A mission's declared sub_goals seed the ROOT
+    # decomposition so the plan tree forms ALONG them — which is how they become reward-
+    # bearing: reward-cost's α then books each closed step its share of the mission reward.
+    if build_context is None:
+        _steps = mission.sub_goals if mission is not None else []
         def build_context(goal, path):
-            return "\n\n".join(s for s in (render_state(vms_getter()), findings.render()) if s)
+            parts = []
+            if _steps and not path:                       # root only — guide the decomposition
+                parts.append(render_mission_plan(_steps))
+            if vms_getter:
+                parts += [s for s in (render_state(vms_getter()), findings.render()) if s]
+            return "\n\n".join(parts)
     if method_cache is None:
         method_cache = _seeded_cache()
+    # HARD-seed the root decomposition from a mission's declared sub_goals: score.py's
+    # depth-0 method-cache path (a known goal shape decomposes DETERMINISTICALLY, no model)
+    # then forces the plan tree to form along those exact steps — so they are GUARANTEED
+    # reward-bearing under α, not merely nudged by the planning-context hint. Needs ≥2 steps
+    # (a single step is atomic, not a decomposition).
+    if mission is not None and len(mission.sub_goals) >= 2:
+        method_cache.remember(goal, list(mission.sub_goals))
     if watchdog is None:
         watchdog = Watchdog()
     if killswitch is None:                        # arm the safeword kill-switch from the contract
@@ -298,19 +347,44 @@ def run_autonomous(
     # reliability feeds FORWARD (the global p_self control): a shakier last run →
     # higher θ/λ this run + a shallower depth budget D_max.
     rc_cfg = _contract.reward_cost_cfg()
+    if mission is not None:                  # a tasking may LAYER reward-shaping knobs (alpha,
+        rc_cfg = {**rc_cfg, **mission.reward_cost_overrides()}   # H, …) over the contract policy
     if reward is None:                       # payoff for closing the goal
         # A mission's resolved reward (its own, importance-scaled, or the agent default)
         # when tasked via a mission; otherwise the agent's default payoff.
         reward = mission.reward() if mission is not None else _contract.campaign_reward()
+    prior_counts: Dict[str, Dict[str, int]] = {}
     if prior:
         rc_cfg = {**rc_cfg, "theta": prior.get("theta", rc_cfg.get("theta", 0.0)),
                   "lambda": prior.get("lambda", rc_cfg.get("lambda", 0.5))}
         if prior.get("D_max"):
             max_depth = min(max_depth, prior["D_max"])
+        prior_counts = prior.get("tool_counts") or {}
+    if not prior_counts and persist_claims:       # no in-memory forward-feed → the durable
+        try:                                       # per-agent store IS the cross-run p_world memory
+            from .contract import active_agent_key as _agent_key
+            from . import findings_store as _store
+            agent_key = agent_key or _agent_key()
+            prior_counts = _store.load_tool_counts(agent_key)
+        except Exception:
+            pass
+    # LEARNED p_world, updated LIVE as the mission runs: price each primitive by its
+    # measured success rate from prior runs' tallies PLUS this mission's events so far
+    # (smoothed toward the static default). Recomputed per call against the growing
+    # `events` log, so a tool that starts failing mid-mission has its p_world fall and OR
+    # ranking routes around it AS THE RUN PROCEEDS — not just between runs.
+    def p_of(tool: str) -> float:
+        counts = _merge_counts(prior_counts, _tool_counts(events))
+        return _p_world_lookup(_p_world_estimate(counts, rc_cfg or None), rc_cfg or None)(tool)
+    # Learned-AVERAGE p_world (mean of prior tool reliability) — the estimator prices a
+    # COMPOUND route's unknown sub-tools with this data-grounded prior instead of the
+    # static default. None (no history) → compound_ce falls back to the static p_world.
+    _pw_prior = _p_world_estimate(prior_counts, rc_cfg or None)
+    compound_p = (sum(_pw_prior.values()) / len(_pw_prior)) if _pw_prior else None
     # OR worth-it: rank alternatives by CE and prune the ones below θ. The estimator
     # prices the tool each alternative would use (contract risk = cost); θ from rc_cfg.
     estimate = make_ce_estimator(call_model, tools, _contract.tool_risk,
-                                 cfg=rc_cfg or None, reward=reward)
+                                 cfg=rc_cfg or None, reward=reward, p_of=p_of, compound_p=compound_p)
     engine = Engine(
         gate=gate, verify=verify, verify_goal=verify_goal, referendum=referendum,
         watchdog=watchdog, killswitch=killswitch, findings=findings,
@@ -339,17 +413,41 @@ def run_autonomous(
             _store.merge_into(agent_key, findings.persistable())
         except Exception:
             pass
-    # Reward-cost economics: price the run (μ, σ², CE, cost, reward) using the
-    # contract's per-tool risk as the cost source. Makes the tree reward-cost-aware.
+    # Accumulate per-tool world-reliability tallies (prior runs + this run) and learn
+    # p_world from them. Fed forward two ways: in-memory via `result["tool_counts"]` (pass
+    # as the next run's prior) AND durably via the per-agent findings store below, so
+    # p_world survives process restarts. p_world is now DATA-GROUNDED, not a static knob.
+    run_counts = _tool_counts(result.get("ledger", []))
+    all_counts = _merge_counts(prior_counts, run_counts)
+    result["tool_counts"] = all_counts
+    result["p_world"] = _p_world_estimate(all_counts, rc_cfg or None)
+    if persist_claims:                            # persist THIS run's OWN counts (not the merged
+        try:                                       # total — the store already holds the prior)
+            from . import findings_store as _store
+            _store.merge_tool_counts(agent_key, run_counts)
+        except Exception:
+            pass
+    # Reward-cost economics: price the run (μ, σ², CE, cost, reward) using the contract's
+    # per-tool risk as the cost source and the LEARNED p_world per tool. Makes the tree
+    # reward-cost-aware, with sub-goal closures credited (superadditive, if α > 0).
+    _econ_p_of = _p_world_lookup(result["p_world"], rc_cfg or None)
     result["economics"] = _economics(result["root"], cost_of=_contract.tool_risk,
-                                      reward=reward, cfg=rc_cfg or None)
+                                      reward=reward, cfg=rc_cfg or None, p_of=_econ_p_of)
+    if verbose:
+        # PER-NODE economics for the verbose debug view — the caller (CLI) renders it; the
+        # loop stays headless. Shows μ/CE/worth_it at every sub-goal so an operator sees
+        # WHERE value and uncertainty sit across the plan, not just the run total.
+        result["economics_tree"] = _economics_tree(result["root"], cost_of=_contract.tool_risk,
+                                                    reward=reward, cfg=rc_cfg or None, p_of=_econ_p_of)
     result["watchdog"] = watchdog.status()
     result["aborted"] = killswitch.tripped
     if killswitch.tripped:
         result["kill_reason"] = killswitch.reason
     # Reliability: measure p_self from this run's ledger → the dials it implies (θ, λ,
-    # depth budget). Pass this as `prior=` to the NEXT run to feed it forward.
+    # depth budget), plus the accumulated per-tool tallies for learned p_world. Pass this
+    # whole dict as `prior=` to the NEXT run to feed both the dials and p_world forward.
     result["reliability"] = _dials(_p_self(result.get("ledger", [])), rc_cfg or None)
+    result["reliability"]["tool_counts"] = all_counts
     result["summary"] = _summarize(result)
     return result
 

@@ -20,6 +20,7 @@ from orchestrator.executor_client import get_ovmf as _get_ovmf  # noqa: E402
 from .session import (
     AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session,
     save_session, set_auto_clear, set_loop_max, get_loop_max,
+    set_verbose, get_verbose,
 )
 from shared.display import console, print_banner
 from .active_library     import LIBRARY
@@ -186,6 +187,14 @@ def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
         set_auto_clear(False)
         console.print("[dim]Auto-clear disabled.[/dim]")
         return True
+    if ui in ("verbose", "debug", "verbose on", "debug on", "verbose off", "debug off"):
+        want = get_verbose() if ui in ("verbose", "debug") else ui.endswith("on")  # bare word = toggle
+        if ui in ("verbose", "debug"):
+            want = not want
+        set_verbose(want)
+        console.print(f"[dim]Verbose/debug view {'ENABLED' if want else 'disabled'} "
+                      f"— per tool call: risk weights, scrutiny tier, reward-cost knobs.[/dim]")
+        return True
     ll_matched = next((s for s in _SHORTCUTS["loop_limit"] if ui == s or ui.startswith(s + " ")), None)
     if ll_matched is not None:
         ll_inline = ui[len(ll_matched):].strip()
@@ -215,6 +224,8 @@ def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
 def chat_loop(verbose: bool = False) -> None:
     """Run the interactive AI chat REPL until the user exits."""
     global _LOOP_MAX
+    _forced_verbose = verbose      # -v forces it on; otherwise follow the persisted toggle,
+    verbose = _forced_verbose or get_verbose()   # refreshed each turn so `verbose on/off` applies live
 
     # Same gate as direct_cli.py's cli_direct() — both are local, in-process
     # entry points to `manager`, so both need it independently (neither goes
@@ -288,6 +299,7 @@ def chat_loop(verbose: bool = False) -> None:
                 continue
 
         _ui = user_input.lower().strip()
+        verbose = _forced_verbose or get_verbose()   # pick up a `verbose on/off` toggle from a prior turn
 
         if _ui in _EXIT_CMDS:
             console.print("[dim]Goodbye.[/dim]")
@@ -466,7 +478,7 @@ if __name__ == "__main__":
     from .direct_cli import cli_direct
 
     argv    = sys.argv[1:]
-    verbose = "-v" in argv or "--verbose" in argv
+    verbose = "-v" in argv or "--verbose" in argv or get_verbose()   # persisted toggle applies to the terminal too
     argv    = [a for a in argv if a not in ("-v", "--verbose")]
 
     if "-cu" in argv:

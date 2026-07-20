@@ -368,6 +368,35 @@ def reward_cost_cfg() -> Dict[str, Any]:
     return dict(_FORMULA.get("reward_cost", {}))
 
 
+def risk_breakdown(tool: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The weighted risk-score breakdown for a tool — each factor's raw value, its
+    weight, and weighted contribution, plus the total score, the formula tier, the
+    resolved tier (after pins), and the gate action. Pure/read-only — for the verbose
+    debug panel (surfaces WHY a call got the scrutiny it did)."""
+    risk = tool_risk(tool) or {}
+    dest = float(risk.get("destructiveness", 0.0))
+    irr = 0.0 if risk.get("reversible", True) else 1.0
+    blast_name = risk.get("blast", "none")
+    blast = float(_BLAST_SCALE.get(blast_name, 0.0))
+    commit = float(risk.get("commitment", 0.0))
+    factors = [("destructiveness", dest, _WEIGHTS["destructiveness"]),
+               ("irreversibility", irr, _WEIGHTS["irreversibility"]),
+               ("blast", blast, _WEIGHTS["blast"]),
+               ("commitment", commit, _WEIGHTS["commitment"])]
+    score = sum(v * w for _, v, w in factors)
+    return {
+        "tool": tool,
+        "assessed": bool(tool_risk(tool)),
+        "factors": [{"name": n, "value": round(v, 3), "weight": w,
+                     "contribution": round(v * w, 3)} for n, v, w in factors],
+        "blast_label": blast_name,
+        "score": round(score, 3),
+        "formula_tier": _risk_to_tier(score),
+        "resolved_tier": resolve_tier(tool, args),
+        "action": gate_action(tool, args),
+    }
+
+
 def is_forbidden(tool: str, args: Optional[Dict[str, Any]] = None) -> bool:
     """LEGAL FILTER (gauntlet step A): a hard, categorical red line — a weight-0
     rule the tree may NEVER cross. Forbidden calls are dropped up front, never

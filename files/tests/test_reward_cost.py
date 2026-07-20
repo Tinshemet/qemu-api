@@ -108,6 +108,80 @@ def main():
     big = backup({"kind": "and", "reward": 20.0, "children": [{"kind": "leaf", "cost": 0.5, "p": 0.9, "reward": 0.0}]}, c)
     check("a big enough reward overcomes cost (priceable)", worth_it(big["ce"], c))
 
+    print("\nsuperadditive sub-goal reward (anti-fizzle): partial credit as branches close")
+    # A deep AND chain: p_root = 0.9^4 ≈ 0.656, so a root-only reward collapses with depth.
+    deep = {"goal": "root", "status": "done", "children": [
+        {"goal": "a", "status": "done", "tool": "t"},
+        {"goal": "b", "status": "done", "children": [
+            {"goal": "b1", "status": "done", "tool": "t"},
+            {"goal": "b2", "status": "done", "children": [
+                {"goal": "b2a", "status": "done", "tool": "t"}]}]}]}
+    risk_free = {"t": {"commitment": 0.0, "reversible": True}}
+    of = lambda t: risk_free.get(t)
+    free = {"w_time": 0.0, "time": 0.0, "H": 0.0}   # isolate the reward term (no cost, no holding)
+    base = economics(deep, cost_of=of, reward=10.0, cfg={"alpha": 0.0, **free})
+    supr = economics(deep, cost_of=of, reward=10.0, cfg={"alpha": 0.6, **free})
+    check("α=0 books only at the root (reward rides the full-depth product)",
+          approx(base["mu"], 10.0 * (0.9 ** 3)))   # 3 leaves in the chain
+    check("α>0 lifts μ — sub-goal closures earn at their shallower, higher P", supr["mu"] > base["mu"])
+    check("reward is CONSERVED: all p=1 → total booked == R (no depth farming)",
+          approx(economics(deep, cost_of=of, reward=10.0,
+                           cfg={"alpha": 0.6, "p_world": 1.0, **free})["mu"], 10.0))
+    check("α=0 is exactly the original root-only behavior (backward compatible)",
+          approx(base["mu"], economics(deep, cost_of=of, reward=10.0, cfg=dict(free))["mu"]))
+    # a sub-goal NOT closed forfeits its share, but closed siblings still bank theirs
+    partial = {"goal": "root", "status": "blocked", "children": [
+        {"goal": "a", "status": "done", "tool": "t"},
+        {"goal": "b", "status": "blocked", "tool": "t"}]}
+    pe = economics(partial, cost_of=of, reward=10.0, cfg={"alpha": 1.0, **free})
+    check("partial run still banks the closed sub-goal's share (μ > 0)", pe["mu"] > 0.0)
+
+    print("\neconomics_tree: per-NODE μ/CE breakdown (verbose autonomous view)")
+    from orchestrator.ai.reward_cost import economics_tree
+    tree2 = {"goal": "root", "status": "done", "children": [
+        {"goal": "a", "status": "done", "tool": "t"},
+        {"goal": "b", "status": "done", "children": [
+            {"goal": "b1", "status": "done", "tool": "t"}]}]}
+    et = economics_tree(tree2, cost_of=lambda t: {"commitment": 0.0, "reversible": True},
+                        reward=10.0, cfg={"alpha": 0.5, "w_time": 0.0, "time": 0.0})
+    check("annotates every node with a goal + ce", et["goal"] == "root" and "ce" in et)
+    check("nesting mirrors the resolved tree", [c["goal"] for c in et["children"]] == ["a", "b"])
+    check("a leaf node carries its tool", et["children"][0]["tool"] == "t")
+    check("root ce == whole-run economics ce (same α plan + backup)",
+          approx(et["ce"], economics(tree2, cost_of=lambda t: {"commitment": 0.0, "reversible": True},
+                                     reward=10.0, cfg={"alpha": 0.5, "w_time": 0.0, "time": 0.0})["ce"]))
+
+    print("\ncompound_ce: α steers the LIVE worth-it gate for deep routes")
+    from orchestrator.ai.reward_cost import compound_ce
+    # a 5-step route: at α=0 its CE is the fizzled full-depth value; α>0 lifts it.
+    fizz = compound_ce(5, cfg_with({"alpha": 0.0, "H": 0.0}), reward=10.0, p=0.9, cost=0.1)
+    lift = compound_ce(5, cfg_with({"alpha": 0.6, "H": 0.0}), reward=10.0, p=0.9, cost=0.1)
+    check("α>0 raises a deep route's CE above the α=0 fizzle", lift > fizz)
+    fizz0 = compound_ce(5, cfg_with({"alpha": 0.0, "H": 0.0, "lambda": 0.0}), reward=10.0, p=0.9, cost=0.1)
+    check("α=0, λ=0: CE=μ ≈ the collapsed full-depth reward (R·p^5 − Σcost)",
+          approx(fizz0, 10.0 * (0.9 ** 5) - 5 * 0.1))
+    check("a deep route can clear θ=0 with α but not without",
+          worth_it(lift, cfg_with(None)) and not worth_it(fizz, cfg_with(None)))
+    check("empty/zero-step route → None (caller keeps it, doesn't prune)",
+          compound_ce(0, cfg_with(None), reward=10.0) is None)
+
+    print("\nlearned p_world: per-tool success rate from observed outcomes (not RL)")
+    from orchestrator.ai.reward_cost import (tool_counts, merge_counts, p_world_estimate, p_world_lookup)
+    led2 = [{"tool": "reliable", "ok": True}] * 8 + [{"tool": "reliable", "ok": False}] * 2 + \
+           [{"tool": "flaky", "ok": False}] * 6 + [{"tool": "flaky", "ok": True}] * 2
+    counts = tool_counts(led2)
+    check("counts tally ok/n per tool", counts["reliable"] == {"ok": 8, "n": 10})
+    pw = p_world_estimate(counts, c)
+    check("a reliable tool learns a HIGH p_world", pw["reliable"] > 0.8)
+    check("a flaky tool learns a LOW p_world (below the 0.9 default)", pw["flaky"] < 0.5)
+    sparse = p_world_estimate(tool_counts([{"tool": "once", "ok": True}]), c)
+    check("sparse data stays pinned near the default (one call can't reach 1.0)", sparse["once"] < 0.95)
+    lookup = p_world_lookup(pw, c)
+    check("lookup returns the learned value", approx(lookup("flaky"), pw["flaky"]))
+    check("an unobserved tool falls back to the static default", approx(lookup("never_seen"), c["p_world"]))
+    merged = merge_counts({"t": {"ok": 1, "n": 2}}, {"t": {"ok": 3, "n": 4}}, {"u": {"ok": 1, "n": 1}})
+    check("counts accumulate across runs (forward-fed)", merged["t"] == {"ok": 4, "n": 6})
+
     print("\nedge: extreme probabilities don't break the math")
     check("p=1 (certain) → zero variance", backup({"kind": "leaf", "cost": 0.0, "p": 1.0, "reward": 5.0}, c)["var"] == 0.0)
     check("p=0 (impossible) → μ is just −cost", approx(backup({"kind": "leaf", "cost": 1.0, "p": 0.0, "reward": 5.0}, c)["mu"], -1.0))

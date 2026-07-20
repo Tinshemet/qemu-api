@@ -16,6 +16,7 @@ _DRIFT       = _CFG.get("drift_thresholds", {})
 SESSION_FILE        = os.path.expanduser(_SESSION_CFG["file"])
 MAX_SESSION_HISTORY = _SESSION_CFG["max_history"]
 AUTO_CLEAR_SESSION  = _SESSION_CFG.get("auto_clear", False)
+VERBOSE             = _SESSION_CFG.get("verbose", False)
 
 
 # Reads chat history from ~/.qemu_vms/.session.json, capped at the last 40 messages.
@@ -180,3 +181,25 @@ def get_loop_max() -> int:
         cfg = json.load(f)
     override = cfg["chat"].get("tool_loop_max_override")
     return override if override is not None else cfg["chat"]["tool_loop_max"]
+
+
+# Patches the verbose/debug flag in config.json and updates the module-level constant.
+# Persisted so the toggle survives restarts and BOTH surfaces (chat + direct CLI) share it.
+def set_verbose(enabled: bool) -> None:
+    """Toggle the verbose/debug view (tool calls, risk weights, reward-cost knobs)."""
+    global VERBOSE
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    cfg["session"]["verbose"] = enabled
+    with open(cfg_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    VERBOSE = enabled
+
+
+def get_verbose() -> bool:
+    """Return the persisted verbose/debug setting."""
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    return bool(cfg["session"].get("verbose", False))

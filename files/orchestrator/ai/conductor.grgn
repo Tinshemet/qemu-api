@@ -55,7 +55,9 @@
         "w_time": 0.3,
         "time": 1.0,
         "p_world": 0.9,
+        "p_world_k": 4.0,
         "R": 1.0,
+        "alpha": 0.3,
         "beta": 1.0,
         "gamma": 1.0,
         "rho_min": 0.5

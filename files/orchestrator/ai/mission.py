@@ -28,7 +28,7 @@ _DIR = os.path.expanduser("~/.gorgon/missions")
 REQUIRED_FIELDS = ("title", "goal")
 OPTIONAL_FIELDS = ("sub_goals", "reward", "importance", "weight",
                    "tool_whitelist", "tool_blacklist", "scrutiny",
-                   "success_predicate", "success_criteria")
+                   "success_predicate", "success_criteria", "reward_cost")
 
 
 class Mission:
@@ -82,6 +82,23 @@ class Mission:
         a mission can add limits, never remove the agent's (the agent bounds every
         mission it runs)."""
         return sorted(set(_contract.default_blacklist()) | set(self._s.get("tool_blacklist") or []))
+
+    # Reward-cost knobs a mission MAY tune — reward SHAPING and learning only. The
+    # worth-it bar (theta) and risk-aversion (lambda) are deliberately EXCLUDED: those are
+    # the agent's standing safety policy (set in the contract), not something a per-tasking
+    # mission may relax. So a mission can dial partial-credit or holding cost, never its
+    # own bar for acting.
+    _TUNABLE_REWARD_COST = ("alpha", "H", "kappa", "p_world_k")
+
+    def reward_cost_overrides(self) -> Dict[str, float]:
+        """Per-tasking reward-cost tweaks that LAYER over the contract — restricted to
+        reward-shaping / learning knobs (e.g. a deep-recon mission dialing `alpha` up so
+        long plans bank more partial credit as sub-goals close). Safety knobs stay
+        contract-level; unknown or forbidden keys are dropped."""
+        rc = self._s.get("reward_cost") or {}
+        return {k: float(v) for k, v in rc.items()
+                if k in self._TUNABLE_REWARD_COST and isinstance(v, (int, float))
+                and not isinstance(v, bool)}
 
     def predicate(self) -> Optional[list]:
         """The mission's structured acceptance clauses (the checkable 'done when'), or

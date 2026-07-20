@@ -144,10 +144,36 @@ def test_disagreements_are_intentional():
     print(f"       current disagreements: {dis}")
 
 
+def test_risk_breakdown_and_verbose():
+    """The verbose debug panel's data sources: risk_breakdown (weights → score → tier)
+    and the persisted verbose toggle."""
+    print("\nrisk_breakdown: weighted factors + verbose toggle (debug panel)")
+    from orchestrator.ai.contract import risk_breakdown
+    bd = risk_breakdown("delete_vm", {"name": "x"})
+    check("contributions sum to the total score",
+          abs(sum(f["contribution"] for f in bd["factors"]) - bd["score"]) < 1e-9)
+    check("all four risk dimensions are broken out",
+          {f["name"] for f in bd["factors"]} == {"destructiveness", "irreversibility", "blast", "commitment"})
+    unknown = risk_breakdown("definitely_not_a_real_tool")
+    check("an unassessed tool → not assessed, tier none, gate proceed",
+          unknown["assessed"] is False and unknown["resolved_tier"] == "none" and unknown["action"] == "proceed")
+
+    from orchestrator.ai.session import set_verbose, get_verbose
+    _orig = get_verbose()
+    try:
+        set_verbose(True)
+        check("verbose toggle persists True", get_verbose() is True)
+        set_verbose(False)
+        check("verbose toggle persists False", get_verbose() is False)
+    finally:
+        set_verbose(_orig)                 # restore — never leave the suite with verbose flipped
+
+
 if __name__ == "__main__":
     for fn in (test_golden_tiers, test_fleet_action_conditional, test_no_drift_from_registry,
                test_formula_monotonic, test_stricter_combine, test_tier_ladder_intact,
-               test_agent_file, test_disposition_handling, test_disagreements_are_intentional):
+               test_agent_file, test_disposition_handling, test_disagreements_are_intentional,
+               test_risk_breakdown_and_verbose):
         fn()
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)

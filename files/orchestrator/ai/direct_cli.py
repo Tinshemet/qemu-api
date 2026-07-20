@@ -677,6 +677,81 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
         else:
             console.print("[yellow]Usage: gorgon contract forge | show <file> | sign <file> <safeword>[/yellow]")
 
+    elif cmd == "claim":
+        # gorgon claim [list] | confirm <fact> | reject <fact> — review the per-agent
+        # CLAIM store: unverifiable facts a run parked as `pending` for a human to judge.
+        # confirm → the fact becomes USABLE (loaded into the next run); reject → dropped.
+        from orchestrator.ai import findings_store as _store
+        from orchestrator.ai import contract as _contract
+        agent = _contract.active_agent_key()
+        sub   = rest[0] if rest else "list"
+        if sub == "confirm" and len(rest) >= 2:
+            ok = _store.confirm(agent, rest[1])
+            console.print(f"[success]Confirmed '{rest[1]}' → verified.[/success]" if ok
+                          else f"[error]'{rest[1]}' is not a pending claim.[/error]")
+        elif sub == "reject" and len(rest) >= 2:
+            ok = _store.reject(agent, rest[1])
+            console.print(f"[success]Rejected '{rest[1]}' — dropped.[/success]" if ok
+                          else f"[error]'{rest[1]}' not found in the store.[/error]")
+        elif sub == "list":
+            lst = _store.listing(agent)
+            if not (lst["pending"] or lst["verified"]):
+                console.print(f"[dim]No claims for agent '{agent}'.[/dim]")
+            else:
+                t = Table(box=box.ROUNDED, border_style="cyan", title=f"claims — agent '{agent}'")
+                t.add_column("status"); t.add_column("fact", style="bold")
+                t.add_column("value"); t.add_column("evidence", style="dim")
+                for e in lst["pending"]:
+                    t.add_row("[yellow]pending[/yellow]", e["fact"], str(e.get("value") or ""), str(e.get("evidence") or ""))
+                for e in lst["verified"]:
+                    t.add_row("[green]verified[/green]", e["fact"], str(e.get("value") or ""), str(e.get("evidence") or ""))
+                console.print(t)
+                console.print("[dim]gorgon claim confirm <fact> | reject <fact>[/dim]")
+        else:
+            console.print("[yellow]Usage: gorgon claim \\[list] | confirm <fact> | reject <fact>[/yellow]")
+
+    elif cmd == "reliability":
+        # gorgon reliability [agent] — inspect the LEARNED per-tool p_world (how often
+        # each primitive actually succeeds), accumulated in the durable tool-stats store.
+        # Read-only; defaults to the active agent, or pass an agent key to inspect another.
+        from orchestrator.ai import findings_store as _store
+        from orchestrator.ai import contract as _contract
+        from orchestrator.ai.reward_cost import p_world_estimate as _pwe, cfg_with as _cfgw
+        if rest and rest[0] == "reset":                # gorgon reliability reset [agent]
+            agent = rest[1] if len(rest) >= 2 else _contract.active_agent_key()
+            ok = _store.clear_tool_counts(agent)
+            console.print(f"[success]Cleared learned tool reliability for '{agent}'.[/success]" if ok
+                          else f"[dim]No reliability data to clear for '{agent}'.[/dim]")
+            return
+        agent  = rest[0] if rest else _contract.active_agent_key()
+        cfg    = _cfgw(_contract.reward_cost_cfg())
+        counts = _store.load_tool_counts(agent)
+        pw     = _pwe(counts, cfg)
+        if not counts:
+            console.print(
+                f"[yellow]No reliability data yet for agent '{agent}'.[/yellow]\n"
+                f"[dim]Every tool starts at the contract default p_world = {cfg['p_world']:.2f}; "
+                f"per-tool stats accumulate as autonomous missions run.[/dim]")
+        else:
+            t = Table(box=box.ROUNDED, border_style="cyan",
+                      title=f"learned p_world — agent '{agent}'")
+            t.add_column("tool", style="bold")
+            t.add_column("ok",   justify="right")
+            t.add_column("runs", justify="right")
+            t.add_column("raw rate",        justify="right", style="dim")
+            t.add_column("learned p_world", justify="right", style="bold")
+            for tool in sorted(counts, key=lambda x: (-counts[x]["n"], x)):
+                a   = counts[tool]
+                raw = a["ok"] / a["n"] if a["n"] else 0.0
+                p   = pw.get(tool, cfg["p_world"])
+                col = "green" if p >= 0.75 else ("yellow" if p >= 0.5 else "red")
+                t.add_row(tool, str(a["ok"]), str(a["n"]), f"{raw:.2f}", f"[{col}]{p:.3f}[/{col}]")
+            console.print(t)
+            console.print(
+                f"[dim]Beta-smoothed toward the contract default p_world={cfg['p_world']:.2f} "
+                f"(prior strength k={cfg['p_world_k']:.0f}); tools never run yet use that default.[/dim]")
+        pp({"agent": agent, "counts": counts, "p_world": pw})
+
     else:
         from shared.command_help import load_local_catalog, render_terminal_panel
         try:
@@ -691,6 +766,9 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
             "\n\n[bold cyan]Direct-CLI extras[/bold cyan]\n"
             "  limit <vm> <cpu%> \\[mem_mb]     Set CPU/memory resource limits\n"
             "  cmd <vm> \"<monitor cmd>\"        Send a raw QEMU monitor command\n"
+            "  reliability \\[agent]|reset       Show / reset learned per-tool p_world\n"
+            "  claim \\[list]|confirm|reject     Review / confirm parked claim findings\n"
+            "  (in chat) verbose on|off        Toggle the debug view: risk weights, tier, reward-cost knobs\n"
             "  serve \\[host] \\[port]           Run this node as the executor API\n"
             "  clear-session                  Wipe the saved AI session\n"
             "  -tf <vm>                       Show a fingerprint report for a VM\n"

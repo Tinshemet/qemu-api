@@ -72,6 +72,25 @@ def main():
     check("a path-traversal agent name is sanitized (stays under the store dir)",
           os.path.dirname(store.store_path("../../etc/passwd")) == store._DIR)
 
+    print("\ntool-stats store: learned p_world survives restarts")
+    check("empty store → {}", store.load_tool_counts("barenboim") == {})
+    store.merge_tool_counts("barenboim", {"scan": {"ok": 3, "n": 4}})
+    store.merge_tool_counts("barenboim", {"scan": {"ok": 1, "n": 2}, "exec": {"ok": 0, "n": 1}})
+    tc = store.load_tool_counts("barenboim")
+    check("counts ACCUMULATE across runs (add ok/n)", tc["scan"] == {"ok": 4, "n": 6})
+    check("a new tool is added on merge", tc["exec"] == {"ok": 0, "n": 1})
+    check("tool stats don't leak into the claim store", store.load("barenboim") == {})
+    check("tool stats are per-agent isolated", store.load_tool_counts("doorman") == {})
+    check("a path-traversal agent name is sanitized",
+          os.path.dirname(store.tool_stats_path("../../etc/passwd")) == store._DIR)
+    # the round-trip a fresh process does: load → learn p_world
+    from orchestrator.ai.reward_cost import p_world_estimate
+    pw = p_world_estimate(store.load_tool_counts("barenboim"))
+    check("reloaded counts feed learned p_world", 0.0 < pw["scan"] < 1.0)
+    check("clear wipes the learned tallies (stale after a range change)",
+          store.clear_tool_counts("barenboim") is True and store.load_tool_counts("barenboim") == {})
+    check("clearing an empty store is False (nothing to remove)", store.clear_tool_counts("barenboim") is False)
+
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)
 

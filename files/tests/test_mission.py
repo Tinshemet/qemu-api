@@ -98,6 +98,29 @@ def main():
     check("it's gone from the listing", Mstore.list_missions("doorman") == [])
     check("deleting a missing mission is False", Mstore.delete("recon-web01", "doorman") is False)
 
+    print("\nreward_cost overrides: a mission may tune reward-SHAPING knobs only")
+    m = Mission({"title": "t", "goal": "g",
+                 "reward_cost": {"alpha": 0.6, "H": 0.1, "kappa": 0.3,
+                                 "theta": -5.0, "lambda": 0.0, "bogus": 1}}, agent="doorman")
+    ov = m.reward_cost_overrides()
+    check("shaping knobs (alpha/H/kappa) are kept", ov == {"alpha": 0.6, "H": 0.1, "kappa": 0.3})
+    check("the safety bar (theta/lambda) is NOT mission-overridable", "theta" not in ov and "lambda" not in ov)
+    check("unknown keys are dropped", "bogus" not in ov)
+    check("no reward_cost block → no overrides", Mission({"title": "t", "goal": "g"}).reward_cost_overrides() == {})
+
+    print("\ncritical mission: importance SCALES the reward R")
+    base_m = Mission({"title": "t", "goal": "g", "reward": 5.0}, agent="doorman")
+    crit_m = Mission({"title": "t", "goal": "g", "reward": 5.0, "importance": 3.0}, agent="doorman")
+    check("importance 1 (default) → R = base", base_m.reward() == 5.0 * base_m.importance())
+    check("importance 3 → R tripled (a critical mission is worth more)", crit_m.reward() == 15.0)
+    check("a critical mission books strictly more reward than a normal one", crit_m.reward() > base_m.reward())
+
+    print("\nmission plan: declared sub_goals seed the reward-bearing decomposition")
+    from orchestrator.ai.autonomous import render_mission_plan
+    plan = render_mission_plan(["recon the subnet", "harden web01"])
+    check("each declared step is enumerated in the plan", "1. recon the subnet" in plan and "2. harden web01" in plan)
+    check("the plan frames steps as reward-bearing closures", "earns its share of the reward" in plan)
+
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)
 
