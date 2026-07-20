@@ -257,10 +257,12 @@ class FieldType:
     def parse(self, raw, field):
         raise NotImplementedError
 
-    def validate(self, value, field):
+    def validate(self, value, field, spec=None):
         """Field-specific checks on a parsed value → list of issue strings (empty
         = OK). The base type accepts anything; subclasses tighten. Run per field
-        during elicitation (immediate feedback) — see validate_answer()."""
+        during elicitation (immediate feedback) — see validate_answer(). ``spec``
+        is the answers-so-far, for cross-field checks (e.g. a red line that's also
+        whitelisted)."""
         return []
 
     def format(self, value, field):
@@ -289,20 +291,43 @@ class ToolkitField(CsvField):
     is early, friendly feedback — not the enforcement point. Degrades to no-op if
     the executor package (and thus the registry) isn't importable."""
 
-    def validate(self, value, field):
+    def validate(self, value, field, spec=None):
+        issues = []
         try:
             from executor.command_catalog import KNOWN_TOOLS
         except ImportError:
-            return []
-        if not KNOWN_TOOLS:
-            return []
-        return [f"unknown tool '{t}' — not in the executor registry"
-                for t in value if t not in KNOWN_TOOLS]
+            KNOWN_TOOLS = None
+        if KNOWN_TOOLS:
+            issues += [f"unknown tool '{t}' — not in the executor registry"
+                       for t in value if t not in KNOWN_TOOLS]
+        # Cross-field: a field may declare `conflicts_with` another field's list
+        # (e.g. red lines vs the toolkit) — catch the contradiction inline instead
+        # of at review() after every question is answered.
+        other_key = field.get("conflicts_with")
+        if other_key and spec is not None:
+            clash = set(value) & set(_get_dotted(spec, other_key) or [])
+            if clash:
+                issues.append("already whitelisted, can't also be a red line: "
+                              + ", ".join(sorted(clash)))
+        return issues
 
 
 class PredicateField(FieldType):
+    _CRITERIA = {"present", "absent", "running", "stopped", "restored", "mesh", "reachable"}
+
     def parse(self, raw, field):
         return _predicate(raw)
+
+    def validate(self, value, field, spec=None):
+        issues = []
+        for clause in value or []:
+            crit, target = clause.get("criterion"), clause.get("target")
+            if crit not in self._CRITERIA:
+                issues.append(f"'{crit}' is not a checkable criterion "
+                              f"(use one of {sorted(self._CRITERIA)})")
+            elif not target:
+                issues.append(f"criterion '{crit}' needs a target, e.g. {crit}:vm1")
+        return issues
 
 
 class FloatField(FieldType):
@@ -362,7 +387,7 @@ class ExpiryField(FieldType):
         except ValueError:
             return s                                # keep raw so validate() can flag it
 
-    def validate(self, value, field):
+    def validate(self, value, field, spec=None):
         if not value:
             return []
         from datetime import date
@@ -417,6 +442,16 @@ def _set_dotted(spec: Dict[str, Any], key: str, value: Any) -> None:
     d[parts[-1]] = value
 
 
+def _get_dotted(spec: Dict[str, Any], key: str) -> Any:
+    """Read spec[a][b] for a dotted key 'a.b', or None if any level is missing."""
+    d = spec
+    for p in key.split("."):
+        if not isinstance(d, dict):
+            return None
+        d = d.get(p)
+    return d
+
+
 def asked_fields(schema: Dict[str, Any], essential_only: bool = False) -> List[Dict[str, Any]]:
     """The fields that get PROMPTED, in order: skip ask=false constants, and —
     in essential_only — skip non-essential fields (they take their default)."""
@@ -438,9 +473,10 @@ def parse_answer(field: Dict[str, Any], raw: str) -> Any:
     return _field_type(field).parse(raw, field)
 
 
-def validate_answer(field: Dict[str, Any], value: Any) -> List[str]:
-    """Field-type validation for a parsed value (empty list = OK)."""
-    return _field_type(field).validate(value, field)
+def validate_answer(field: Dict[str, Any], value: Any, spec: Dict[str, Any] = None) -> List[str]:
+    """Field-type validation for a parsed value (empty list = OK). ``spec`` is the
+    answers-so-far, for cross-field checks."""
+    return _field_type(field).validate(value, field, spec)
 
 
 def elicit_spec(ask, *, essential_only: bool = False, schema: Dict[str, Any] = None,
@@ -469,12 +505,12 @@ def elicit_spec(ask, *, essential_only: bool = False, schema: Dict[str, Any] = N
             continue
         value = parse_answer(field, ask(field["prompt"]))
         if out is not None:
-            issues = validate_answer(field, value)
+            issues = validate_answer(field, value, spec)
             while issues:
                 for i in issues:
                     out(f"  ✗ {i}")
                 value = parse_answer(field, ask(field["prompt"]))
-                issues = validate_answer(field, value)
+                issues = validate_answer(field, value, spec)
         _set_dotted(spec, field["key"], value)
     return spec
 

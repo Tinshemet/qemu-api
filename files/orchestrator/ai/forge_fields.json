@@ -24,7 +24,7 @@
     {"key": "scrutiny", "prompt": "Scrutiny [strict|medium|loose]", "parse": "str", "default": "strict"},
     {"key": "tools.list", "prompt": "Toolkit — whitelist tools (comma-separated)", "parse": "toolkit", "essential": true},
     {"key": "tools.mode", "ask": false, "value": "whitelist"},
-    {"key": "forbidden", "prompt": "Red lines — forbidden tools (comma-separated)", "parse": "toolkit"},
+    {"key": "forbidden", "prompt": "Red lines — forbidden tools (comma-separated)", "parse": "toolkit", "conflicts_with": "tools.list"},
     {"key": "ethics", "prompt": "Ethics", "parse": "str"},
     {"key": "legality", "prompt": "Legality", "parse": "str"},
     {"key": "success_criteria", "prompt": "Success criteria — what is 'done'?", "parse": "str", "essential": true},

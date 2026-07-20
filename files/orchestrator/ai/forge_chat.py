@@ -21,6 +21,11 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from . import forge
 
+# Tokens meaning "leave this optional field blank" — the curses client swallows an
+# empty line, so an explicit skip token is how you blank a field in the chat wizard.
+_SKIP_WORDS = {"-", "skip"}
+
+
 def _wizard_cfg():
     """Wizard behaviour knobs from forge_fields.json's `wizard` block (attempts,
     cancel words, password prompt) — config, not hardcoded. Sensible fallbacks if
@@ -124,7 +129,10 @@ def current_prompt(state: Dict[str, Any], schema: Dict[str, Any] = None) -> Tupl
     if phase == "elicit":
         asked = forge.asked_fields(schema, state["essential_only"])
         field = asked[state["step"]]
-        return (f"({state['step'] + 1}/{len(asked)}) {field['prompt']}", None)
+        # Optional fields can be skipped — but the client swallows an empty line,
+        # so offer an explicit skip token.
+        hint = "" if field.get("essential") else "   (type - to skip)"
+        return (f"({state['step'] + 1}/{len(asked)}) {field['prompt']}{hint}", None)
     if phase == "safeword":
         return (schema.get("safeword_prompt", "Sign with a safeword (blank to cancel):"), None)
     return ("", None)
@@ -164,8 +172,10 @@ def advance(state: Dict[str, Any], answer: str, *,
     if state["phase"] == "elicit":
         asked = forge.asked_fields(schema, state["essential_only"])
         field = asked[state["step"]]
-        value = forge.parse_answer(field, answer)
-        problems = forge.validate_answer(field, value)
+        # "-"/"skip" blanks an OPTIONAL field (essential fields keep the literal).
+        raw = "" if (not field.get("essential") and ans.lower() in _SKIP_WORDS) else answer
+        value = forge.parse_answer(field, raw)
+        problems = forge.validate_answer(field, value, state["spec"])
         if problems:
             # Stay on this field; report the issues and re-ask (immediate feedback).
             reply, ni = current_prompt(state, schema)

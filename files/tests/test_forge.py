@@ -113,7 +113,9 @@ def main():
     os.remove(path)
     os.rmdir(d)
     # a blank safeword cancels (nothing written)
-    ans2 = iter(["X", "r", "autonomous", "t", "", "g", "", "strict", "list_vms", "", "e", "l", "done", "1", "", ""])
+    # a COHERENT contract (valid predicate, no contradiction) so the blank safeword
+    # is what cancels — inline validation now rejects a bad predicate mid-elicitation.
+    ans2 = iter(["X", "r", "autonomous", "t", "", "g", "", "strict", "list_vms", "", "e", "l", "done", "present:v", "", "", ""])
     d2 = tempfile.mkdtemp()
     check("blank safeword cancels (no file)", forge_interactive(ask=lambda p: next(ans2), out=lambda s: None, write_dir=d2) is None)
     os.rmdir(d2)
