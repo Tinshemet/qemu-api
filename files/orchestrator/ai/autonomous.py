@@ -64,7 +64,25 @@ def make_library_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]]):
     return verify
 
 
-def make_goal_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]], findings=None):
+def make_probe(execute: Callable[[str, Dict], Any]):
+    """A probe(spec) -> Optional[bool] that verifies a `probe:` predicate clause
+    with an actual read-only guest_probe. spec is "vm:assertion:target" (e.g.
+    "web01:port_listening:443"). Returns the assertion's truth, or None when it
+    can't be verified (malformed spec, or the probe itself failed) — the caller
+    treats None as "unverifiable", never as "done"."""
+    def probe(spec: str) -> Optional[bool]:
+        parts = (spec or "").split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            return None
+        vm, assertion, target = parts
+        res = execute("guest_probe", {"name": vm, "assertion": assertion, "target": target})
+        if isinstance(res, dict) and res.get("success"):
+            return bool(res.get("holds"))
+        return None                                   # channel/agent failure → unverifiable
+    return probe
+
+
+def make_goal_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]], findings=None, probe=None):
     """A verify_goal(goal, children, ledger) — the CONTRACT ROOT PREDICATE.
 
     Checks the active contract's structured goal predicate (contract.goal_predicate(),
@@ -95,6 +113,11 @@ def make_goal_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]], find
                     return False
             elif crit == "reachable":
                 if not _finding_true(f"reachable({target})"):
+                    return False
+            elif crit == "probe":
+                # Grounded: verify the assertion with an actual read-only probe.
+                # Unverifiable (no probe fn, or the probe failed) → NOT done.
+                if probe is None or probe(target) is not True:
                     return False
             elif not _criterion_holds(crit, target, vms):
                 return False
@@ -220,7 +243,7 @@ def run_autonomous(
         findings_schema = DEFAULT_SCHEMA
     # Built AFTER findings exists: the root predicate reads epistemic clauses (mesh /
     # reachable) from the findings ledger, not just VM state.
-    verify_goal = make_goal_verifier(vms_getter, findings) if vms_getter else None
+    verify_goal = make_goal_verifier(vms_getter, findings, probe=make_probe(execute)) if vms_getter else None
     # Ground planning in BOTH state (what is) and findings (what's known) — the two
     # externalized memories that stop the weak model acting on the nonexistent or
     # re-discovering what it already learned.
