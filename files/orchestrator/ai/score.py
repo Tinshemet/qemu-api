@@ -46,6 +46,12 @@ except ImportError:
     _tool_risk = lambda t: None
 
 
+# OPAQUE tools: their result is free-text, so success isn't self-evident from the
+# call. The honesty rule (foreign-command grounding): an opaque command with no
+# declared post-condition must surface as UNVERIFIABLE, never silently `done`.
+_OPAQUE_TOOLS = {"run_guest_command"}
+
+
 # The meta-tool the model calls to say "this isn't one primitive — here are the steps".
 DECOMPOSE_TOOL: Dict[str, Any] = {
     "type": "function",
@@ -597,6 +603,17 @@ def run_score(
                                "ok": False, "verified": False, "result": result})
                 return _node(node_goal, "unverified", tool=name, args=args,
                              result=result, reason=f"criterion_unmet:{crit}", **_cp)
+
+        # Honesty rule (foreign-command grounding): an OPAQUE command with no declared
+        # post-condition can't be trusted on its exit flag — surface it as UNVERIFIABLE,
+        # never silently `done`. It books no reward until a criterion or probe confirms
+        # the effect. (If the contract DID declare a criterion, the block above verified
+        # it, so criterion_of(name) is truthy here and this doesn't fire.)
+        if ok and name in _OPAQUE_TOOLS and not (criterion_of and criterion_of(name)):
+            ledger.append({"goal": node_goal, "tool": name, "args": args,
+                           "ok": False, "verified": False, "result": result})
+            return _node(node_goal, "unverified", tool=name, args=args,
+                         result=result, reason="unverifiable", **_cp)
 
         ledger.append({"goal": node_goal, "tool": name, "args": args, "ok": ok, "result": result})
         return _node(node_goal, "done" if ok else "failed", tool=name, args=args, result=result, **_cp)

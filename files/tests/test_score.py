@@ -171,6 +171,19 @@ def main():
           kids.get("create_vm") == "done" and kids.get("launch_vm") == "unverified")
     check("parent not done when a child is unverified", r["root"]["status"] == "partial")
 
+    print("\nhonesty rule: an opaque foreign command with no post-condition is unverifiable")
+    _gtools = [{"type": "function", "function": {"name": "run_guest_command", "parameters": {}}}]
+    r = run_score("scan the box",
+                  call_model=scripted_model({"scan the box": ("run_guest_command", {"name": "dev", "command": "whoami"})})[0],
+                  execute=stub_exec()[0], tools=_gtools)
+    check("opaque run_guest_command → unverified", r["root"]["status"] == "unverified")
+    check("reason is 'unverifiable' (not silently done)", r["root"].get("reason") == "unverifiable")
+    r = run_score("scan the box",
+                  call_model=scripted_model({"scan the box": ("run_guest_command", {"name": "dev", "command": "whoami"})})[0],
+                  execute=stub_exec()[0], tools=_gtools,
+                  criterion_of=lambda t: "present", verify=lambda c, t, a, res: True)
+    check("with a declared+passing post-condition → done", r["root"]["status"] == "done")
+
     print("\nbacktrack: soft-fail → retry a DIFFERENT approach (failed-branch memory)")
     prompts = []
     step = {"n": 0}
