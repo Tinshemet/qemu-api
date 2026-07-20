@@ -164,6 +164,7 @@ class _VmGuestMixin:
         "path_exists", "path_is_dir", "port_listening", "process_running",
         "user_exists", "service_active", "command_available", "file_contains",
         "is_writable", "is_executable", "is_setuid", "file_matches", "user_in_group",
+        "host_reachable", "connection_to",
     })
 
     def guest_probe(self, name: str, assertion: str, target: str,
@@ -207,6 +208,12 @@ class _VmGuestMixin:
                 return {"success": False, "error": "user_in_group needs a `value` (the group)"}
             exe, argv = "sh", ["-c", 'id -nG -- "$1" 2>/dev/null | tr " " "\\n" | grep -qxF -- "$2"',
                                "_", t, str(value)]
+        elif assertion == "host_reachable":   # target = host, value = port (network/pivot recon)
+            if not value:
+                return {"success": False, "error": "host_reachable needs a `value` (the port)"}
+            exe, argv = "timeout", ["2", "bash", "-c", 'exec 3<>/dev/tcp/"$1"/"$2"', "_", t, str(value)]
+        elif assertion == "connection_to":    # target = host: an ESTABLISHED connection to it
+            exe, argv = "sh", ["-c", 'ss -tnH state established 2>/dev/null | grep -qF -- "$1"', "_", t]
         else:
             return {"success": False,
                     "error": f"unknown assertion '{assertion}' — probe supports "

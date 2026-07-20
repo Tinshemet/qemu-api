@@ -785,13 +785,31 @@ def _run(
         return result
 
     elif tool_name == "claim_finding":
-        # A model-proposed finding. This is a NO-OP at the executor — the reward-cost
-        # harness records it into the ledger ONLY if its declared probe confirms it
-        # (see the claim_finding yield-schema + finding-validation in score.py). We
-        # just acknowledge the claim so the loop proceeds.
-        result = {"success": True, "fact": args.get("fact"), "value": True}
-        if not verbose:
-            console.print(f"[dim]claim: {args.get('fact')} (pending probe confirmation)[/dim]")
+        # A model-proposed, TYPED finding (type from claim_types.json). No-op at the
+        # executor — the harness records it into the ledger via the claim_finding
+        # yield-schema, and (for a type with an `assertion`) ONLY if guest_probe
+        # confirms it. A type without an assertion is the operator opting into an
+        # unverified claim (that's their config choice). Here we validate the type
+        # and coerce the value.
+        try:
+            from orchestrator.ai.findings import claim_type as _ct, coerce_value as _cv
+            spec = _ct(args.get("type"))
+        except Exception:
+            spec = None
+        if spec is None:
+            result = {"success": False, "error": f"unknown claim type '{args.get('type')}'"}
+        else:
+            try:
+                val = _cv(args.get("value"), spec.get("value_type", "string"))
+            except (ValueError, TypeError):
+                result = {"success": False,
+                          "error": f"claim value {args.get('value')!r} is not a {spec.get('value_type')}"}
+            else:
+                grounded = bool(spec.get("assertion"))
+                result = {"success": True, "value": val, "type": args.get("type"), "grounded": grounded}
+                if not verbose:
+                    tag = "pending probe" if grounded else "UNVERIFIED claim"
+                    console.print(f"[dim]claim {args.get('type')}={val} ({tag})[/dim]")
         return result
 
     elif tool_name == "fleet":

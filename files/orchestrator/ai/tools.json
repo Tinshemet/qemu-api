@@ -703,31 +703,26 @@
   "type": "function",
   "function": {
    "name": "claim_finding",
-   "description": "Propose a discovered fact and how to verify it — the fact is recorded into the findings ledger ONLY if a read-only probe confirms it (a false claim is dropped). Use this to turn something you found by running a command into grounded, reusable knowledge. `fact` is the fact key you're claiming (e.g. 'creds_in(web01:/etc/app.conf)' or 'sudo_user(web01:deploy)'). `vm`/`assertion`/`target`(/`value`) are the guest_probe that must hold for the claim to count (same assertions as guest_probe).",
+   "description": "Record a discovered fact of a known TYPE into the findings ledger. For a type that has a check (path, dir, port_open, process, user, service, tool, writable, executable, setuid, reachable, connection) the fact is GROUNDED — recorded only if a read-only probe confirms it in `vm` (a false claim is dropped). Other types (phone_number, email, balance, hostname, note) record as your claim. `type` is the claim type; `value` is the discovered value; `vm` is the VM to verify in; `operand` is a second value for two-operand types (e.g. reachable's port).",
    "parameters": {
     "type": "object",
     "properties": {
-     "fact": {
+     "type": {
+      "type": "string"
+     },
+     "value": {
       "type": "string"
      },
      "vm": {
       "type": "string"
      },
-     "assertion": {
-      "type": "string"
-     },
-     "target": {
-      "type": "string"
-     },
-     "value": {
+     "operand": {
       "type": "string"
      }
     },
     "required": [
-     "fact",
-     "vm",
-     "assertion",
-     "target"
+     "type",
+     "value"
     ]
    }
   }

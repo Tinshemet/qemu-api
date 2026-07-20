@@ -687,10 +687,8 @@
     },
     "claim_finding": {
       "req": [
-        "fact",
-        "vm",
-        "assertion",
-        "target"
+        "type",
+        "value"
       ],
       "vm": false,
       "effect": null,

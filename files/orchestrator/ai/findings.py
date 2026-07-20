@@ -20,6 +20,8 @@ recon stage (scan_network, get_vm_ip), where results are observations, not owned
 state. The schema is data (sits beside the catalog's `effect`), so a new yielding
 tool declares its fact in one place.
 """
+import json
+import os as _os
 from typing import Any, Dict, Optional
 
 
@@ -38,14 +40,35 @@ DEFAULT_SCHEMA: Dict[str, Dict[str, Any]] = {
     # `when` gates the yield to the ping ACTION, so fleet create/add don't record a mesh.
     "fleet":      {"fact": "mesh({label})", "value": "all_reachable", "when": {"action": "ping"}},
     "guest_ping": {"fact": "reachable({name})", "value": "success"},
-    # A model-PROPOSED finding: the agent claims a fact and how to check it; the
-    # finding is recorded only if the declared probe confirms it (a false claim is
-    # dropped). This is how a foreign command's free-text discovery becomes a
-    # validated, `found:`-acceptable ledger fact. `value` is the file_contains/
-    # file_matches/user_in_group operand (empty for single-target assertions).
-    "claim_finding": {"fact": "{fact}", "value": "value",
-                      "verify": "{vm}:{assertion}:{target}:{value}"},
+    # A model-PROPOSED, TYPED finding (see claim_types.json). The fact key and the
+    # verify probe are derived from the claim's `type`, not a static template — so
+    # yield_fact / finding_probe_spec special-case it below. This entry just tells
+    # extract_value where the recorded value lives.
+    "claim_finding": {"value": "value"},
 }
+
+
+def _load_claim_types() -> Dict[str, Dict[str, Any]]:
+    """The data-driven claim-type registry (name → {value_type, assertion?, operand?})."""
+    try:
+        with open(_os.path.join(_os.path.dirname(__file__), "claim_types.json")) as f:
+            return json.load(f).get("types", {}) or {}
+    except Exception:
+        return {}
+
+
+def claim_type(name: str) -> Optional[Dict[str, Any]]:
+    return _load_claim_types().get(name)
+
+
+def coerce_value(raw: Any, value_type: str):
+    """Coerce a claimed value to its declared type, or raise ValueError. Keeps the
+    ledger typed (balance is an int, not the string '5000')."""
+    if value_type in ("string", "str"):   return str(raw)
+    if value_type in ("int", "integer"):  return int(raw)
+    if value_type == "float":             return float(raw)
+    if value_type in ("bool", "boolean"): return str(raw).strip().lower() in ("1", "true", "yes")
+    return str(raw)
 
 
 class _Blank(dict):
@@ -106,6 +129,11 @@ def yield_fact(tool: str, args: Dict[str, Any], schema: Dict[str, Dict[str, Any]
     A `when` clause gates the yield to matching args (e.g. only `fleet` with
     action=ping produces a mesh fact) — so a multi-action tool doesn't record a bogus
     fact (and poison anti-rediscovery) on the actions that learn nothing."""
+    if tool == "claim_finding":                       # typed claim → type(value)
+        ct = claim_type(args.get("type"))
+        if ct is None or args.get("value") in (None, ""):
+            return None
+        return f"{args['type']}({args['value']})"
     spec = (schema or {}).get(tool)
     if not spec:
         return None
@@ -138,6 +166,14 @@ def finding_probe_spec(tool: str, args: Dict[str, Any],
     This is deterministic finding-validation: a value read from a tool's (possibly
     free-text) output counts only if a read-only guest_probe independently confirms
     it — closing the "trust the extracted value" hole."""
+    if tool == "claim_finding":                       # typed claim → probe from claim_types
+        ct = claim_type(args.get("type"))
+        if not ct or not ct.get("assertion"):
+            return None                                # no probe for this type → unverified claim
+        spec_str = f"{args.get('vm')}:{ct['assertion']}:{args.get('value')}"
+        if ct.get("operand"):                          # two-operand assertion (e.g. host_reachable)
+            spec_str += f":{args.get('operand', '')}"
+        return spec_str
     spec = (schema or {}).get(tool)
     if not spec or not spec.get("verify"):
         return None
