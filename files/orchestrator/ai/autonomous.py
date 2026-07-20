@@ -114,6 +114,12 @@ def make_goal_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]], find
             elif crit == "reachable":
                 if not _finding_true(f"reachable({target})"):
                     return False
+            elif crit == "found":
+                # Generic epistemic acceptance: the target IS the fact key
+                # (e.g. found:ip(web01)) — accept only if the ledger learned it.
+                # Generalizes mesh/reachable to any registered yield-schema fact.
+                if not _finding_true(target):
+                    return False
             elif crit == "probe":
                 # Grounded: verify the assertion with an actual read-only probe.
                 # Unverifiable (no probe fn, or the probe failed) → NOT done.

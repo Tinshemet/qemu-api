@@ -116,7 +116,7 @@ def review(grgn: Dict[str, Any]) -> List[str]:
     except ImportError:
         KNOWN_TOOLS = frozenset()
     # state criteria (checked vs the VM registry) + epistemic ones (checked vs findings).
-    _CRITERIA = {"present", "absent", "running", "stopped", "restored", "mesh", "reachable", "probe"}
+    _CRITERIA = {"present", "absent", "running", "stopped", "restored", "mesh", "reachable", "probe", "found"}
     issues: List[str] = []
     c = grgn.get("contract", {})
     camp = c.get("campaign", {})
@@ -314,7 +314,7 @@ class ToolkitField(CsvField):
 
 
 class PredicateField(FieldType):
-    _CRITERIA = {"present", "absent", "running", "stopped", "restored", "mesh", "reachable", "probe"}
+    _CRITERIA = {"present", "absent", "running", "stopped", "restored", "mesh", "reachable", "probe", "found"}
 
     def parse(self, raw, field):
         return _predicate(raw)

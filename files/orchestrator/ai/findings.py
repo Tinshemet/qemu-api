@@ -23,8 +23,12 @@ tool declares its fact in one place.
 from typing import Any, Dict, Optional
 
 
-# Per-tool yield-schema: {tool: {"fact": <template over args>, "value": <result key>}}.
-# Illustrative entries for the recon tools this pays off on; real tools register here.
+# Per-tool yield-schema: {tool: {"fact": <template over args>, "value": <result key>,
+#   "when": {<arg>: <val>} (optional gate), "verify": <probe template> (optional)}}.
+# A `verify` template ("{name}:port_listening:{port}") makes the finding count only
+# if a read-only guest_probe confirms it (deterministic finding-validation). Any fact
+# recorded here can accept a goal via a `found:<fact>` root-predicate clause — the
+# generic epistemic acceptance that generalizes mesh/reachable beyond connectivity.
 DEFAULT_SCHEMA: Dict[str, Dict[str, Any]] = {
     "get_vm_ip":    {"fact": "ip({name})",        "value": "ip"},
     "scan_network": {"fact": "hosts({net_name})", "value": "hosts"},
