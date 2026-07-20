@@ -151,6 +151,7 @@ _quit           = threading.Event()
 _waiting        = False           # True while HTTP call is in flight
 _needs_confirm  = False           # True when server returned needs_input
 _is_confirm     = False           # whether pending confirm is auto_confirm
+_is_password    = False           # True when the server asked for a masked password (forge wizard)
 _pending_kill   = ""              # VM name waiting for force-kill confirmation
 _session_id     = ""
 
@@ -240,7 +241,8 @@ def _draw(stdscr: "curses.window", input_buf: str) -> None:
         except curses.error:
             pass  # addstr fails past the screen edge — skip the waiting line
     else:
-        prompt = f" > {input_buf}"
+        _shown = ("•" * len(input_buf)) if _is_password else input_buf
+        prompt = f" > {_shown}"
         try:
             stdscr.addstr(h - 3, 0, prompt[:w - 1], _cp(C_CYAN) | curses.A_BOLD)
         except curses.error:
@@ -592,7 +594,7 @@ def _sync_from_server() -> bool:
 
 def _process_response(result: dict, verbose: bool = False) -> None:
     """Apply a /chat response — render text/tools and update confirm state."""
-    global _session_id, _needs_confirm, _is_confirm
+    global _session_id, _needs_confirm, _is_confirm, _is_password
 
     if result.get("error"):
         _add(f"  ✖ {result['error']}", _cp(C_RED))
@@ -624,6 +626,7 @@ def _process_response(result: dict, verbose: bool = False) -> None:
         opts     = ni.get("options", [])
         proposed = ni.get("proposed", "")
         _is_confirm = ni_type in ("confirm_yn", "confirm_name", "confirm_critical", "preflight")
+        _is_password = ni_type == "password"
         color    = _cp(C_RED) if ni_type == "confirm_critical" else _cp(C_YELLOW)
         _add(f"  ▶ {question}", color | curses.A_BOLD)
         if proposed:
@@ -633,6 +636,7 @@ def _process_response(result: dict, verbose: bool = False) -> None:
     else:
         _needs_confirm = False
         _is_confirm    = False
+        _is_password   = False
 
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -685,7 +689,7 @@ def _http_worker(message: str, auto_confirm: bool, verbose: bool) -> None:
 
 def _dispatch(cmd: str, verbose: bool) -> bool:
     """Handle a built-in shortcut. Returns True if handled (no HTTP needed)."""
-    global _waiting, _pending_kill, _needs_confirm, _is_confirm, _session_id
+    global _waiting, _pending_kill, _needs_confirm, _is_confirm, _session_id, _is_password
 
     low = cmd.lower().strip()
 
@@ -704,6 +708,7 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
         _add("  Session cleared.", _cp(C_DIM))
         _needs_confirm = False
         _is_confirm    = False
+        _is_password   = False
         return True
 
     if low in _SC_HELP:
@@ -761,7 +766,7 @@ def _dispatch(cmd: str, verbose: bool) -> bool:
 
 def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaaaa", font_size: int = 13) -> None:
     """curses main loop — draw, read keys, and dispatch commands until quit."""
-    global _waiting, _session_id, _needs_confirm, _is_confirm, _pending_kill
+    global _waiting, _session_id, _needs_confirm, _is_confirm, _pending_kill, _is_password
 
     curses.curs_set(0)
     stdscr.timeout(100)
@@ -860,7 +865,8 @@ def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaa
                     _add("  Cancelled.", _cp(C_DIM))
                 continue
 
-            _add(f"  You: {cmd}", _cp(C_BOLD) | curses.A_BOLD)
+            _disp = ("•" * len(cmd)) if _is_password else cmd
+            _add(f"  You: {_disp}", _cp(C_BOLD) | curses.A_BOLD)
 
             # Built-in shortcuts
             if not _needs_confirm and _dispatch(cmd, verbose):
@@ -870,6 +876,7 @@ def _run(stdscr: "curses.window", verbose: bool = False, color_hex: str = "#aaaa
             auto_confirm = _is_confirm if _needs_confirm else False
             _needs_confirm = False
             _is_confirm    = False
+            _is_password   = False
             _waiting = True
             threading.Thread(
                 target=_http_worker,

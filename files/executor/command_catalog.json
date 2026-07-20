@@ -446,6 +446,46 @@
       ],
       "ai_example": "rollback to pre-attack",
       "category": "Disk & snapshots"
+    },
+    {
+      "command": "login",
+      "tools": [],
+      "args": "",
+      "desc": "Log in as an operator (starts a session for gated actions).",
+      "related": ["login", "sign in", "authenticate"],
+      "category": "Operator & agents"
+    },
+    {
+      "command": "logout",
+      "tools": [],
+      "args": "",
+      "desc": "End the current operator session.",
+      "related": ["logout", "sign out"],
+      "category": "Operator & agents"
+    },
+    {
+      "command": "operator",
+      "tools": [],
+      "args": "add|list|remove <username>",
+      "desc": "Manage operator accounts (create, list, or remove).",
+      "related": ["operator", "manage operators", "add operator"],
+      "category": "Operator & agents"
+    },
+    {
+      "command": "contract",
+      "tools": [],
+      "args": "forge [--full] | show <file> | sign <file> <safeword>",
+      "desc": "Forge, review, or sign a .grgn campaign contract. Operator password required.",
+      "related": ["contract", "forge contract", "sign contract"],
+      "category": "Operator & agents"
+    },
+    {
+      "command": "agent",
+      "tools": [],
+      "args": "[<file>] | load <file> | reset",
+      "desc": "Show or switch the active .grgn agent. Operator password required; blacklistable.",
+      "related": ["agent", "load agent", "switch agent"],
+      "category": "Operator & agents"
     }
   ],
   "category_order": [
@@ -455,7 +495,8 @@
     "Networking",
     "Inspect",
     "Stealth",
-    "Transfer"
+    "Transfer",
+    "Operator & agents"
   ],
   "tools": {
     "add_label": {

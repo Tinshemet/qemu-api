@@ -191,7 +191,7 @@ def render(grgn: Dict[str, Any], width: int = 68) -> str:
               wrap("Scrutiny", camp.get("scrutiny", "")),
               wrap("Ethics", camp.get("ethics", "")),
               wrap("Legality", camp.get("legality", "")),
-              wrap("Reward", camp.get("reward", ""))]
+              wrap("Reward", _reward_render(camp.get("reward", "")))]
 
     L += [bar,
           wrap("Toolkit", ", ".join(camp.get("toolkit") or sorted(c.get("tools", {})) or ["(none)"])
@@ -235,33 +235,166 @@ def _predicate(s: str):
     return out
 
 
-def forge_interactive(ask, out, write_dir: str = ".", overwrite: bool = True):
+def _parse_str(raw, field):
+    v = (raw or "").strip()
+    if v:
+        return v
+    d = field.get("default")
+    return d if d is not None else ""
+
+
+def _parse_float(raw, field):
+    v = (raw or "").strip()
+    return float(v) if v else float(field.get("default", 1))
+
+
+def _parse_importance(raw, field):
+    """Map an importance WORD to its reward value — so the operator answers
+    'how much does this goal matter?' instead of guessing a unitless number.
+
+    The word→number map lives in the field's ``levels`` (data-driven). Blank →
+    the field default. A raw number is still accepted (power users / --full),
+    so nothing that used to type a number breaks. An unknown word → default.
+    """
+    levels = {k.lower(): v for k, v in (field.get("levels") or {}).items()}
+    key = (raw or "").strip().lower() or str(field.get("default", "")).lower()
+    if key in levels:
+        return float(levels[key])
+    try:
+        return float(raw)                       # an explicit number is fine too
+    except (TypeError, ValueError):
+        return float(levels.get(str(field.get("default", "")).lower(), 1.0))
+
+
+# Parser registry — the JSON schema references these by name so field types stay
+# data-driven (add a parser here, reference it from forge_fields.json).
+_PARSERS = {
+    "str":        _parse_str,
+    "csv":        lambda raw, field: _csv(raw),
+    "predicate":  lambda raw, field: _predicate(raw),
+    "float":      _parse_float,
+    "importance": _parse_importance,
+}
+
+
+def _importance_word(value) -> str:
+    """Reverse-map a reward number to its importance tier for display (e.g. 10.0
+    → 'important'), or None if it doesn't match a defined level (a custom number)."""
+    try:
+        for f in _load_fields()["fields"]:
+            if f.get("key") == "reward":
+                for word, num in (f.get("levels") or {}).items():
+                    if float(num) == float(value):
+                        return word
+    except Exception:
+        pass
+    return None
+
+
+def _reward_render(value) -> str:
+    """Display a reward as 'tier (n)' when it matches an importance level, else n."""
+    if value == "" or value is None:
+        return ""
+    word = _importance_word(value)
+    return f"{word} ({value})" if word else str(value)
+
+
+def _load_fields() -> Dict[str, Any]:
+    """The declarative forge field schema (questions, order, parsers, defaults)."""
+    return json.load(open(os.path.join(_AI, "forge_fields.json")))
+
+
+def _set_dotted(spec: Dict[str, Any], key: str, value: Any) -> None:
+    """Set spec[a][b]=value for a dotted key 'a.b', creating dicts as needed."""
+    parts = key.split(".")
+    d = spec
+    for p in parts[:-1]:
+        d = d.setdefault(p, {})
+    d[parts[-1]] = value
+
+
+def asked_fields(schema: Dict[str, Any], essential_only: bool = False) -> List[Dict[str, Any]]:
+    """The fields that get PROMPTED, in order: skip ask=false constants, and —
+    in essential_only — skip non-essential fields (they take their default)."""
+    return [f for f in schema["fields"]
+            if f.get("ask", True) is not False
+            and (not essential_only or f.get("essential", False))]
+
+
+def default_value(field: Dict[str, Any]) -> Any:
+    """The value for a field that ISN'T being asked — a constant (ask=false) or
+    an unprompted default (parse the empty answer through the field's parser)."""
+    if field.get("ask", True) is False:
+        return field.get("value", field.get("default"))
+    return _PARSERS[field["parse"]]("", field)
+
+
+def parse_answer(field: Dict[str, Any], raw: str) -> Any:
+    """Parse a raw answer for a field through its declared parser."""
+    return _PARSERS[field["parse"]](raw, field)
+
+
+def elicit_spec(ask, *, essential_only: bool = False, schema: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Build a contract spec by walking the declarative field schema.
+
+    `ask(prompt) -> str` supplies each answer (console.input in the CLI, one chat
+    turn in the wizard, scripted in tests). Fields are visited in schema order —
+    that order IS the elicitation order. With ``essential_only`` (the simpler
+    terminal forge) non-essential fields take their default without being asked;
+    ``ask=false`` fields (e.g. tool_mode) are constants and never prompt. The
+    resulting spec is fed to forge(); safeword/signing happen separately.
+    """
+    schema = schema or _load_fields()
+    asked = {f["key"] for f in asked_fields(schema, essential_only)}
+    spec: Dict[str, Any] = {}
+    for field in schema["fields"]:
+        if field["key"] in asked:
+            value = parse_answer(field, ask(field["prompt"]))
+        else:
+            value = default_value(field)
+        _set_dotted(spec, field["key"], value)
+    return spec
+
+
+def finalize_forge(spec: Dict[str, Any], safeword: str, write_dir: str = ".",
+                   overwrite: bool = True):
+    """forge → review → sign → write, given a completed spec and safeword.
+
+    Returns (path, issues): a written path with no issues on success, or
+    (None, issues) if the contract is incoherent, the safeword is blank, or the
+    target file exists with overwrite=False. Shared by every forge frontend so
+    the forge/review/sign/write core lives in exactly one place.
+    """
+    g = forge(spec)
+    issues = review(g)
+    if issues:
+        return None, issues
+    if not safeword:
+        return None, ["a safeword is required to sign (the kill-switch)"]
+    sign(g, safeword)
+    name = (spec.get("persona", {}).get("name") or "agent").lower()
+    path = os.path.join(write_dir, f"{name}.grgn")
+    if os.path.exists(path) and not overwrite:
+        return None, [f"{path} exists — choose a different agent name"]
+    write_grgn(g, path)
+    return path, []
+
+
+def forge_interactive(ask, out, write_dir: str = ".", overwrite: bool = True,
+                      essential_only: bool = False):
     """The Doorman-driven forging DIALOGUE: elicit the spec, forge → review →
     (negotiate: on issues, abort so the operator can revise) → sign → write.
 
     `ask(prompt) -> str` supplies answers (console.input in the CLI; scriptable in
     tests); `out(text)` prints (console.print). Returns the written path, or None if
     review found issues. Two-phase: nothing is signed until the safeword is given.
+    With ``essential_only`` this is the simpler terminal forge — only the essential
+    fields are asked, the rest defaulted. The questions themselves come from
+    forge_fields.json, not this function.
     """
-    out("═ Forge a campaign contract ═")
-    spec = {
-        "persona": {"name": ask("Agent name"),
-                    "role": ask("Role"),
-                    "disposition": ask("Disposition [human-confirm|autonomous]") or "autonomous"},
-        "title": ask("Campaign title"),
-        "description": ask("One-line context (optional)") or None,
-        "goal": ask("Goal"),
-        "sub_goals": _csv(ask("Sub-goals (comma-separated, optional)")),
-        "scrutiny": ask("Scrutiny [strict|medium|loose]") or "strict",
-        "tools": {"mode": "whitelist", "list": _csv(ask("Toolkit — whitelist tools (comma-separated)"))},
-        "forbidden": _csv(ask("Red lines — forbidden tools (comma-separated)")),
-        "ethics": ask("Ethics"),
-        "legality": ask("Legality"),
-        "success_criteria": ask("Success criteria — what is 'done'?"),
-        "success_predicate": _predicate(ask("Root gate — checkable end-state as 'criterion:target' "
-                                            "(e.g. present:honeypot, absent:web01; optional)")),
-        "reward": float(ask("Reward (number)") or 1),
-    }
+    schema = _load_fields()
+    out(schema.get("header", "═ Forge a campaign contract ═"))
+    spec = elicit_spec(ask, essential_only=essential_only, schema=schema)
     g = forge(spec)
     issues = review(g)
     if issues:
@@ -270,16 +403,16 @@ def forge_interactive(ask, out, write_dir: str = ".", overwrite: bool = True):
             out(f"    - {i}")
         return None
     out(render(g))
-    sw = ask("Contract is coherent. Sign with a SAFEWORD to seal it (blank to cancel)")
+    sw = ask(schema.get("safeword_prompt",
+                        "Contract is coherent. Sign with a SAFEWORD to seal it (blank to cancel)"))
     if not sw:
         out("  Cancelled — not signed.")
         return None
-    sign(g, sw)
-    path = os.path.join(write_dir, f"{(spec['persona']['name'] or 'agent').lower()}.grgn")
-    if os.path.exists(path) and not overwrite:
-        out(f"✗ {path} exists — choose a different agent name.")
+    path, issues = finalize_forge(spec, sw, write_dir, overwrite)
+    if path is None:
+        for i in issues:
+            out(f"✗ {i}")
         return None
-    write_grgn(g, path)
     out(f"  I am thou, thou art I — the contract is sealed.")
     out(f"  ✔ → {path}   ·   run it with  GORGON_AGENT={os.path.basename(path)}")
     return path

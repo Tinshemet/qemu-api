@@ -104,6 +104,47 @@ def _show_drift_report(messages: list, runtime_drift_count: int) -> None:
 # ── Chat loop ──────────────────────────────────────────────────────────────────
 
 
+def _repl_require_operator_password(action: str) -> bool:
+    """Re-authenticate the operator for a high-impact contract action in the REPL.
+    Mirrors the client's _require_operator_password: an active session isn't
+    enough — the password must be re-entered. Degrades open pre-bootstrap."""
+    if not _auth_store.operators_exist():
+        return True
+    user = _auth_sessions.current_username()
+    if not user:
+        console.print("[bold red]Login required.[/bold red] Run [cyan]gorgon login[/cyan] first.")
+        return False
+    import getpass
+    if _auth_store.verify_password(user, getpass.getpass(f"Operator password to {action}: ")):
+        return True
+    console.print("[bold red]Password incorrect — aborted.[/bold red]")
+    return False
+
+
+def _maybe_forge_contract(ui: str) -> bool:
+    """Handle a forge-a-contract request inline in the REPL instead of the AI loop.
+
+    The local REPL is console-based, so it runs the real interactive forge
+    (forge_fields.json-driven, operator-gated) directly — parity with the client
+    chat wizard and `gorgon contract forge`. Returns True when it handled the
+    input (the caller continues the REPL, skipping the model); False otherwise,
+    so a question about contracts still reaches the AI. Detection is shared with
+    the chat wizard so both surfaces trigger identically.
+    """
+    from orchestrator.ai import forge_chat as _forge_chat
+    if not _forge_chat.looks_like_forge_intent(ui):
+        return False
+    if not _repl_require_operator_password("forge a contract"):
+        return True  # handled (aborted) — do not fall through to the model
+    from orchestrator.ai import forge as _forge
+    _forge.forge_interactive(
+        ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
+        out=console.print,
+        write_dir=os.path.dirname(os.path.abspath(_forge.__file__)),
+    )
+    return True
+
+
 def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
                     verbose: bool) -> bool:
     """Handle a REPL slash-command shortcut, if the input is one.
@@ -253,6 +294,9 @@ def chat_loop(verbose: bool = False) -> None:
             break
 
         if _handle_command(_ui, messages, _runtime_drift_count, verbose):
+            continue
+
+        if _maybe_forge_contract(_ui):
             continue
 
         if not _is_synthetic:

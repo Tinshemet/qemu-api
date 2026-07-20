@@ -162,6 +162,29 @@ def _operator_gate_ok(cmd: str) -> bool:
     return _auth_sessions.current_username() is not None
 
 
+def _require_operator_password(action: str) -> bool:
+    """Re-authenticate the operator for a HIGH-IMPACT change (forging/signing a
+    contract, switching the active agent). Stronger than _operator_gate_ok: an
+    active session isn't enough — the operator must re-enter their password, so a
+    walk-up to an unlocked terminal can't reassign contracts or agents.
+
+    Degrades open only where auth genuinely can't apply: no auth package (client-
+    only checkout) or pre-bootstrap (no operators yet). Otherwise it needs a
+    logged-in operator AND a correct password. Returns True to proceed.
+    """
+    if _auth_store is None or not _auth_store.operators_exist():
+        return True
+    user = _auth_sessions.current_username()
+    if not user:
+        console.print("[bold red]Login required.[/bold red] Run [cyan]gorgon login[/cyan] first.")
+        return False
+    pw = getpass.getpass(f"Operator password to {action}: ")
+    if _auth_store.verify_password(user, pw):
+        return True
+    console.print("[bold red]Password incorrect — aborted.[/bold red]")
+    return False
+
+
 def run(args: List[str], verbose: bool = False) -> None:
     """Dispatch a direct ``gorgon <cmd>`` sub-command.
 
@@ -654,6 +677,151 @@ def run(args: List[str], verbose: bool = False) -> None:
                           else f"[bold red]{r.get('error')}[/bold red]")
         else:
             console.print("[yellow]Usage: gorgon operator add|list|remove <username>[/yellow]")
+
+    elif cmd == "contract":
+        # gorgon contract forge [--full] | show <file> | sign <file> <safeword>
+        # Forging is a deliberate, coherence-gated CLI act. The plain `forge`
+        # asks only the essential fields (name / goal / toolkit / done-when) and
+        # defaults the rest; `--full` walks every field in forge_fields.json.
+        try:
+            from orchestrator.ai import forge as _forge
+        except ImportError:
+            console.print("[bold red]Contract forging unavailable on this checkout "
+                          "(orchestrator package not present).[/bold red]")
+            return
+        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))
+        sub = rest[0] if rest else ""
+        if sub == "forge":
+            if not _require_operator_password("forge a contract"):
+                return
+            _full = "--full" in rest
+            _forge.forge_interactive(
+                ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
+                out=console.print, write_dir=_agent_dir, essential_only=not _full)
+        elif sub == "show" and len(rest) >= 2:
+            path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
+            console.print(_forge.render(json.load(open(path))))
+        elif sub == "sign" and len(rest) >= 3:
+            if not _require_operator_password("sign a contract"):
+                return
+            path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
+            g = json.load(open(path))
+            try:
+                _forge.sign(g, rest[2]); _forge.write_grgn(g, path)
+                console.print(f"[green]Signed → {path}[/green]")
+            except ValueError as e:
+                console.print(f"[bold red]{e}[/bold red]")
+        else:
+            console.print("[yellow]Usage: gorgon contract forge [--full] | "
+                          "show <file> | sign <file> <safeword>[/yellow]")
+
+    elif cmd == "agent":
+        # gorgon agent | agent <file> | agent load <file> | agent reset
+        # Switching the active agent is HIGH-IMPACT: it swaps the whole contract
+        # (persona, toolkit, red lines, kill-switch). Guarded by (1) the active
+        # contract's blacklist — an agent under a locked contract can't switch
+        # itself out — and (2) operator re-authentication. The client never
+        # restarts the server; a change takes effect when the operator reboots it.
+        import glob as _glob
+        from shared import agent_select as _sel
+        from orchestrator.ai import forge as _forge
+        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))
+        _resolve  = lambda f: f if os.path.isabs(f) else os.path.join(_agent_dir, f)
+
+        def _validate(f: str):
+            p = _resolve(f)
+            if not os.path.isfile(p):
+                return f"no such agent file: {f}"
+            try:
+                g = json.load(open(p))
+            except Exception as e:
+                return f"{f} is not valid JSON: {e}"
+            if not (isinstance(g, dict) and "contract" in g and "persona" in g):
+                return f"{f} is not a .grgn agent (missing contract/persona)"
+            return None
+
+        def _change_allowed() -> bool:
+            # (1) the active contract may forbid agent-switching entirely
+            try:
+                from orchestrator.ai.contract import is_forbidden
+                if is_forbidden("switch_agent"):
+                    console.print("[bold red]The active contract forbids switching agents "
+                                  "(switch_agent is blacklisted).[/bold red]")
+                    return False
+            except Exception:
+                pass  # contract layer unavailable — fall through to the auth gate
+            # (2) operator re-authentication
+            return _require_operator_password("switch the active agent")
+
+        def _persist(f: str) -> None:
+            _sel.set_selection(f if os.path.isabs(f) else os.path.basename(_resolve(f)))
+
+        sub = rest[0] if rest else ""
+        if not sub:
+            cur = os.environ.get("GORGON_AGENT") or _sel.get_selection() or "doorman.grgn (default)"
+            files = sorted(os.path.basename(p) for p in _glob.glob(os.path.join(_agent_dir, "*.grgn")))
+            console.print(f"[bold]Active agent:[/bold] {cur}")
+            console.print("[dim]Available:[/dim] " + (", ".join(files) or "(none)"))
+            if os.environ.get("GORGON_AGENT"):
+                console.print("[dim](GORGON_AGENT env var is set — it overrides the saved selection.)[/dim]")
+        elif sub == "reset":
+            if not _change_allowed():
+                return
+            _sel.clear_selection()
+            console.print("[green]Agent reset — doorman.grgn on next server boot.[/green]")
+            console.print("[yellow]Restart the orchestrator server to apply.[/yellow]")
+        elif sub == "load":
+            if len(rest) < 2:
+                console.print("[yellow]Usage: gorgon agent load <file>[/yellow]")
+                return
+            f = rest[1]
+            err = _validate(f)
+            if err:
+                console.print(f"[bold red]{err}[/bold red]")
+                return
+            if not _change_allowed():
+                return
+            _persist(f)
+            # Operator access is required to reach here, so the client is allowed
+            # to bounce the server — the respawn re-imports the contract and picks
+            # up the new selection.
+            try:
+                _persona = (json.load(open(_resolve(f))).get("persona") or {}).get("name")
+            except Exception:
+                _persona = None
+            _label = _persona or os.path.basename(_resolve(f))
+            console.print(f"\n[bold cyan]Loading agent “{_label}”[/bold cyan] … "
+                          "restarting the orchestrator server.")
+            from shared import server_control as _srv
+            pid = _srv.restart_server()
+            if pid:
+                console.print(f"[green]✔ Server back up (pid {pid}) — “{_label}” is now the active agent.[/green]")
+                # Surface any load-time drift for the freshly-loaded agent.
+                try:
+                    _info = requests.get(f"{_SERVER}/info", headers=_HEADERS,
+                                         timeout=10, verify=_VERIFY).json()
+                    for _w in _info.get("agent_warnings", []):
+                        console.print(f"[yellow]  ⚠ {_w}[/yellow]")
+                except Exception:
+                    pass  # server still settling — warnings are also in the server log
+                console.print("[dim]Reopen the CLI in a few seconds to reconnect.[/dim]")
+            else:
+                console.print("[bold red]✖ Server did not come back up — check "
+                              f"{os.environ.get('GORGON_SERVER_LOG', '/tmp/gorgon-orchestrator.log')}.[/bold red]")
+                console.print("[dim]The selection is saved; start the server manually to apply it.[/dim]")
+        elif sub not in ("load", "reset"):
+            f = sub
+            err = _validate(f)
+            if err:
+                console.print(f"[bold red]{err}[/bold red]")
+                return
+            if not _change_allowed():
+                return
+            _persist(f)
+            console.print(f"[green]Agent set to {f} — active on next server boot.[/green] "
+                          f"Run [cyan]gorgon agent load {f}[/cyan] for the apply-now steps.")
+        else:
+            console.print("[yellow]Usage: gorgon agent | agent <file> | agent load <file> | agent reset[/yellow]")
 
     elif cmd in ("help", "--help", "-h"):
         from shared.command_help import load_local_catalog, render_terminal_panel

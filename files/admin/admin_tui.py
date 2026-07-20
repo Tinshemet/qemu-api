@@ -101,6 +101,21 @@ def _exec(tool_name: str, args: dict = None, log: bool = True) -> dict:
     return r.get("result", r) if isinstance(r, dict) else r
 
 
+def _vm_list(raw) -> list:
+    """Normalize a list_vms result to a bare list of VM dicts.
+
+    execute_tool returns list_vms as {"success": True, "vms": [...]}, but older
+    call sites here assumed a bare list. Accept both shapes (matching the
+    orchestrator's own api_server handling) so a dict envelope isn't silently
+    dropped, leaving the table empty while the server reports N items.
+    """
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return raw.get("vms", [])
+    return []
+
+
 def _get_events(limit: int = 200) -> list:
     """Return the most recent event-log entries from the server."""
     return _get("/events", {"limit": limit}).get("events", [])
@@ -459,13 +474,11 @@ def _dispatch(cmd: str) -> None:
             new_msg = r.get("message") or r.get("error", "done")
 
         elif verb == "list":
-            r   = _exec("list_vms")
-            vms = r if isinstance(r, list) else []
+            vms = _vm_list(_exec("list_vms"))
             new_msg = "  ".join(v.get("name", "") for v in vms) or "(none)"
 
         elif verb == "stopall":
-            r   = _exec("list_vms")
-            vms = r if isinstance(r, list) else []
+            vms = _vm_list(_exec("list_vms"))
             stopped = []
             for v in vms:
                 if v.get("status") == "running":
@@ -522,8 +535,7 @@ def _dispatch(cmd: str) -> None:
 
         elif verb == "status":
             online  = _server_online()
-            r       = _exec("list_vms") if online else []
-            vms     = r if isinstance(r, list) else []
+            vms     = _vm_list(_exec("list_vms")) if online else []
             running = sum(1 for v in vms if v.get("status") == "running")
             status  = "online" if online else "unreachable"
             new_msg = f"orchestrator={status}  vms={len(vms)}  running={running}"
@@ -628,8 +640,7 @@ def _run(stdscr: "curses.window") -> None:
         now = time.monotonic()
         if now - last_fetch >= _REFRESH:
             try:
-                raw = _exec("list_vms", log=False)
-                vms = raw if isinstance(raw, list) else []
+                vms = _vm_list(_exec("list_vms", log=False))
             except Exception:
                 vms = []
             events     = _get_events(limit=_EVENTS_LIMIT)

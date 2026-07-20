@@ -27,7 +27,7 @@ The tier ladder, ascending friction::
 """
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # The tool registry — the FACTS source of truth (what tools exist + signatures).
 # Guarded like score.py's import so this module still loads in orchestrator-only
@@ -38,9 +38,18 @@ except ImportError:                                                    # pragma:
     _TOOL_SPECS: Dict[str, Any] = {}
     _TOOL_NAME_ARG: Dict[str, str] = {}
 
-# The active agent file. Point GORGON_AGENT at a different .grgn to swap agents.
-_AGENT_FILE = os.environ.get("GORGON_AGENT", "doorman.grgn")
-_AGENT_PATH = os.path.join(os.path.dirname(__file__), _AGENT_FILE)
+# The active agent file, resolved at import: GORGON_AGENT env var (explicit
+# override) > the persisted `gorgon agent` selection > doorman.grgn (default).
+try:
+    from shared.agent_select import get_selection as _agent_selection
+except Exception:
+    _agent_selection = lambda: None                                           # type: ignore[assignment]
+_AGENT_FILE = os.environ.get("GORGON_AGENT") or _agent_selection() or "doorman.grgn"
+_AGENT_PATH = (_AGENT_FILE if os.path.isabs(_AGENT_FILE)
+               else os.path.join(os.path.dirname(__file__), _AGENT_FILE))
+if not os.path.isfile(_AGENT_PATH):
+    # A stale selection (deleted file) must not brick startup — fall back safely.
+    _AGENT_PATH = os.path.join(os.path.dirname(__file__), "doorman.grgn")
 _C: Dict[str, Any] = json.load(open(_AGENT_PATH))
 
 PERSONA = _C.get("persona", {})
@@ -344,6 +353,37 @@ def orphan_entries() -> set:
     if not _TOOL_SPECS:
         return set()
     return set(_TOOLS) - set(_TOOL_SPECS)
+
+
+def agent_tool_issues(allowed_remote_tools: Optional[set] = None) -> List[str]:
+    """Advisory warnings about the ACTIVE agent's tool references vs. the executor
+    SSOT — surfaced at load time (e.g. after `gorgon agent load` restarts the
+    server). Two kinds:
+
+      - a referenced tool absent from the registry (a stale/renamed reference),
+      - a whitelisted tool the executor won't run remotely (not in
+        allowed_remote_tools).
+
+    These are ADVISORY, not blocking: a forged .grgn deliberately carries its own
+    (copied) tool baseline for portability, and the executor is the real gate —
+    an unknown or non-allowed call is rejected there regardless. This just tells
+    the operator the file has drifted from the registry. allowed_remote_tools
+    None/empty ⇒ skip the second check (an empty allow-list means all permitted).
+    """
+    issues: List[str] = []
+    known      = set(_TOOL_SPECS)
+    camp       = _CONTRACT.get("campaign", {}) or {}
+    toolkit    = set(camp.get("toolkit") or [])
+    forbidden  = set(_CONTRACT.get("forbidden", []) or [])
+    referenced = toolkit | forbidden | set(_TOOLS)
+    if known:
+        for t in sorted(referenced - known):
+            issues.append(f"missing tool reference: '{t}' is not in the executor registry")
+    allowed = set(allowed_remote_tools or [])
+    if allowed:
+        for t in sorted((toolkit & known) - allowed):
+            issues.append(f"tool '{t}' forbidden by executor (not in allowed_remote_tools)")
+    return issues
 
 
 def pinned_disagreements() -> Dict[str, Dict[str, str]]:

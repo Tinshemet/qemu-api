@@ -1,0 +1,23 @@
+{
+  "_doc": "Declarative field schema for contract forging. forge.py loads this and both the terminal CLI and the chat wizard iterate it — the questions live here, not hardcoded in Python. Field order IS the elicitation order. parse: str | csv | predicate | float (resolved to a parser in forge._PARSERS). essential: asked in the simpler terminal forge (`gorgon contract forge`); non-essential fields are asked only in the full flow and otherwise take their default. ask=false sets a constant without prompting (never consumes an answer).",
+  "header": "═ Forge a campaign contract ═",
+  "safeword_prompt": "Contract is coherent. Sign with a SAFEWORD to seal it (blank to cancel)",
+  "fields": [
+    {"key": "persona.name", "prompt": "Agent name", "parse": "str", "essential": true},
+    {"key": "persona.role", "prompt": "Role", "parse": "str"},
+    {"key": "persona.disposition", "prompt": "Disposition [human-confirm|autonomous]", "parse": "str", "default": "autonomous"},
+    {"key": "title", "prompt": "Campaign title", "parse": "str"},
+    {"key": "description", "prompt": "One-line context (optional)", "parse": "str"},
+    {"key": "goal", "prompt": "Goal", "parse": "str", "essential": true},
+    {"key": "sub_goals", "prompt": "Sub-goals (comma-separated, optional)", "parse": "csv"},
+    {"key": "scrutiny", "prompt": "Scrutiny [strict|medium|loose]", "parse": "str", "default": "strict"},
+    {"key": "tools.list", "prompt": "Toolkit — whitelist tools (comma-separated)", "parse": "csv", "essential": true},
+    {"key": "tools.mode", "ask": false, "value": "whitelist"},
+    {"key": "forbidden", "prompt": "Red lines — forbidden tools (comma-separated)", "parse": "csv"},
+    {"key": "ethics", "prompt": "Ethics", "parse": "str"},
+    {"key": "legality", "prompt": "Legality", "parse": "str"},
+    {"key": "success_criteria", "prompt": "Success criteria — what is 'done'?", "parse": "str", "essential": true},
+    {"key": "success_predicate", "prompt": "Root gate — checkable end-state as 'criterion:target' (e.g. present:honeypot, absent:web01; optional)", "parse": "predicate"},
+    {"key": "reward", "prompt": "Importance — how much does closing this goal matter? [routine|important|critical]", "parse": "importance", "default": "important", "levels": {"routine": 3, "important": 10, "critical": 30}}
+  ]
+}

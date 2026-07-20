@@ -77,11 +77,25 @@ _LOCALHOST = {"127.0.0.1", "::1", "localhost"}
 _SESSION_COOKIE_NAME = "gorgon_session"
 
 
+def _active_agent_warnings() -> List[str]:
+    """Advisory drift warnings for the active .grgn's tool references vs. the
+    executor (missing / not-remotely-allowed). Never raises."""
+    try:
+        from orchestrator.ai import contract as _contract
+        return _contract.agent_tool_issues(_ALLOWED_TOOLS)
+    except Exception:
+        return []
+
+
 @app.on_event("startup")
 async def _startup() -> None:
-    """Sync profiles, OVMF info, and capabilities from the executor at startup."""
+    """Sync profiles, OVMF info, and capabilities from the executor at startup,
+    then log any drift between the active agent's tool references and the
+    executor registry (advisory — surfaced after `gorgon agent load` restarts)."""
     from orchestrator.executor_client import sync as _sync
     _sync()
+    for _msg in _active_agent_warnings():
+        print(f"  ⚠ agent: {_msg}")
 
 
 def _require_auth(
@@ -173,6 +187,21 @@ def _require_operator_auth(
     )
 
 
+def _current_operator(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_auth),
+    session_cookie: Optional[str] = Cookie(default=None, alias=_SESSION_COOKIE_NAME),
+) -> Optional[str]:
+    """The authenticated operator's username, or None (pre-bootstrap, or a
+    shared-token/localhost caller with no operator session). Resolved the same
+    way _require_operator_auth validates — used by /chat so the forge wizard can
+    re-verify the operator's password before forging."""
+    from orchestrator.auth import sessions as _op_sessions, store as _op_store
+    if not _op_store.operators_exist():
+        return None
+    token = (creds.credentials if creds else None) or session_cookie
+    return _op_sessions.validate_session(token) if token else None
+
+
 class ExecuteRequest(BaseModel):
     tool_name: str
     args:      Dict[str, Any] = {}
@@ -240,6 +269,7 @@ def info() -> Dict[str, Any]:
         "ollama_url":     OLLAMA_URL,
         "ovmf_available": ovmf.get("available", False),
         "ovmf_code":      ovmf.get("code") or "",
+        "agent_warnings": _active_agent_warnings(),
     }
 
 
@@ -294,7 +324,7 @@ def sync() -> Dict[str, Any]:
 
 
 @app.post("/chat", dependencies=[Depends(_require_operator_auth)])
-def chat(req: ChatRequest) -> Dict[str, Any]:
+def chat(req: ChatRequest, operator: Optional[str] = Depends(_current_operator)) -> Dict[str, Any]:
     """
     Process one AI chat turn server-side and return the response.
 
@@ -308,6 +338,9 @@ def chat(req: ChatRequest) -> Dict[str, Any]:
     """
     from orchestrator.ai.cli import process_message
     from orchestrator.executor_client import execute_tool
+    from orchestrator.ai import forge_chat
+    from orchestrator.ai import forge as _forge
+    _FORGE_DIR = os.path.dirname(os.path.abspath(_forge.__file__))
 
     _evict_expired_sessions()
     sid     = req.session_id or str(uuid.uuid4())
@@ -315,6 +348,32 @@ def chat(req: ChatRequest) -> Dict[str, Any]:
     messages      = list(session["messages"])
     pending_tool  = session.get("pending_tool")
     critical_step2 = session.get("critical_step2", False)
+    forge_wizard   = session.get("forge_wizard")
+
+    # ── Forge wizard: deterministic multi-turn contract elicitation ───────────
+    # High-impact, so it opens with operator re-auth. Runs entirely here, never
+    # touching the AI loop, and its turns (incl. the password) are never appended
+    # to `messages` — the transcript stays clean.
+    if forge_wizard is not None or (
+        not (req.auto_confirm and pending_tool)
+        and forge_chat.looks_like_forge_intent(req.message)
+    ):
+        from orchestrator.auth import store as _op_store
+
+        def _verify(pw: str) -> bool:
+            return bool(operator) and _op_store.verify_password(operator, pw)
+
+        if forge_wizard is None:
+            state = forge_chat.start(needs_auth=_op_store.operators_exist())
+            reply, needs_input = forge_chat.current_prompt(state)
+        else:
+            state, reply, needs_input, _result = forge_chat.advance(
+                forge_wizard, req.message, verify_password=_verify, write_dir=_FORGE_DIR)
+
+        _sessions[sid] = {**session, "messages": messages, "forge_wizard": state,
+                          "pending_tool": None, "critical_step2": False}
+        return {"session_id": sid, "text": reply,
+                "tool_results": [], "needs_input": needs_input}
 
     # ── Fast-path: confirmed action — skip Ollama ─────────────────────────────
     if req.auto_confirm and pending_tool:
