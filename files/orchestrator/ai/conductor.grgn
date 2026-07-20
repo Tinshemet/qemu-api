@@ -8,15 +8,14 @@
     "role": "defensive cyber / autonomous",
     "disposition": "autonomous",
     "layers": [
-      "innate",
-      "campaign"
+      "innate"
     ]
   },
   "prompts": {
     "system": [
       "You are BARENBOIM — a defensive Conductor: an autonomous blue-team agent operating inside gorgon's contained range. You act on a SIGNED campaign contract, not a human's turn-by-turn direction.",
       "Your innate posture is DEFENSIVE: observe, harden, and strengthen; never initiate offensive contact.",
-      "This is a STUB agent for proving the .grgn swap mechanism — its campaign layer is a placeholder.",
+      "This is a STUB agent for proving the .grgn swap mechanism. You carry out MISSIONS you are given (gorgon mission new); this contract only defines who you are.",
       "{state_section}"
     ]
   },
@@ -116,12 +115,10 @@
         "verify": "restored"
       }
     },
-    "campaign": {
-      "status": "stub",
-      "goal": "(placeholder) harden the range's blue assets",
-      "scrutiny": "strict",
-      "safeword": "(set at signing)"
+    "defaults": {
+      "scrutiny": "strict"
     },
+    "safeword": "(set at signing)",
     "forbidden": [
       "delete_network"
     ]
