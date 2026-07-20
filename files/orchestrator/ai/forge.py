@@ -37,20 +37,21 @@ def _base_innate() -> Dict[str, Any]:
 def _build_prompt(spec: Dict[str, Any]) -> List[str]:
     p = spec.get("persona", {})
     caveats = spec.get("caveats") or []
+    # The agent prompt describes WHO the agent is — not a goal. A goal arrives with
+    # each MISSION (contracts create agents · agents consume missions), so the prompt
+    # sets character and limits, and the mission supplies the objective at run time.
     lines = [
         f"You are {p.get('name', 'an agent')} — {p.get('role', 'an autonomous agent')}, "
-        f"operating under a signed campaign contract.",
-        f"CAMPAIGN GOAL: {spec.get('goal', '')}.",
-        f"DONE WHEN: {spec.get('success_criteria', '(unspecified)')}.",
+        f"a signed gorgon agent. You carry out MISSIONS you are given, each within this contract.",
         f"SCRUTINY: {spec.get('scrutiny', 'strict')} — "
-        + {"strict": "use only goal-related tools; do not explore beyond the goal.",
-           "medium": "you may explore beyond the goal for coverage.",
-           "loose": "you are free to act as needed in service of the goal."}.get(spec.get("scrutiny", "strict"), ""),
+        + {"strict": "use only mission-related tools; do not explore beyond the mission.",
+           "medium": "you may explore beyond the mission for coverage.",
+           "loose": "you are free to act as needed in service of the mission."}.get(spec.get("scrutiny", "strict"), ""),
         f"ETHICS: {spec.get('ethics', '(unspecified)')}.  LEGALITY: {spec.get('legality', '(unspecified)')}.",
     ]
     if caveats:
         lines.append("CAVEATS: " + "; ".join(caveats) + ".")
-    lines += ["Work toward the goal within the contract; never cross a red line.", "{state_section}"]
+    lines += ["Carry out each mission within your contract; never cross a red line.", "{state_section}"]
     return lines
 
 
@@ -68,15 +69,17 @@ def forge(spec: Dict[str, Any]) -> Dict[str, Any]:
         forbidden = sorted(set(forbidden) | set(listed))
         tools = {}   # blacklist mode: everything but the blacklist is allowed (no per-tool whitelist)
 
+    # A forged .grgn is a pure AGENT — identity + default parameters, no tasking.
+    # Goals/titles/acceptance live on MISSIONS the agent consumes, not here.
     return {
         "_type": "gorgon.agent/v1",
         "_forged": True,
-        "_doc": f"Forged campaign contract: {spec.get('title', '(untitled)')}.",
+        "_doc": f"Forged gorgon agent: {spec.get('persona', {}).get('name', '(unnamed)')}.",
         "persona": {
             "name": spec.get("persona", {}).get("name"),
             "role": spec.get("persona", {}).get("role", "autonomous agent"),
             "disposition": spec.get("persona", {}).get("disposition", "autonomous"),
-            "layers": ["innate", "campaign"],
+            "layers": ["innate"],
         },
         "prompts": {"system": _build_prompt(spec)},
         "contract": {
@@ -84,26 +87,21 @@ def forge(spec: Dict[str, Any]) -> Dict[str, Any]:
             "formula": base["formula"],
             "fleet_actions": base.get("fleet_actions", {}),
             "tools": tools,
-            "forbidden": forbidden,
-            "campaign": {
-                "title": spec.get("title"),
-                "description": spec.get("description"),           # free-text context (not gate-enforced)
-                "goal": spec.get("goal"),
-                "sub_goals": spec.get("sub_goals", []),
+            "tool_mode": mode,
+            "toolkit": listed if mode == "whitelist" else None,   # default whitelist (a mission may narrow it)
+            "forbidden": forbidden,                                # default blacklist (red lines; a mission may add to it)
+            "ethics": spec.get("ethics"),                         # abide [rules] | surface to user | disregard
+            "legality": spec.get("legality"),                     # follow [laws] | none
+            "caveats": spec.get("caveats", []),
+            "rules": spec.get("rules", []),                       # [{text, weight}] — 0=wildcard/void-if-broken, 1=default
+            # Agent DEFAULTS — a mission inherits these for any field it doesn't set.
+            "defaults": {
+                "reward": spec.get("reward", 1.0),                # default payoff a mission inherits
                 "scrutiny": spec.get("scrutiny", "strict"),       # strict | medium | loose
-                "tool_mode": mode,
-                "toolkit": listed if mode == "whitelist" else None,   # what the agent may CALL
-                "ethics": spec.get("ethics"),                     # abide [rules] | surface to user | disregard
-                "legality": spec.get("legality"),                 # follow [laws] | none
-                "caveats": spec.get("caveats", []),
-                "rules": spec.get("rules", []),                   # [{text, weight}] — 0=wildcard/void-if-broken, 1=default
-                "success_criteria": spec.get("success_criteria"),   # human prose
-                "success_predicate": spec.get("success_predicate") or None,  # checkable {criterion,target} clauses = the ROOT gate
-                "reward": spec.get("reward", 1.0),
-                "expiry": spec.get("expiry"),         # ISO date | None (never); enforced at load
-                "safeword": None,     # set at signing
-                "signed": False,      # two-phase: negotiable until signed
             },
+            "expiry": spec.get("expiry"),         # ISO date | None (never); enforced at load — the agent's credential
+            "safeword": None,                     # set at signing (the agent's kill-switch)
+            "signed": False,                      # two-phase: negotiable until signed
         },
     }
 
@@ -115,13 +113,10 @@ def review(grgn: Dict[str, Any]) -> List[str]:
         from executor.command_catalog import KNOWN_TOOLS
     except ImportError:
         KNOWN_TOOLS = frozenset()
-    # state criteria (checked vs the VM registry) + epistemic ones (checked vs findings).
-    _CRITERIA = {"present", "absent", "running", "stopped", "restored", "mesh", "reachable", "probe", "found"}
     issues: List[str] = []
     c = grgn.get("contract", {})
-    camp = c.get("campaign", {})
     offered, forbidden = set(c.get("tools", {})), set(c.get("forbidden", []))
-    toolkit = set(camp.get("toolkit") or [])
+    toolkit = set(c.get("toolkit") or [])
 
     for t in offered | forbidden | toolkit:
         if KNOWN_TOOLS and t not in KNOWN_TOOLS:
@@ -131,17 +126,7 @@ def review(grgn: Dict[str, Any]) -> List[str]:
         issues.append(f"tool is BOTH offered and forbidden (contradiction): {sorted(both)}")
     if not grgn.get("persona", {}).get("name"):
         issues.append("no persona name")
-    if not camp.get("goal"):
-        issues.append("no goal")
-    if not camp.get("success_criteria"):
-        issues.append("no success criteria — 'done' is undefined (mis-specified contract)")
-    for clause in camp.get("success_predicate") or []:
-        crit, target = clause.get("criterion"), clause.get("target")
-        if crit not in _CRITERIA:
-            issues.append(f"root predicate clause has an uncheckable criterion: {crit!r} (want one of {sorted(_CRITERIA)})")
-        if not target:
-            issues.append(f"root predicate clause has no target: {clause!r}")
-    if camp.get("tool_mode") == "whitelist" and not camp.get("toolkit"):
+    if c.get("tool_mode") == "whitelist" and not c.get("toolkit"):
         issues.append("empty toolkit — the agent can do nothing")
     return issues
 
@@ -154,65 +139,54 @@ def sign(grgn: Dict[str, Any], safeword: str) -> Dict[str, Any]:
         raise ValueError("cannot sign an incoherent contract: " + "; ".join(issues))
     if not safeword:
         raise ValueError("a safeword is required to sign (the kill-switch)")
-    grgn["contract"]["campaign"]["safeword"] = safeword
-    grgn["contract"]["campaign"]["signed"] = True
+    grgn["contract"]["safeword"] = safeword
+    grgn["contract"]["signed"] = True
     return grgn
 
 
 def render(grgn: Dict[str, Any], width: int = 68) -> str:
-    """A human-readable terminal view of a contract — laid out to the campaign-contract
-    structure (title+description · goal+sub-goals · scrutiny/tools/ethics/legality ·
-    weighted rules · red lines · success criteria · safeword). For `gorgon contract show`."""
+    """A human-readable terminal view of an AGENT contract — identity + default
+    parameters (persona · scrutiny/ethics/legality · toolkit · red lines · weighted
+    rules · defaults · safeword). No goals — those live on missions. For `gorgon
+    contract show`."""
     p = grgn.get("persona", {})
     c = grgn.get("contract", {})
-    camp = c.get("campaign", {})
+    d = c.get("defaults", {})
     bar = "─" * width
 
     def wrap(label, text):
-        return f"  {label:<11}{text}"
+        return f"  {label:<12} {text}"
 
     L = ["",                                      # leading blank line so the box starts fresh
          "╔" + "═" * width + "╗",
-         f"  CAMPAIGN CONTRACT — {camp.get('title') or '(innate)'}"
-         + ("     ✔ SIGNED" if camp.get("signed") else "     … unsigned · negotiable"),
+         f"  AGENT CONTRACT — {p.get('name') or '(unnamed)'}"
+         + ("     ✔ SIGNED" if c.get("signed") else "     … unsigned · negotiable"),
          "╠" + "═" * width + "╣",
-         wrap("Signatory", f"{p.get('name','?')}  ·  {p.get('role','')}  ·  {p.get('disposition','?')}")]
-    if camp.get("description"):
-        L.append(wrap("Context", camp["description"]))
-    if camp:
-        L += [bar,
-              wrap("Goal", camp.get("goal", "")),
-              ]
-        for sg in camp.get("sub_goals", []):
-            L.append(wrap("  ·", sg))
-        L += [wrap("Done when", camp.get("success_criteria", "(undefined)"))]
-        pred = camp.get("success_predicate") or []
-        if pred:
-            L.append(wrap("  root gate", " ∧ ".join(f"{cl.get('criterion')}:{cl.get('target')}" for cl in pred)))
-        L += [bar,
-              wrap("Scrutiny", camp.get("scrutiny", "")),
-              wrap("Ethics", camp.get("ethics", "")),
-              wrap("Legality", camp.get("legality", "")),
-              wrap("Reward", _reward_render(camp.get("reward", ""))),
-              wrap("Expires", camp.get("expiry") or "never")]
+         wrap("Identity", f"{p.get('name','?')}  ·  {p.get('role','')}  ·  {p.get('disposition','?')}"),
+         bar,
+         wrap("Scrutiny", d.get("scrutiny", "")),
+         wrap("Ethics", c.get("ethics", "")),
+         wrap("Legality", c.get("legality", "")),
+         bar,
+         wrap("Toolkit", ", ".join(c.get("toolkit") or sorted(c.get("tools", {})) or ["(none)"])
+              + (f"   [{c.get('tool_mode')}]" if c.get("tool_mode") else "")),
+         wrap("Red lines", (", ".join(c.get("forbidden", [])) or "(none)") + "   [weight 0 · inviolable]"),
+         bar,
+         wrap("Def. reward", _reward_render(d.get("reward", ""))),
+         wrap("Expires", c.get("expiry") or "never")]
 
-    L += [bar,
-          wrap("Toolkit", ", ".join(camp.get("toolkit") or sorted(c.get("tools", {})) or ["(none)"])
-               + (f"   [{camp.get('tool_mode')}]" if camp.get("tool_mode") else "")),
-          wrap("Blacklist", (", ".join(c.get("forbidden", [])) or "(none)") + "   [weight 0 · inviolable]")]
-
-    rules = camp.get("rules", [])
-    if rules or camp.get("caveats"):
+    rules = c.get("rules", [])
+    if rules or c.get("caveats"):
         L.append(bar)
         L.append("  RULES  (weight: 0 = wildcard/void-if-broken · 1 = default · higher = weaker)")
         for r in rules:
-            w = r.get("weight", 1)
-            L.append(f"    [{w}] {r.get('text','')}")
-        for cav in camp.get("caveats", []):
+            L.append(f"    [{r.get('weight', 1)}] {r.get('text','')}")
+        for cav in c.get("caveats", []):
             L.append(f"    [·] {cav}")
 
     L += [bar,
-          wrap("Safeword", "set  (kill-switch armed)" if camp.get("safeword") else "— (set at signing)"),
+          wrap("Safeword", "set  (kill-switch armed)" if c.get("safeword") else "— (set at signing)"),
+          "  A mission gives this agent a goal:  gorgon mission new",
           "╚" + "═" * width + "╝"]
     return "\n".join(L)
 

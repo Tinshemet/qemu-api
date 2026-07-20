@@ -63,7 +63,8 @@ except Exception:
     _read_grgn = lambda p: (json.load(open(p)), "unsigned")                   # type: ignore[assignment]
 def _is_expired(contract: Dict[str, Any]) -> bool:
     """True if the contract carries an expiry date that is already past."""
-    exp = ((contract or {}).get("contract", {}).get("campaign", {}) or {}).get("expiry")
+    con = (contract or {}).get("contract", {}) or {}
+    exp = con.get("expiry") or (con.get("campaign") or {}).get("expiry")   # agent-level, legacy fallback
     if not exp:
         return False
     try:
@@ -276,7 +277,7 @@ def gate_action(tool: str, args: Optional[Dict[str, Any]] = None) -> str:
 def safeword() -> Optional[str]:
     """The active contract's safeword (the operator's kill-switch), or None if the
     agent isn't a signed campaign. The harness arms its KillSwitch with this."""
-    return (_CONTRACT.get("campaign") or {}).get("safeword")
+    return _CONTRACT.get("safeword") or (_CONTRACT.get("campaign") or {}).get("safeword")
 
 
 def goal_predicate() -> Optional[list]:
@@ -465,7 +466,7 @@ def agent_tool_issues(allowed_remote_tools: Optional[set] = None) -> List[str]:
     issues: List[str] = []
     known      = set(_TOOL_SPECS)
     camp       = _CONTRACT.get("campaign", {}) or {}
-    toolkit    = set(camp.get("toolkit") or [])
+    toolkit    = set(_CONTRACT.get("toolkit") or camp.get("toolkit") or [])
     forbidden  = set(_CONTRACT.get("forbidden", []) or [])
     referenced = toolkit | forbidden | set(_TOOLS)
     if known:
