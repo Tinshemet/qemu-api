@@ -699,18 +699,28 @@ def run(args: List[str], verbose: bool = False) -> None:
                 ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
                 out=console.print, write_dir=_agent_dir, essential_only=not _full)
         elif sub == "show" and len(rest) >= 2:
+            from shared.grgn_sign import read as _read_grgn
             path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
-            console.print(_forge.render(json.load(open(path))))
+            g, st = _read_grgn(path)
+            if g is None:
+                console.print(f"[bold red]Cannot read {rest[1]} ({st}).[/bold red]")
+            else:
+                console.print(_forge.render(g))
+                console.print(f"[dim]integrity: {st}[/dim]")
         elif sub == "sign" and len(rest) >= 3:
             if not _require_operator_password("sign a contract"):
                 return
+            from shared.grgn_sign import read as _read_grgn
             path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
-            g = json.load(open(path))
-            try:
-                _forge.sign(g, rest[2]); _forge.write_grgn(g, path)
-                console.print(f"[green]Signed → {path}[/green]")
-            except ValueError as e:
-                console.print(f"[bold red]{e}[/bold red]")
+            g, st = _read_grgn(path)
+            if g is None:
+                console.print(f"[bold red]Cannot read {rest[1]} ({st}).[/bold red]")
+            else:
+                try:
+                    _forge.sign(g, rest[2]); _forge.write_grgn(g, path)
+                    console.print(f"[green]Signed → {path}[/green]")
+                except ValueError as e:
+                    console.print(f"[bold red]{e}[/bold red]")
         else:
             console.print("[yellow]Usage: gorgon contract forge [--full] | "
                           "show <file> | sign <file> <safeword>[/yellow]")
@@ -733,9 +743,12 @@ def run(args: List[str], verbose: bool = False) -> None:
             if not os.path.isfile(p):
                 return f"no such agent file: {f}"
             try:
-                g = json.load(open(p))
+                from shared.grgn_sign import read as _read_grgn
+                g, st = _read_grgn(p)              # decrypts / verifies either format
             except Exception as e:
-                return f"{f} is not valid JSON: {e}"
+                return f"{f} could not be read: {e}"
+            if st in ("tampered", "missing") or g is None:
+                return f"{f} failed its integrity check ({st}) — refusing to select it"
             if not (isinstance(g, dict) and "contract" in g and "persona" in g):
                 return f"{f} is not a .grgn agent (missing contract/persona)"
             return None
@@ -759,9 +772,18 @@ def run(args: List[str], verbose: bool = False) -> None:
         sub = rest[0] if rest else ""
         if not sub:
             cur = os.environ.get("GORGON_AGENT") or _sel.get_selection() or "doorman.grgn (default)"
-            files = sorted(os.path.basename(p) for p in _glob.glob(os.path.join(_agent_dir, "*.grgn")))
             console.print(f"[bold]Active agent:[/bold] {cur}")
-            console.print("[dim]Available:[/dim] " + (", ".join(files) or "(none)"))
+            console.print("[dim]Available (integrity):[/dim]")
+            try:
+                from shared.grgn_sign import status as _grgn_status
+            except Exception:
+                _grgn_status = lambda p: "unknown"
+            _colors = {"encrypted": "green", "signed": "green",
+                       "unsigned": "yellow", "tampered": "bold red"}
+            for p in sorted(_glob.glob(os.path.join(_agent_dir, "*.grgn"))):
+                st = _grgn_status(p)
+                c = _colors.get(st, "dim")
+                console.print(f"  [{c}]{os.path.basename(p):<22} {st}[/{c}]")
             if os.environ.get("GORGON_AGENT"):
                 console.print("[dim](GORGON_AGENT env var is set — it overrides the saved selection.)[/dim]")
         elif sub == "reset":

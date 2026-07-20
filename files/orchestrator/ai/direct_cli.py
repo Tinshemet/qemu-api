@@ -654,16 +654,26 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
                 ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
                 out=console.print, write_dir=_agent_dir)
         elif sub == "show" and len(rest) >= 2:
+            from shared.grgn_sign import read as _read_grgn
             path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
-            console.print(_forge.render(_json.load(open(path))))
+            g, st = _read_grgn(path)
+            if g is None:
+                console.print(f"[error]Cannot read {rest[1]} ({st}).[/error]")
+            else:
+                console.print(_forge.render(g))
+                console.print(f"[dim]integrity: {st}[/dim]")
         elif sub == "sign" and len(rest) >= 3:
+            from shared.grgn_sign import read as _read_grgn
             path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
-            g = _json.load(open(path))
-            try:
-                _forge.sign(g, rest[2]); _forge.write_grgn(g, path)
-                console.print(f"[success]Signed → {path}[/success]")
-            except ValueError as e:
-                console.print(f"[error]{e}[/error]")
+            g, st = _read_grgn(path)
+            if g is None:
+                console.print(f"[error]Cannot read {rest[1]} ({st}).[/error]")
+            else:
+                try:
+                    _forge.sign(g, rest[2]); _forge.write_grgn(g, path)
+                    console.print(f"[success]Signed → {path}[/success]")
+                except ValueError as e:
+                    console.print(f"[error]{e}[/error]")
         else:
             console.print("[yellow]Usage: gorgon contract forge | show <file> | sign <file> <safeword>[/yellow]")
 

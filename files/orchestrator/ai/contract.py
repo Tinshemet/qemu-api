@@ -47,10 +47,34 @@ except Exception:
 _AGENT_FILE = os.environ.get("GORGON_AGENT") or _agent_selection() or "doorman.grgn"
 _AGENT_PATH = (_AGENT_FILE if os.path.isabs(_AGENT_FILE)
                else os.path.join(os.path.dirname(__file__), _AGENT_FILE))
+_DOORMAN_PATH = os.path.join(os.path.dirname(__file__), "doorman.grgn")
 if not os.path.isfile(_AGENT_PATH):
     # A stale selection (deleted file) must not brick startup — fall back safely.
-    _AGENT_PATH = os.path.join(os.path.dirname(__file__), "doorman.grgn")
-_C: Dict[str, Any] = json.load(open(_AGENT_PATH))
+    _AGENT_PATH = _DOORMAN_PATH
+
+# Integrity gate: a TAMPERED agent file (bad Fernet token or bad sidecar) is
+# refused (fail-closed) and we fall back to doorman — a hand-edited/forged-under-a-
+# foreign-key contract must not run. Forged files are encrypted; the built-in
+# templates are plaintext (trust-on-first-use). Status is surfaced, not printed
+# here, since contract.py is imported in many contexts.
+try:
+    from shared.grgn_sign import read as _read_grgn
+except Exception:
+    _read_grgn = lambda p: (json.load(open(p)), "unsigned")                   # type: ignore[assignment]
+_C_LOADED, _AGENT_STATUS = _read_grgn(_AGENT_PATH)
+if (_AGENT_STATUS in ("tampered", "missing") or _C_LOADED is None) \
+        and os.path.abspath(_AGENT_PATH) != os.path.abspath(_DOORMAN_PATH):
+    _AGENT_PATH = _DOORMAN_PATH                    # refuse; run the default agent
+    _C_LOADED, _AGENT_STATUS2 = _read_grgn(_AGENT_PATH)
+    _AGENT_STATUS = "tampered"                     # remember the selected file was bad
+_C: Dict[str, Any] = _C_LOADED if _C_LOADED is not None else json.load(open(_DOORMAN_PATH))
+
+
+def agent_signature_status() -> str:
+    """Integrity/format status of the SELECTED agent file: encrypted | signed |
+    unsigned | tampered | missing. 'tampered' means it was refused and doorman is
+    running instead."""
+    return _AGENT_STATUS
 
 PERSONA = _C.get("persona", {})
 _PROMPTS = _C.get("prompts", {})

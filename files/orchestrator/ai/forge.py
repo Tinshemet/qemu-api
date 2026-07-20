@@ -215,10 +215,16 @@ def render(grgn: Dict[str, Any], width: int = 68) -> str:
 
 
 def write_grgn(grgn: Dict[str, Any], path: str) -> str:
-    """Persist a forged .grgn. Point GORGON_AGENT at it to run the forged agent."""
-    with open(path, "w") as f:
-        json.dump(grgn, f, indent=2, ensure_ascii=False)
-    return path
+    """Persist a forged .grgn — ENCRYPTED (Fernet), so the safeword and campaign
+    never sit in cleartext on disk. Point GORGON_AGENT at it to run the agent.
+    Falls back to plaintext only if the crypto layer is unavailable."""
+    try:
+        from shared.grgn_sign import write_encrypted
+        return write_encrypted(grgn, path)
+    except Exception:
+        with open(path, "w") as f:                 # degraded: crypto layer absent
+            json.dump(grgn, f, indent=2, ensure_ascii=False)
+        return path
 
 
 def _csv(s: str):

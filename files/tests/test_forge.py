@@ -92,12 +92,25 @@ def main():
     d = tempfile.mkdtemp()
     path = forge_interactive(ask=lambda p: next(answers), out=lambda s: None, write_dir=d)
     import json as _json
-    g = _json.load(open(path))
+    from shared.grgn_sign import read as _read_grgn
+    # the file on disk is ENCRYPTED — its contents (incl. the safeword) are hidden
+    raw = open(path, "rb").read()
+    check("forged file is encrypted, not plaintext JSON", raw.startswith(b"gAAAAA"))
+    _leaked = False
+    try:
+        _json.loads(raw.decode("utf-8", "ignore"))
+        _leaked = True
+    except Exception:
+        _leaked = False
+    check("safeword is not readable in the file", (not _leaked) and (b"banana" not in raw))
+    g, _status = _read_grgn(path)                # decrypt with the install key
+    check("decrypts (status encrypted)", _status == "encrypted")
     check("interactive forge wrote a signed contract", g["contract"]["campaign"]["signed"] and g["contract"]["campaign"]["safeword"] == "banana")
     check("named the file after the agent", path.endswith("shani.grgn"))
     check("captured the elicited toolkit + red lines", g["contract"]["campaign"]["toolkit"] == ["list_vms", "run_guest_command"] and g["contract"]["forbidden"] == ["delete_network"])
     check("parsed the root-gate clause (criterion:target)", g["contract"]["campaign"]["success_predicate"] == [{"criterion": "running", "target": "vm1"}])
-    os.remove(path); os.rmdir(d)
+    os.remove(path)
+    os.rmdir(d)
     # a blank safeword cancels (nothing written)
     ans2 = iter(["X", "r", "autonomous", "t", "", "g", "", "strict", "list_vms", "", "e", "l", "done", "1", ""])
     d2 = tempfile.mkdtemp()

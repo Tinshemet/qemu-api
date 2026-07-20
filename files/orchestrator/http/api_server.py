@@ -78,22 +78,37 @@ _SESSION_COOKIE_NAME = "gorgon_session"
 
 
 def _active_agent_warnings() -> List[str]:
-    """Advisory drift warnings for the active .grgn's tool references vs. the
-    executor (missing / not-remotely-allowed). Never raises."""
+    """Warnings about the active .grgn: integrity status (tampered/unsigned) plus
+    tool-reference drift vs. the executor. Never raises."""
+    warnings: List[str] = []
     try:
         from orchestrator.ai import contract as _contract
-        return _contract.agent_tool_issues(_ALLOWED_TOOLS)
+        status = _contract.agent_signature_status()
+        if status == "tampered":
+            warnings.append("SECURITY: active agent file failed its integrity check "
+                            "(tampered) — running doorman.grgn instead")
+        elif status == "unsigned":
+            warnings.append("active agent file was unsigned — signed on this boot "
+                            "(trust-on-first-use)")
+        warnings += _contract.agent_tool_issues(_ALLOWED_TOOLS)
     except Exception:
-        return []
+        pass
+    return warnings
 
 
 @app.on_event("startup")
 async def _startup() -> None:
-    """Sync profiles, OVMF info, and capabilities from the executor at startup,
-    then log any drift between the active agent's tool references and the
-    executor registry (advisory — surfaced after `gorgon agent load` restarts)."""
+    """Sync from the executor, TOFU-sign the active agent (so later tampering is
+    detectable), then log any integrity/drift warnings — surfaced after a
+    `gorgon agent load` restart."""
     from orchestrator.executor_client import sync as _sync
     _sync()
+    try:
+        from orchestrator.ai import contract as _contract
+        from shared.grgn_sign import ensure_integrity
+        ensure_integrity(_contract._AGENT_PATH)       # sign plaintext templates (TOFU)
+    except Exception:
+        pass
     for _msg in _active_agent_warnings():
         print(f"  ⚠ agent: {_msg}")
 
