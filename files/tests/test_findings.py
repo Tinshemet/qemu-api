@@ -123,6 +123,34 @@ def main():
               tools=TL, findings=f, findings_schema=SCH)
     check("claim recorded with its evidence", f.get("email(cfo@x)") == "cfo@x" and f.evidence("email(cfo@x)") == "payroll export row 3")
 
+    print("\nconfirm-gate: a pending claim can't close a goal until a human confirms it")
+    f = Findings()
+    f.record("email(cfo@x)", "cfo@x", source="claim_finding", evidence="payroll row 3")
+    f.record("ip(web)", "10.0.0.5", source="get_vm_ip")     # probe fact, no status
+    check("pending claim is recorded but NOT usable", f.has("email(cfo@x)") and not f.usable("email(cfo@x)"))
+    check("is_pending true for the claim", f.is_pending("email(cfo@x)"))
+    check("a probe fact (no status) stays usable", f.usable("ip(web)"))
+    check("confirm flips it to usable", f.confirm("email(cfo@x)") is True and f.usable("email(cfo@x)"))
+    check("confirm again is a no-op", f.confirm("email(cfo@x)") is False)
+    check("confirmed claim is off the review list", not f.claims_for_review())
+    check("a fresh claim can't clobber a confirmed fact",
+          (f.record("email(cfo@x)", "attacker@x", source="claim_finding", evidence="spoof"),
+           f.get("email(cfo@x)") == "cfo@x")[1])
+
+    print("\npersistence: only claims cross runs; probe facts don't")
+    f = Findings()
+    f.record("phone(555)", "555", source="claim_finding", evidence="sig block")   # pending
+    f.record("ip(db)", "2.2.2.2", source="get_vm_ip")                             # not a claim
+    check("persistable keeps the claim, drops the probe fact", set(f.persistable()) == {"phone(555)"})
+    g = Findings(); g.merge(f.persistable())
+    check("merge seeds the pending claim (still pending)", g.is_pending("phone(555)") and not g.usable("phone(555)"))
+    g.confirm("phone(555)")
+    h = Findings(); h.merge(g.persistable())
+    check("a run inherits a CONFIRMED claim as usable", h.usable("phone(555)"))
+    check("merge never clobbers a fact already present",
+          (h.record("phone(555)", "999", source="x"), h.merge({"phone(555)": {"value": "000"}}),
+           h.get("phone(555)") == "999")[2])
+
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)
 

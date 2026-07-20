@@ -90,6 +90,13 @@ def agent_signature_status() -> str:
     running instead."""
     return _AGENT_STATUS
 
+
+def active_agent_key() -> str:
+    """The per-agent scope key (agent file basename, no extension) — used to scope
+    the claim store so a doorman run's claims never mix with a barenboim run's
+    (doorman.grgn -> 'doorman')."""
+    return os.path.splitext(os.path.basename(_AGENT_PATH))[0]
+
 PERSONA = _C.get("persona", {})
 _PROMPTS = _C.get("prompts", {})
 _CONTRACT = _C["contract"]

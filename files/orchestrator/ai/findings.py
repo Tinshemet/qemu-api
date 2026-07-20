@@ -90,13 +90,51 @@ class Findings:
 
     def record(self, fact: str, value: Any, source: Optional[str] = None,
                evidence: Optional[str] = None) -> None:
+        # Don't let a fresh unverified claim clobber a fact a human already CONFIRMED.
+        existing = self._f.get(fact)
+        if evidence and existing and existing.get("status") == "verified":
+            return
         entry: Dict[str, Any] = {"value": value, "source": source}
-        # An UNVERIFIED claim (a type with no probe) carries `evidence` — the
-        # operator's note on where/how they found it. The machine can't confirm the
-        # fact, so it preserves the human's audit trail instead of pretending proof.
+        # An UNVERIFIED claim (a type with no probe) carries `evidence` — the operator's
+        # note on where/how they found it — and enters as `pending`: recorded and visible,
+        # but NOT usable to close a goal until a human confirms it (see usable/confirm).
         if evidence:
             entry["evidence"] = evidence
+            entry["status"] = "pending"
         self._f[fact] = entry
+
+    def usable(self, fact: str) -> bool:
+        """The acceptance / anti-rediscovery gate: known, truthy, AND not an
+        unconfirmed claim. A `pending` claim is recorded (so it's visible and not
+        re-claimed) but can't satisfy a goal until a human marks it verified."""
+        e = self._f.get(fact)
+        return bool(e) and bool(e.get("value")) and e.get("status") != "pending"
+
+    def is_pending(self, fact: str) -> bool:
+        return (self._f.get(fact) or {}).get("status") == "pending"
+
+    def confirm(self, fact: str) -> bool:
+        """A human marks a pending claim TRUE — it becomes usable. Returns False if
+        the fact isn't a pending claim."""
+        e = self._f.get(fact)
+        if not e or e.get("status") != "pending":
+            return False
+        e["status"] = "verified"
+        return True
+
+    def persistable(self) -> Dict[str, Dict[str, Any]]:
+        """The claim entries worth carrying across runs — pending (awaiting review)
+        and verified (human-confirmed). Probe facts (no status) are NOT persisted:
+        they're cheap to re-derive and go stale."""
+        return {k: dict(v) for k, v in self._f.items()
+                if v.get("status") in ("pending", "verified")}
+
+    def merge(self, entries: Optional[Dict[str, Dict[str, Any]]]) -> None:
+        """Seed this ledger from a persisted store — confirmed claims come back
+        usable, pending ones stay pending. Never clobbers a fact already present."""
+        for k, v in (entries or {}).items():
+            if k not in self._f and isinstance(v, dict) and "value" in v:
+                self._f[k] = dict(v)
 
     def has(self, fact: str) -> bool:
         return fact in self._f
@@ -126,13 +164,13 @@ class Findings:
         return list(self._f)
 
     def claims_for_review(self):
-        """The unverified claims a HUMAN still needs to check — every fact carrying
-        `evidence` (a machine-unverifiable claim the operator vouched for). Returns
-        [{fact, value, evidence, source}], sorted, so a run can surface exactly what
-        the machine couldn't confirm and where the claimant said to look."""
+        """The unverified claims a HUMAN still needs to check — every `pending` fact
+        (a machine-unverifiable claim, recorded with the operator's evidence pointer).
+        Returns [{fact, value, evidence, source}], sorted, so a run surfaces exactly
+        what the machine couldn't confirm and where the claimant said to look."""
         return [
-            {"fact": k, "value": v["value"], "evidence": v["evidence"], "source": v.get("source")}
-            for k, v in sorted(self._f.items()) if v.get("evidence")
+            {"fact": k, "value": v["value"], "evidence": v.get("evidence"), "source": v.get("source")}
+            for k, v in sorted(self._f.items()) if v.get("status") == "pending"
         ]
 
     def render(self) -> str:

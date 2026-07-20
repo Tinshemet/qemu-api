@@ -488,6 +488,14 @@
       "category": "Operator & agents"
     },
     {
+      "command": "claim",
+      "tools": [],
+      "args": "[list] | confirm '<fact>' | reject '<fact>'",
+      "desc": "Review unverifiable claims. A pending claim can't close a goal until you confirm it; confirm/reject requires the operator password.",
+      "related": ["claim", "confirm finding", "verify claim"],
+      "category": "Operator & agents"
+    },
+    {
       "command": "run",
       "tools": [],
       "args": "<goal>",

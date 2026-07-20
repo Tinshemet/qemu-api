@@ -101,7 +101,9 @@ def make_goal_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]], find
     when the contract declares no structured predicate (no clauses, no gate).
     """
     def _finding_true(fact: str) -> bool:
-        return findings is not None and findings.has(fact) and bool(findings.get(fact))
+        # `usable` excludes a PENDING claim — an unverified fact can't close a goal
+        # until a human confirms it (see findings.usable / gorgon claim confirm).
+        return findings is not None and findings.usable(fact)
 
     def verify_goal(goal: str, children: list, ledger: list) -> Optional[bool]:
         clauses = _contract.goal_predicate()
@@ -220,6 +222,8 @@ def run_autonomous(
     prior=None,
     max_retries: int = 2,
     max_depth:   int = 3,
+    persist_claims: bool = False,
+    agent_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run `goal` autonomously with the active agent's contract. No human in the loop.
 
@@ -249,6 +253,18 @@ def run_autonomous(
         findings = Findings()
     if findings_schema is None:
         findings_schema = DEFAULT_SCHEMA
+    # Seed the ledger from the per-agent claim store: confirmed claims come back as
+    # USABLE facts (a human already vouched for them) and prior pending claims stay
+    # pending (so they aren't re-surfaced as brand-new). Best-effort — a bad/missing
+    # store must never brick a run.
+    if persist_claims:
+        try:
+            from .contract import active_agent_key as _agent_key
+            from . import findings_store as _store
+            agent_key = agent_key or _agent_key()
+            findings.merge(_store.load(agent_key))
+        except Exception:
+            pass
     # Built AFTER findings exists: the root predicate reads epistemic clauses (mesh /
     # reachable) from the findings ledger, not just VM state.
     verify_goal = make_goal_verifier(vms_getter, findings, probe=make_probe(execute)) if vms_getter else None
@@ -299,6 +315,14 @@ def run_autonomous(
     # Unverified claims the run recorded — what no probe could confirm, plus the
     # operator's evidence pointer for each, so a human can close the loop by hand.
     result["claims_for_review"] = findings.claims_for_review()
+    # Persist this run's claims (pending + confirmed) back to the per-agent store so
+    # a human can review/confirm them AFTER the run — and the next run inherits them.
+    if persist_claims:
+        try:
+            from . import findings_store as _store
+            _store.merge_into(agent_key, findings.persistable())
+        except Exception:
+            pass
     # Reward-cost economics: price the run (μ, σ², CE, cost, reward) using the
     # contract's per-tool risk as the cost source. Makes the tree reward-cost-aware.
     result["economics"] = _economics(result["root"], cost_of=_contract.tool_risk,
@@ -326,6 +350,7 @@ def run_autonomous_live(goal: str, **kw) -> Dict[str, Any]:
     from .active_library import LIBRARY
     from orchestrator.executor_client import execute_tool
 
+    kw.setdefault("persist_claims", True)              # the real runtime persists claims
     return run_autonomous(
         goal,
         call_model=_call_ollama,                       # prepends the active agent's system prompt
