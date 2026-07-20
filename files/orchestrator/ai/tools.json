@@ -657,6 +657,37 @@
  {
   "type": "function",
   "function": {
+   "name": "guest_probe",
+   "description": "Verify a single read-only fact inside a VM and return whether it HOLDS (true/false) — grounded proof, not a claim. assertion is one of: port_listening (target = port), process_running (target = process name), path_exists (target = path). Unlike run_guest_command, whose success only means the command ran, a probe's truth comes from the check itself. Use it to confirm an effect actually happened before treating a step as done.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "assertion": {
+      "type": "string",
+      "enum": [
+       "port_listening",
+       "process_running",
+       "path_exists"
+      ]
+     },
+     "target": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "assertion",
+     "target"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
    "name": "fleet",
    "description": "Broadcast ONE action to every VM carrying a label (a 'fleet') and return per-VM results. The label matches either an auto-flag (stealth/hardened/bridge/vpn) or a user label (e.g. 'redteam'). Use this instead of calling per-VM tools in a loop when the user wants to act on a whole group at once ('run X on all my redteam VMs', 'stop the stealth fleet', 'ping every work_vm'). action='exec' runs a guest command on each member (needs 'command'; each member must be running with guest_agent enabled); 'ping'/'status' observe; 'stop'/'launch' control lifecycle. To just see which VMs are in a fleet, use list_vms with the label filter instead.",
    "parameters": {

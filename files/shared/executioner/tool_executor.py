@@ -769,6 +769,20 @@ def _run(
                 console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
         return result
 
+    elif tool_name == "guest_probe":
+        result = manager.guest_probe(
+            args["name"], args["assertion"], args["target"], timeout=args.get("timeout")
+        )
+        if not verbose:
+            if result.get("success"):
+                holds = result.get("holds")
+                style = "green" if holds else "yellow"
+                console.print(f"[{style}]{args['name']}: {result['assertion']}"
+                              f"({result['target']}) → {'holds' if holds else 'does not hold'}[/{style}]")
+            else:
+                console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
+        return result
+
     elif tool_name == "fleet":
         result = manager.fleet(
             args["label"], args["action"],

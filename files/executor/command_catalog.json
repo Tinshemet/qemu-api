@@ -667,6 +667,16 @@
       "effect": null,
       "rev": false
     },
+    "guest_probe": {
+      "req": [
+        "name",
+        "assertion",
+        "target"
+      ],
+      "vm": true,
+      "effect": null,
+      "rev": false
+    },
     "launch_vm": {
       "req": [
         "name"

@@ -152,6 +152,54 @@ class _VmGuestMixin:
             client.close()
 
     # ------------------------------------------------------------------
+    # Grounding — read-only assertions
+    # ------------------------------------------------------------------
+
+    # A CLOSED set of read-only assertions. Each maps to a guest shell line that
+    # EXITS 0 iff the assertion holds — so truth comes from exit_code, never from
+    # run_guest_command's success flag (which is True on any completion). The set
+    # is deliberately small: a probe can only check things the harness can trust.
+    _PROBE_COMMANDS = {
+        "port_listening":  "ss -Hltn 2>/dev/null | grep -qE '[:.]{target}[[:space:]]'",
+        "process_running": "pgrep -x -- {target} >/dev/null 2>&1",
+        "path_exists":     "test -e {target}",
+    }
+
+    def guest_probe(self, name: str, assertion: str, target: str,
+                    timeout: Optional[int] = None) -> Dict[str, Any]:
+        """Verify a single read-only assertion inside a VM — the grounding primitive.
+
+        assertion ∈ {port_listening, process_running, path_exists}; ``target`` is the
+        port / process name / path. Unlike run_guest_command (whose ``success`` is
+        True on any completion, regardless of exit code), a probe derives its truth
+        from the command's EXIT CODE (0 = holds). An assertion outside the closed
+        set, or an unsafe target, is rejected — you can only probe what's checkable.
+
+        Returns::
+            {"success": True, "assertion": str, "target": str, "holds": bool}
+        on a completed probe, or {"success": False, "error": str} on a channel/agent
+        failure or a bad request.
+        """
+        import re
+        if assertion not in self._PROBE_COMMANDS:
+            return {"success": False,
+                    "error": f"unknown assertion '{assertion}' — probe supports "
+                             f"{sorted(self._PROBE_COMMANDS)}"}
+        safe = str(target).strip()
+        # Whitelist keeps the probe read-only: no shell metacharacters can reach
+        # the guest, so a target can never turn a probe into an action.
+        if not re.fullmatch(r"[\w./:-]+", safe):
+            return {"success": False,
+                    "error": f"invalid probe target {target!r} — allowed: letters, "
+                             "digits, and . / : - _"}
+        cmd = self._PROBE_COMMANDS[assertion].format(target=safe)
+        res = self.run_guest_command(name, cmd, timeout=timeout)
+        if not res.get("success"):
+            return res                                # channel / agent failure — propagate as-is
+        return {"success": True, "assertion": assertion, "target": safe,
+                "holds": res.get("exit_code") == 0}   # ← truth from exit code, not `success`
+
+    # ------------------------------------------------------------------
     # Liveness
     # ------------------------------------------------------------------
 
