@@ -591,10 +591,15 @@ def run_score(
             _confirmed = True
             _vspec = _finding_probe_spec(name, args, findings_schema)
             if _vspec:
-                _p = _vspec.split(":", 2)
-                _pr = (execute("guest_probe", {"name": _p[0], "assertion": _p[1], "target": _p[2]})
-                       if len(_p) == 3 else None)
-                _confirmed = isinstance(_pr, dict) and _pr.get("success") and bool(_pr.get("holds"))
+                _p = _vspec.split(":", 3)             # vm:assertion:target[:value]
+                if len(_p) >= 3 and all(_p[:3]):
+                    _pargs = {"name": _p[0], "assertion": _p[1], "target": _p[2]}
+                    if len(_p) == 4 and _p[3]:
+                        _pargs["value"] = _p[3]
+                    _pr = execute("guest_probe", _pargs)
+                    _confirmed = isinstance(_pr, dict) and _pr.get("success") and bool(_pr.get("holds"))
+                else:
+                    _confirmed = False
             if _confirmed:
                 findings.record(fact, _extract_value(result, findings_schema[name]), source=name)
             else:

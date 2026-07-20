@@ -685,6 +685,17 @@
       "effect": null,
       "rev": false
     },
+    "claim_finding": {
+      "req": [
+        "fact",
+        "vm",
+        "assertion",
+        "target"
+      ],
+      "vm": false,
+      "effect": null,
+      "rev": false
+    },
     "launch_vm": {
       "req": [
         "name"

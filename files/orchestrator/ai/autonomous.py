@@ -71,11 +71,13 @@ def make_probe(execute: Callable[[str, Dict], Any]):
     can't be verified (malformed spec, or the probe itself failed) — the caller
     treats None as "unverifiable", never as "done"."""
     def probe(spec: str) -> Optional[bool]:
-        parts = (spec or "").split(":", 2)
-        if len(parts) != 3 or not all(parts):
+        parts = (spec or "").split(":", 3)            # vm:assertion:target[:value]
+        if len(parts) < 3 or not all(parts[:3]):
             return None
-        vm, assertion, target = parts
-        res = execute("guest_probe", {"name": vm, "assertion": assertion, "target": target})
+        pargs = {"name": parts[0], "assertion": parts[1], "target": parts[2]}
+        if len(parts) == 4 and parts[3]:              # file_contains/matches/user_in_group operand
+            pargs["value"] = parts[3]
+        res = execute("guest_probe", pargs)
         if isinstance(res, dict) and res.get("success"):
             return bool(res.get("holds"))
         return None                                   # channel/agent failure → unverifiable

@@ -771,7 +771,8 @@ def _run(
 
     elif tool_name == "guest_probe":
         result = manager.guest_probe(
-            args["name"], args["assertion"], args["target"], timeout=args.get("timeout")
+            args["name"], args["assertion"], args["target"],
+            value=args.get("value"), timeout=args.get("timeout")
         )
         if not verbose:
             if result.get("success"):
@@ -781,6 +782,16 @@ def _run(
                               f"({result['target']}) → {'holds' if holds else 'does not hold'}[/{style}]")
             else:
                 console.print(f"[red]{result.get('error', 'unknown error')}[/red]")
+        return result
+
+    elif tool_name == "claim_finding":
+        # A model-proposed finding. This is a NO-OP at the executor — the reward-cost
+        # harness records it into the ledger ONLY if its declared probe confirms it
+        # (see the claim_finding yield-schema + finding-validation in score.py). We
+        # just acknowledge the claim so the loop proceeds.
+        result = {"success": True, "fact": args.get("fact"), "value": True}
+        if not verbose:
+            console.print(f"[dim]claim: {args.get('fact')} (pending probe confirmation)[/dim]")
         return result
 
     elif tool_name == "fleet":

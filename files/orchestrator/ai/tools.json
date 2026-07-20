@@ -658,7 +658,7 @@
   "type": "function",
   "function": {
    "name": "guest_probe",
-   "description": "Verify a single read-only fact inside a VM and return whether it HOLDS (true/false) — grounded proof, not a claim. assertion is one of: port_listening (target = port), process_running (target = process name), path_exists (target = path). Unlike run_guest_command, whose success only means the command ran, a probe's truth comes from the check itself. Use it to confirm an effect actually happened before treating a step as done.",
+   "description": "Verify a single read-only fact inside a VM and return whether it HOLDS (true/false) — grounded proof, not a claim. Unlike run_guest_command (whose success only means the command ran), a probe's truth comes from the check itself; use it to confirm an effect actually happened before treating a step as done. assertion + target: path_exists / path_is_dir (path) · port_listening (port) · process_running (process name) · user_exists (username) · service_active (systemd service) · command_available (command name) · is_writable / is_executable / is_setuid (path). file_contains (target=path, value=exact string), file_matches (target=path, value=regex), and user_in_group (target=user, value=group) also need `value`.",
    "parameters": {
     "type": "object",
     "properties": {
@@ -668,17 +668,64 @@
      "assertion": {
       "type": "string",
       "enum": [
+       "path_exists",
+       "path_is_dir",
        "port_listening",
        "process_running",
-       "path_exists"
+       "user_exists",
+       "service_active",
+       "command_available",
+       "is_writable",
+       "is_executable",
+       "is_setuid",
+       "file_contains",
+       "file_matches",
+       "user_in_group"
       ]
      },
      "target": {
       "type": "string"
+     },
+     "value": {
+      "type": "string",
+      "description": "Second operand for file_contains / file_matches / user_in_group."
      }
     },
     "required": [
      "name",
+     "assertion",
+     "target"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "claim_finding",
+   "description": "Propose a discovered fact and how to verify it — the fact is recorded into the findings ledger ONLY if a read-only probe confirms it (a false claim is dropped). Use this to turn something you found by running a command into grounded, reusable knowledge. `fact` is the fact key you're claiming (e.g. 'creds_in(web01:/etc/app.conf)' or 'sudo_user(web01:deploy)'). `vm`/`assertion`/`target`(/`value`) are the guest_probe that must hold for the claim to count (same assertions as guest_probe).",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "fact": {
+      "type": "string"
+     },
+     "vm": {
+      "type": "string"
+     },
+     "assertion": {
+      "type": "string"
+     },
+     "target": {
+      "type": "string"
+     },
+     "value": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "fact",
+     "vm",
      "assertion",
      "target"
     ]

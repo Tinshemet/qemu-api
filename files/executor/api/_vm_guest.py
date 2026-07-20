@@ -155,49 +155,70 @@ class _VmGuestMixin:
     # Grounding — read-only assertions
     # ------------------------------------------------------------------
 
-    # A CLOSED set of read-only assertions. Each maps to a guest shell line that
-    # EXITS 0 iff the assertion holds — so truth comes from exit_code, never from
-    # run_guest_command's success flag (which is True on any completion). The set
-    # is deliberately small: a probe can only check things the harness can trust.
-    _PROBE_COMMANDS = {
-        "port_listening":  "ss -Hltn 2>/dev/null | grep -qE '[:.]{target}[[:space:]]'",
-        "process_running": "pgrep -x -- {target} >/dev/null 2>&1",
-        "path_exists":     "test -e {target}",
-    }
+    # A CLOSED set of read-only assertions. Each runs a guest command that EXITS 0
+    # iff the assertion holds — truth comes from the exit_code, never from
+    # run_guest_command's success flag (True on any completion). `file_contains`
+    # also takes a `value` (the string to find). Every target/value is passed as
+    # ARGV (never spliced into a shell string), so a probe can't become an action.
+    _PROBE_ASSERTIONS = frozenset({
+        "path_exists", "path_is_dir", "port_listening", "process_running",
+        "user_exists", "service_active", "command_available", "file_contains",
+        "is_writable", "is_executable", "is_setuid", "file_matches", "user_in_group",
+    })
 
     def guest_probe(self, name: str, assertion: str, target: str,
-                    timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Verify a single read-only assertion inside a VM — the grounding primitive.
+                    value: Optional[str] = None, timeout: Optional[int] = None) -> Dict[str, Any]:
+        """Verify one read-only fact inside a VM — the grounding primitive.
 
-        assertion ∈ {port_listening, process_running, path_exists}; ``target`` is the
-        port / process name / path. Unlike run_guest_command (whose ``success`` is
-        True on any completion, regardless of exit code), a probe derives its truth
-        from the command's EXIT CODE (0 = holds). An assertion outside the closed
-        set, or an unsafe target, is rejected — you can only probe what's checkable.
+        assertion ∈ {path_exists, path_is_dir, port_listening, process_running,
+        user_exists, service_active, command_available, file_contains}. ``target`` is
+        the path / port / process / user / service / command; ``file_contains`` also
+        needs ``value`` (the string to find in ``target``). Truth comes from the
+        command's EXIT CODE (0 = holds), NOT run_guest_command's success flag.
 
-        Returns::
-            {"success": True, "assertion": str, "target": str, "holds": bool}
-        on a completed probe, or {"success": False, "error": str} on a channel/agent
-        failure or a bad request.
+        Returns {"success": True, "assertion", "target", "holds": bool} on a completed
+        probe (plus "value" for file_contains), or {"success": False, "error"} on a
+        channel/agent failure or a bad request. Targets/values are argv, so a probe
+        is always read-only.
         """
-        import re
-        if assertion not in self._PROBE_COMMANDS:
+        t = str(target)
+        if assertion == "path_exists":        exe, argv = "test", ["-e", t]
+        elif assertion == "path_is_dir":      exe, argv = "test", ["-d", t]
+        elif assertion == "process_running":  exe, argv = "pgrep", ["-x", "--", t]
+        elif assertion == "user_exists":      exe, argv = "id", ["-u", "--", t]
+        elif assertion == "service_active":   exe, argv = "systemctl", ["is-active", "--quiet", "--", t]
+        elif assertion == "command_available":
+            exe, argv = "sh", ["-c", 'command -v -- "$1" >/dev/null 2>&1', "_", t]
+        elif assertion == "port_listening":
+            exe, argv = "sh", ["-c", 'ss -Hltn 2>/dev/null | grep -qE "[:.]$1[[:space:]]"', "_", t]
+        elif assertion == "is_writable":      exe, argv = "test", ["-w", t]
+        elif assertion == "is_executable":    exe, argv = "test", ["-x", t]
+        elif assertion == "is_setuid":        exe, argv = "test", ["-u", t]
+        elif assertion == "file_contains":
+            if not value:
+                return {"success": False, "error": "file_contains needs a `value` (the string to find)"}
+            exe, argv = "grep", ["-qF", "--", str(value), t]
+        elif assertion == "file_matches":     # regex, vs file_contains' fixed string
+            if not value:
+                return {"success": False, "error": "file_matches needs a `value` (the regex)"}
+            exe, argv = "grep", ["-qE", "-e", str(value), "--", t]
+        elif assertion == "user_in_group":    # target = user, value = group (privesc recon)
+            if not value:
+                return {"success": False, "error": "user_in_group needs a `value` (the group)"}
+            exe, argv = "sh", ["-c", 'id -nG -- "$1" 2>/dev/null | tr " " "\\n" | grep -qxF -- "$2"',
+                               "_", t, str(value)]
+        else:
             return {"success": False,
                     "error": f"unknown assertion '{assertion}' — probe supports "
-                             f"{sorted(self._PROBE_COMMANDS)}"}
-        safe = str(target).strip()
-        # Whitelist keeps the probe read-only: no shell metacharacters can reach
-        # the guest, so a target can never turn a probe into an action.
-        if not re.fullmatch(r"[\w./:-]+", safe):
-            return {"success": False,
-                    "error": f"invalid probe target {target!r} — allowed: letters, "
-                             "digits, and . / : - _"}
-        cmd = self._PROBE_COMMANDS[assertion].format(target=safe)
-        res = self.run_guest_command(name, cmd, timeout=timeout)
+                             f"{sorted(self._PROBE_ASSERTIONS)}"}
+        res = self.run_guest_command(name, exe, args=argv, timeout=timeout)   # args → no shell
         if not res.get("success"):
             return res                                # channel / agent failure — propagate as-is
-        return {"success": True, "assertion": assertion, "target": safe,
-                "holds": res.get("exit_code") == 0}   # ← truth from exit code, not `success`
+        out = {"success": True, "assertion": assertion, "target": t,
+               "holds": res.get("exit_code") == 0}    # ← truth from exit code, not `success`
+        if value is not None:
+            out["value"] = str(value)
+        return out
 
     # ------------------------------------------------------------------
     # Liveness

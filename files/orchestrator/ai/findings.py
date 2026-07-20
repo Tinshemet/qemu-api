@@ -38,7 +38,25 @@ DEFAULT_SCHEMA: Dict[str, Dict[str, Any]] = {
     # `when` gates the yield to the ping ACTION, so fleet create/add don't record a mesh.
     "fleet":      {"fact": "mesh({label})", "value": "all_reachable", "when": {"action": "ping"}},
     "guest_ping": {"fact": "reachable({name})", "value": "success"},
+    # A model-PROPOSED finding: the agent claims a fact and how to check it; the
+    # finding is recorded only if the declared probe confirms it (a false claim is
+    # dropped). This is how a foreign command's free-text discovery becomes a
+    # validated, `found:`-acceptable ledger fact. `value` is the file_contains/
+    # file_matches/user_in_group operand (empty for single-target assertions).
+    "claim_finding": {"fact": "{fact}", "value": "value",
+                      "verify": "{vm}:{assertion}:{target}:{value}"},
 }
+
+
+class _Blank(dict):
+    """dict whose missing keys format to '' — so a template with an optional field
+    (e.g. {value}) doesn't KeyError when the arg is absent."""
+    def __missing__(self, key):
+        return ""
+
+
+def _fmt(template: str, args: Dict[str, Any]) -> str:
+    return template.format_map(_Blank(args))
 
 
 class Findings:
@@ -95,7 +113,7 @@ def yield_fact(tool: str, args: Dict[str, Any], schema: Dict[str, Dict[str, Any]
     if when and any(str(args.get(k)) != str(v) for k, v in when.items()):
         return None
     try:
-        return spec["fact"].format(**args)
+        return _fmt(spec["fact"], args)
     except Exception:
         return None
 
@@ -124,6 +142,6 @@ def finding_probe_spec(tool: str, args: Dict[str, Any],
     if not spec or not spec.get("verify"):
         return None
     try:
-        return spec["verify"].format(**args)
+        return _fmt(spec["verify"], args)
     except Exception:
         return None
