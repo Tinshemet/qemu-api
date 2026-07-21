@@ -167,11 +167,10 @@ class _VmMonitoringMixin:
                 pass  # process gone/denied mid-read — leave the cpu/mem fields out of status
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.get_qmp_socket())
-                qmp.connect(timeout=2)
-                info = qmp.execute("query-status")
-                status["qemu_status"] = info.get("return", {}).get("status", "unknown")
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect(timeout=2)
+                    info = qmp.execute("query-status")
+                    status["qemu_status"] = info.get("return", {}).get("status", "unknown")
             except Exception:
                 pass  # QMP status query is best-effort — leave qemu_status as its default
 
@@ -200,6 +199,11 @@ class _VmMonitoringMixin:
             return status
 
         pid    = status.get("pid")
+        # A running VM with no resolved PID must NOT fall through: psutil.Process(None)
+        # resolves to THIS process, so we'd report the orchestrator's own CPU/IO as
+        # the VM's. vm_status() guards this; monitor_vm() must too.
+        if not pid:
+            return status
         report = dict(status)
         report["timestamp"] = __import__("datetime").datetime.now().isoformat()
 
@@ -226,19 +230,18 @@ class _VmMonitoringMixin:
 
         try:
             cfg = MachineConfig.load(name)
-            qmp = QMPClient(cfg.get_qmp_socket())
-            qmp.connect(timeout=2)
-            bs  = qmp.execute("query-blockstats")
-            if "return" in bs:
-                report["block_stats"] = [
-                    {
-                        "device":   b.get("device", "?"),
-                        "rd_bytes": b.get("stats", {}).get("rd_bytes", 0),
-                        "wr_bytes": b.get("stats", {}).get("wr_bytes", 0),
-                    }
-                    for b in bs["return"]
-                ]
-            qmp.close()
+            with QMPClient(cfg.get_qmp_socket()) as qmp:
+                qmp.connect(timeout=2)
+                bs  = qmp.execute("query-blockstats")
+                if "return" in bs:
+                    report["block_stats"] = [
+                        {
+                            "device":   b.get("device", "?"),
+                            "rd_bytes": b.get("stats", {}).get("rd_bytes", 0),
+                            "wr_bytes": b.get("stats", {}).get("wr_bytes", 0),
+                        }
+                        for b in bs["return"]
+                    ]
         except Exception:
             pass  # QMP block-stats query is best-effort — omit disk io
 

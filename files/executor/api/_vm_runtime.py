@@ -381,10 +381,9 @@ class _VmRuntimeMixin:
         if not force:
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.get_qmp_socket())
-                qmp.connect()
-                qmp.execute("system_powerdown")
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect()
+                    qmp.execute("system_powerdown")
                 for _ in range(_TIMEOUTS["stop_graceful"]):
                     if not self._is_running(name):
                         break
@@ -598,10 +597,17 @@ class _VmRuntimeMixin:
         Returns:
             PID as ``int``, or ``None`` if not found.
         """
+        # QEMU is launched with `-name <name>,process=<name>` as a single argv
+        # token (qemu_arg_builder._base), so `process=<name>` is a whole
+        # comma-delimited field. Match it exactly — a raw substring test would
+        # let `process=web` match `web2`'s `process=web2` and adopt the wrong VM.
+        target = f"process={name}"
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
-                cmdline = " ".join(proc.info["cmdline"] or [])
-                if f"process={name}" in cmdline and "qemu" in cmdline.lower():
+                argv = proc.info["cmdline"] or []
+                if not any("qemu" in tok.lower() for tok in argv):
+                    continue
+                if any(target in tok.split(",") for tok in argv):
                     return proc.info["pid"]
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass  # process vanished mid-scan (psutil race) — skip it and keep searching

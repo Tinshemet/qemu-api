@@ -89,9 +89,13 @@ class _VmLifecycleMixin:
             {"success": True, "name": "test", "vm_dir": "~/.qemu_vms/test", ...}
         """
         vm_dir = config.get_vm_dir()
-        if os.path.exists(vm_dir) and not force:
+        # `force` is deprecated and intentionally ignored (see docstring): an
+        # in-place overwrite skipped existing disk files (create_disks' `continue`)
+        # while config.save() rewrote the config — binding a fresh config to STALE
+        # disk contents. Callers must delete_vm first. No in-tree caller passes it.
+        if os.path.exists(vm_dir):
             return {"success": False,
-                    "error": f"VM '{config.name}' already exists. Use force=True to overwrite."}
+                    "error": f"VM '{config.name}' already exists — delete it first."}
 
         os.makedirs(vm_dir, exist_ok=True)
         config = apply_os_hints(config)

@@ -129,6 +129,11 @@ def rename_user(disk_path: str, new_username: str, old_username: "str | None" = 
         old_username = find_primary_user(disk_path)
     if not old_username:
         raise RuntimeError("could not auto-detect a primary user account on this disk")
+    # Validate the auto-detected name too — an explicit old_username is checked
+    # above, but an auto-detected one was flowing unchecked into the usermod shell
+    # command below. Same bar for both paths.
+    if not _USERNAME_RE.match(old_username):
+        raise RuntimeError(f"auto-detected username '{old_username}' isn't a valid Linux username")
     result = subprocess.run(
         ["virt-customize", "-a", disk_path,
          "--run-command", f"usermod -l {new_username} -m -d /home/{new_username} {old_username}",

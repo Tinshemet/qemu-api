@@ -57,6 +57,7 @@ class IsolatedNetManager:
     # In: str net_name → Out: dict with success and network info
     def create_network(self, net_name: str) -> Dict[str, Any]:
         """Create a named user network; return a result dict."""
+        self._nets = self._load()   # reload-before-mutate (see IsolatedNetManager note)
         if net_name in self._nets:
             return {"success": False, "error": f"Network '{net_name}' already exists."}
         used_ports = [n["mcast_port"] for n in self._nets.values()]
@@ -77,6 +78,7 @@ class IsolatedNetManager:
     # In: str net_name → Out: dict with success
     def delete_network(self, net_name: str) -> Dict[str, Any]:
         """Delete a named network; return a result dict."""
+        self._nets = self._load()   # reload-before-mutate
         if net_name not in self._nets:
             return {"success": False, "error": f"Network '{net_name}' not found."}
         del self._nets[net_name]
@@ -87,6 +89,7 @@ class IsolatedNetManager:
     # In: nothing → Out: List[dict]
     def list_networks(self) -> List[Dict]:
         """Return all defined networks."""
+        self._nets = self._load()   # reflect any out-of-process changes
         return list(self._nets.values())
 
     # Drops a VM from every network's member list — called by delete_vm so a
@@ -96,6 +99,7 @@ class IsolatedNetManager:
     # In: str vm_name → Out: nothing
     def remove_vm_from_all_networks(self, vm_name: str) -> None:
         """Remove vm_name from every network's members list; no-op if absent."""
+        self._nets = self._load()   # reload-before-mutate
         changed = False
         for net in self._nets.values():
             if vm_name in net["members"]:
@@ -129,6 +133,7 @@ class IsolatedNetManager:
     # In: str net_name, str vm_name → Out: List[str] | None
     def get_netdev_args(self, net_name: str, vm_name: str) -> Optional[List[str]]:
         """Return QEMU -netdev args to attach a VM to an isolated network."""
+        self._nets = self._load()   # reload-before-mutate (appends a member below)
         net = self._nets.get(net_name)
         if not net:
             return None
@@ -153,6 +158,7 @@ class IsolatedNetManager:
     # In: str net_name, str vm_name → Out: dict with success
     def add_vm_to_network(self, net_name: str, vm_name: str) -> Dict[str, Any]:
         """Update a stopped VM's config to include an isolated network interface."""
+        self._nets = self._load()   # reload-before-mutate: another process may have changed state
         net = self._nets.get(net_name)
         if not net:
             return {"success": False, "error": f"Network '{net_name}' not found."}
@@ -160,17 +166,27 @@ class IsolatedNetManager:
             cfg = MachineConfig.load(vm_name)
         except FileNotFoundError as e:
             return {"success": False, "error": str(e)}
+        netid = f"iso_{net_name}"
+        # Idempotency keys on the netdev id, NOT on the individual arg strings:
+        # the -device VALUE carries a fresh random MAC each call, so a per-arg
+        # `not in` dedup never matches it and would append a second NIC with no
+        # preceding -device flag (two devices bound to one netdev → broken launch).
+        if any(netid in a for a in cfg.extra_args):
+            if vm_name not in net["members"]:
+                net["members"].append(vm_name)
+                self._save()
+            return {"success": True,
+                    "message": f"VM '{vm_name}' is already on isolated network '{net_name}'."}
         addr  = net["mcast_addr"]
         port  = net["mcast_port"]
-        netid = f"iso_{net_name}"
         hint  = cfg.networks[0].manufacturer_hint if cfg.networks else None
-        iso_args = [
+        # netid absent → append the full flag+value sequence as a unit (extend,
+        # not the old per-arg loop, which also wrongly skipped the shared
+        # -netdev/-device flag tokens when the VM was already on another net).
+        cfg.extra_args.extend([
             "-netdev", f"socket,id={netid},mcast={addr}:{port}",
             "-device", f"virtio-net-pci,netdev={netid},mac={self._random_mac(hint)}",
-        ]
-        for arg in iso_args:
-            if arg not in cfg.extra_args:
-                cfg.extra_args.append(arg)
+        ])
         if vm_name not in net["members"]:
             net["members"].append(vm_name)
             self._save()

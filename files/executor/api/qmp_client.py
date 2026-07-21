@@ -86,6 +86,21 @@ class QMPClient:
     # Closes the socket connection.
     # In: nothing → Out: nothing
     def close(self) -> None:
-        """Close the QMP socket if open."""
+        """Close the QMP socket if open. Idempotent — nulls the handle so a
+        second close (or a close after a failed connect) is a no-op."""
         if self.sock:
-            self.sock.close()
+            try:
+                self.sock.close()
+            finally:
+                self.sock = None
+
+    # Context-manager support so callers get deterministic cleanup even when
+    # connect()/execute()/_recv() raises — `with QMPClient(path) as q: q.connect()`
+    # always closes the socket on exit, unlike a bare connect/execute/close where
+    # an exception between connect and close leaks the fd. Connect is left to the
+    # caller so per-call timeouts still apply.
+    def __enter__(self) -> "QMPClient":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()

@@ -78,10 +78,18 @@ class VMState:
         pid = entry.get("pid")
         try:
             p = psutil.Process(pid)
-            if p.is_running() and p.name().startswith("qemu"):
+            # A live process at the recorded PID is NOT proof this VM is running:
+            # the OS may have reused the PID for another process (even another
+            # VM's QEMU, which shares the `qemu-system-*` name). Confirm identity
+            # via the `process=<name>` token QEMU is launched with — otherwise a
+            # dead VM reads as running and stop/kill can hit the wrong process.
+            if (p.is_running() and p.name().startswith("qemu")
+                    and any(f"process={name}" in tok.split(",") for tok in p.cmdline())):
                 return pid
-        except (psutil.NoSuchProcess, TypeError):
-            self.set_stopped(name)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
+            pass
+        # PID gone, or now belongs to a different process → this VM is not running.
+        self.set_stopped(name)
         return None
 
     # Returns a {name: pid} dict of VMs whose processes are actually still alive.

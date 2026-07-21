@@ -5,6 +5,7 @@ Provides _VmOperationsMixin which is composed into QemuManager.
 """
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -21,6 +22,16 @@ from .qemu_config import MachineConfig
 from .qemu_arg_builder import QemuArgBuilder
 from .qmp_client import QMPClient
 from .label_registry import register_label, list_registered_labels
+
+
+# Parses one `qemu-img snapshot -l` data row: ID, TAG, VM SIZE ("<num> <unit>"),
+# DATE ("<yyyy-mm-dd> <hh:mm:ss>"). Size and date are two whitespace-separated
+# tokens each, so a plain split() mis-aligns every later column.
+_SNAP_LINE_RE = re.compile(
+    r"^\s*(?P<id>\S+)\s+(?P<tag>.+?)\s+"
+    r"(?P<size>\d[\d.]*\s*[KMGTP]?i?B)\s+"
+    r"(?P<date>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})"
+)
 
 
 class _VmOperationsMixin:
@@ -100,26 +111,25 @@ class _VmOperationsMixin:
             return {"success": False, "error": f"VM '{name}' does not exist."}
         if self._is_running(name):
             try:
-                qmp = QMPClient(cfg.get_qmp_socket())
-                qmp.connect()
-                r       = qmp.execute("query-block")
-                created = 0
-                errors  = []
-                for dev in r.get("return", []):
-                    dev_name = dev.get("device", "")
-                    # Skip pflash (OVMF vars/code), CD-ROMs, and read-only drives
-                    if dev_name.startswith("pflash") or dev_name.startswith("cdrom"):
-                        continue
-                    inserted = dev.get("inserted")
-                    if not inserted or inserted.get("ro", True):
-                        continue
-                    resp = qmp.execute("blockdev-snapshot-internal-sync",
-                                       {"device": dev_name, "name": snap_name})
-                    if "error" in resp:
-                        errors.append(f"{dev_name}: {resp['error'].get('desc','?')}")
-                    else:
-                        created += 1
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect()
+                    r       = qmp.execute("query-block")
+                    created = 0
+                    errors  = []
+                    for dev in r.get("return", []):
+                        dev_name = dev.get("device", "")
+                        # Skip pflash (OVMF vars/code), CD-ROMs, and read-only drives
+                        if dev_name.startswith("pflash") or dev_name.startswith("cdrom"):
+                            continue
+                        inserted = dev.get("inserted")
+                        if not inserted or inserted.get("ro", True):
+                            continue
+                        resp = qmp.execute("blockdev-snapshot-internal-sync",
+                                           {"device": dev_name, "name": snap_name})
+                        if "error" in resp:
+                            errors.append(f"{dev_name}: {resp['error'].get('desc','?')}")
+                        else:
+                            created += 1
                 if errors:
                     return {"success": False, "error": "; ".join(errors)}
                 if created == 0:
@@ -165,10 +175,9 @@ class _VmOperationsMixin:
             if not cfg.disks:
                 return {"success": False, "error": "No disks."}
             if self._is_running(name):
-                qmp  = QMPClient(cfg.get_qmp_socket())
-                qmp.connect()
-                r    = qmp.execute("query-block")
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect()
+                    r    = qmp.execute("query-block")
                 snaps = []
                 seen  = set()
                 for dev in r.get("return", []):
@@ -191,13 +200,18 @@ class _VmOperationsMixin:
                 )
                 snaps = []
                 for line in result.stdout.splitlines()[2:]:
-                    parts = line.split()
-                    if len(parts) >= 4:
+                    # qemu-img prints VM SIZE as "<num> <unit>" (e.g. "349 MiB",
+                    # "0 B") and DATE as "<yyyy-mm-dd> <hh:mm:ss>" — two tokens
+                    # each. A naive split() read parts[2]/parts[3] as size/date
+                    # and mis-parsed both (size="349", date="MiB"). Match the
+                    # units-bearing size + full timestamp explicitly instead.
+                    m = _SNAP_LINE_RE.match(line)
+                    if m:
                         snaps.append({
-                            "id":            parts[0],
-                            "tag":           parts[1],
-                            "date":          parts[3],
-                            "vm_state_size": parts[2],
+                            "id":            m.group("id"),
+                            "tag":           m.group("tag"),
+                            "date":          m.group("date"),
+                            "vm_state_size": m.group("size"),
                         })
                 return {"success": True, "snapshots": snaps, "raw": result.stdout}
         except Exception as e:
@@ -221,11 +235,10 @@ class _VmOperationsMixin:
         if self._is_running(name):
             try:
                 cfg  = MachineConfig.load(name)
-                qmp  = QMPClient(cfg.get_qmp_socket())
-                qmp.connect()
-                resp = qmp.execute("human-monitor-command",
-                                   {"command-line": f"loadvm {snap_name}"})
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect()
+                    resp = qmp.execute("human-monitor-command",
+                                       {"command-line": f"loadvm {snap_name}"})
                 # HMP loadvm returns empty string on success; any text is an error
                 hmp_out = resp.get("return", "").strip()
                 if hmp_out:
@@ -236,16 +249,34 @@ class _VmOperationsMixin:
                 return {"success": False, "error": str(e)}
         else:
             try:
-                cfg       = MachineConfig.load(name)
-                disk_path = os.path.expanduser(cfg.disks[0].path)
-                result    = subprocess.run(
-                    ["qemu-img", "snapshot", "-a", snap_name, disk_path],
-                    capture_output=True, text=True,
-                )
-                if result.returncode != 0:
-                    return {"success": False, "error": result.stderr}
+                cfg = MachineConfig.load(name)
+                if not cfg.disks:
+                    return {"success": False, "error": "No disks."}
+                # Restore EVERY disk (snapshot_create tags them all); a disk0-only
+                # rollback leaves other disks in their post-snapshot state → an
+                # inconsistent/corrupt guest.
+                restored, errors = [], []
+                for disk in cfg.disks:
+                    disk_path = os.path.expanduser(disk.path)
+                    result    = subprocess.run(
+                        ["qemu-img", "snapshot", "-a", snap_name, disk_path],
+                        capture_output=True, text=True,
+                    )
+                    if result.returncode != 0:
+                        errors.append(f"{disk_path}: {result.stderr.strip()}")
+                    else:
+                        restored.append(disk_path)
+                if errors:
+                    # Restore is destructive with no saved pre-state to undo the
+                    # disks already reverted — surface the mixed state loudly
+                    # rather than silently reporting success.
+                    warn = (f" WARNING: {len(restored)} disk(s) already rolled back "
+                            f"to '{snap_name}' while others failed — VM may be in "
+                            f"an inconsistent state.") if restored else ""
+                    return {"success": False, "error": "; ".join(errors) + warn}
                 return {"success": True,
-                        "message": f"Snapshot '{snap_name}' restored (offline)."}
+                        "message": f"Snapshot '{snap_name}' restored (offline) "
+                                   f"on {len(restored)} disk(s)."}
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -266,23 +297,22 @@ class _VmOperationsMixin:
         cfg = MachineConfig.load(name)
         if self._is_running(name):
             try:
-                qmp = QMPClient(cfg.get_qmp_socket())
-                qmp.connect()
-                r   = qmp.execute("query-block")
-                deleted = 0
-                errors  = []
-                for dev in r.get("return", []):
-                    dev_name = dev.get("device", "")
-                    snaps    = dev.get("inserted", {}).get("image", {}).get("snapshots", [])
-                    if not any(s.get("name") == snap_name for s in snaps):
-                        continue
-                    resp = qmp.execute("blockdev-snapshot-delete-internal-sync",
-                                       {"device": dev_name, "name": snap_name})
-                    if "error" in resp:
-                        errors.append(f"{dev_name}: {resp['error'].get('desc','?')}")
-                    else:
-                        deleted += 1
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect()
+                    r   = qmp.execute("query-block")
+                    deleted = 0
+                    errors  = []
+                    for dev in r.get("return", []):
+                        dev_name = dev.get("device", "")
+                        snaps    = dev.get("inserted", {}).get("image", {}).get("snapshots", [])
+                        if not any(s.get("name") == snap_name for s in snaps):
+                            continue
+                        resp = qmp.execute("blockdev-snapshot-delete-internal-sync",
+                                           {"device": dev_name, "name": snap_name})
+                        if "error" in resp:
+                            errors.append(f"{dev_name}: {resp['error'].get('desc','?')}")
+                        else:
+                            deleted += 1
                 if errors:
                     return {"success": False, "error": "; ".join(errors)}
                 if deleted == 0:
@@ -371,10 +401,9 @@ class _VmOperationsMixin:
         if memory_mb is not None:
             try:
                 cfg = MachineConfig.load(name)
-                qmp = QMPClient(cfg.get_qmp_socket())
-                qmp.connect()
-                qmp.execute("balloon", {"value": memory_mb * 1024 * 1024})
-                qmp.close()
+                with QMPClient(cfg.get_qmp_socket()) as qmp:
+                    qmp.connect()
+                    qmp.execute("balloon", {"value": memory_mb * 1024 * 1024})
                 results["memory_balloon"] = f"Ballooned to {memory_mb}MB"
             except Exception as e:
                 results["memory_balloon_error"] = str(e)
