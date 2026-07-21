@@ -274,14 +274,14 @@ SECTION 3 — SINGLE-MACHINE MODE vs SPLIT MODE
   /execute endpoint (split).
 
   The client-facing remote split is:
-    client/ui/chat_client.py  →  POST /chat  →  orchestrator/http/api_server.py
+    client/ui/chat_client/  →  POST /chat  →  orchestrator/http/api_server.py
 
 3.2  SINGLE-MACHINE MODE (orchestrator + executor co-located)
 ────────────────────────────────────────────────────────────────
   ┌─────────────────────────────────────────────────────────────┐
   │                      One machine                            │
   │                                                             │
-  │  client/ui/chat_client.py  (chat_loop)                     │
+  │  client/ui/chat_client/  (chat_loop)                     │
   │    ↓ user types a prompt  →  POST /chat  (localhost)        │
   │  orchestrator/http/api_server.py                            │
   │    ↓ calls process_message()                                │
@@ -435,7 +435,7 @@ SECTION 3 — SINGLE-MACHINE MODE vs SPLIT MODE
       "client_allowed_profiles": []        ← profiles clients can see/use (empty = all)
     }
 
-  files/client/connection_config.json  (read by client/ui/chat_client.py):
+  files/client/config/connection_config.json  (read by client/ui/chat_client/):
     {
       "server_url": "http://localhost:8080",  ← orchestrator's /chat address
       "token":      "",                       ← shared secret (prefer API_TOKEN env)
@@ -1716,7 +1716,7 @@ SECTION 14 — REAL-WORLD EXAMPLE: FRIEND'S MACHINE AS THE GORGON HOST
 
   It then:
     - Installs only Python venv + requests + rich (no QEMU, no Ollama)
-    - Writes client/connection_config.json with server_url and token
+    - Writes client/config/connection_config.json with server_url and token
     - Writes a block to your shell rc with the alias and env vars:
         export SERVER_URL="http://localhost:8080"
         export API_TOKEN="..."
@@ -2009,7 +2009,7 @@ SECTION 15 — ORCHESTRATOR MONITORING & ADMIN TUI
     GET /events?limit=100                       ← last 100 events
     GET /events?since=2026-06-25T18:00:00       ← events after a timestamp
 
-15.2  CHAT CLIENT TUI  (client/ui/chat_client.py)
+15.2  CHAT CLIENT TUI  (client/ui/chat_client/)
 ─────────────────────────────────────────────────
   A curses fullscreen TUI — same visual language as the admin TUI.
 
@@ -2035,7 +2035,7 @@ SECTION 15 — ORCHESTRATOR MONITORING & ADMIN TUI
     setup), it launches uvicorn automatically as a background process and
     polls /health until ready. Orchestrator logs go to /tmp/gorgon-orchestrator.log.
 
-  Appearance (client/CLI_config.json):
+  Appearance (client/config/CLI_config.json):
     text_color   Hex color for body text, e.g. "#7355a3"
     font_size    Terminal font size hint, applied via xterm escape on startup
 
@@ -2086,7 +2086,7 @@ SECTION 15 — ORCHESTRATOR MONITORING & ADMIN TUI
   This is the orchestrator operator console and the groundwork for the IaaS
   fleet management console planned for 1.1+.
 
-  Appearance (admin/admin_config.json):
+  Appearance (admin/config/admin_config.json):
     text_color   Hex color for body text, e.g. "#aaaaaa"
     font_size    Terminal font size hint, applied via xterm escape on startup
     log_path     Path for start-server's uvicorn output (default /tmp/gorgon-orchestrator.log)

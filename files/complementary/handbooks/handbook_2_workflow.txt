@@ -29,17 +29,17 @@ When you run "gorgon" the following happens in order:
 
   2. Python executes client/client_wrapper.py [main()]:
      - Parses flags: -v (verbose), -cu (custom mode), -cs (clear session),
-       -tf <vm> (fingerprint report — calls client/cli/commands.py directly,
+       -tf <vm> (fingerprint report — calls client/cli/commands/ directly,
        no AI, and returns immediately)
      - Loads CLI_config.json (accent colour, font size) from the client/ dir
-     - If argv is non-empty (e.g. "gorgon list"): imports client/cli/commands.py
+     - If argv is non-empty (e.g. "gorgon list"): imports client/cli/commands/
        and calls run(argv, verbose) — a direct local QEMU command, no AI/HTTP
        involved for the VM operation itself (see section "DIRECT LOCAL COMMANDS"
        below)
-     - If argv is empty (plain "gorgon"): imports client/ui/chat_client.py and
+     - If argv is empty (plain "gorgon"): imports client/ui/chat_client/ and
        calls chat_loop(verbose, color_hex, font_size) — the curses chat TUI
 
-  3. chat_client.py's chat_loop() [client/ui/chat_client.py → _run()]:
+  3. chat_client.py's chat_loop() [client/ui/chat_client/ → _run()]:
      - Reads connection_config.json (server_url, token, timeout, verify_ssl)
        from the client/ directory; SERVER_URL/API_TOKEN env vars override it
      - Loads/generates a persistent session id from ~/.qemu_vms/.chat_session_id
@@ -90,7 +90,7 @@ in the default single-machine setup (orchestrator and executor co-located,
 connection_config.json "url": "local").
 Example: User types "create a linux vm called dev-box with 4gb ram"
 
-STEP 1 — INPUT CAPTURE  [client/ui/chat_client.py → _run() / _dispatch()]
+STEP 1 — INPUT CAPTURE  [client/ui/chat_client/ → _run() / _dispatch()]
   - The curses main loop reads a line of input from the terminal
   - _dispatch(cmd) checks it against built-in shortcuts first (list, system,
     profiles, templates, drift, clear session, help, exit/quit/q/bye, and the
@@ -336,7 +336,7 @@ reach the user differs (terminal prompt vs. HTTP needs_input round-trip).
 ────────────────────────────────────────────────────────────────────────────────
 
 When "gorgon <cmd> [args]" is run with a non-empty argv, client_wrapper.py
-calls client/cli/commands.py's run() instead of the chat TUI. This dispatches
+calls client/cli/commands/'s run() instead of the chat TUI. This dispatches
 straight to shared.executioner.tool_executor.manager (a QemuManager instance)
 for commands like list/status/launch/stop/config/resize/clone/snapshot/
 delete/network/profiles/templates/system/isos/show-cmd/setup-done/fetch/
@@ -705,7 +705,7 @@ EVERY SESSION (three-machine split):
 
 Two independent switches control where things run:
 
-  SERVER_URL (client/connection_config.json, or the SERVER_URL env var)
+  SERVER_URL (client/config/connection_config.json, or the SERVER_URL env var)
     — where the client's "gorgon" alias sends /chat and /execute. Set it to
     "http://localhost:8080" for a co-located orchestrator (with autostart),
     or to a tunnelled/LAN/public URL for a remote orchestrator.

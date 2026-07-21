@@ -980,7 +980,7 @@ PURPOSE
   description, filtered to the executor's currently-allowed tools) and the
   AI-chat CLI help (same, plus a short example prompt per command). Rendered
   by shared/command_help.py. Kept in sync by hand with the dispatch tables in
-  client/cli/commands.py and orchestrator/ai/direct_cli.py.
+  client/cli/commands/ and orchestrator/ai/direct_cli.py.
 
 DATA: COMMAND_CATALOG: List[Dict]
   Each entry: command (terminal verb, "" for AI-only capabilities), tools
@@ -1914,17 +1914,22 @@ FUNCTION: main()
   imports client.ui.chat_client.chat_loop and starts the TUI.
 
 ────────────────────────────────────────────────────────────────────────────────
-client/ui/chat_client.py
+client/ui/chat_client/  (package)
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Curses fullscreen AI chat TUI. Talks to the orchestrator's /chat, /execute,
-  and /sync endpoints over HTTP — this file has NO local QEMU logic at all;
-  it is a thin remote UI. On localhost it can also auto-start the
-  orchestrator's HTTP server if it isn't already running. Same visual
-  language as admin/admin_tui.py: header bar, scrollable content area,
-  command input at bottom. Appearance configured via client/CLI_config.json.
+  and /sync endpoints over HTTP — NO local QEMU logic at all; a thin remote UI.
+  On localhost it can also auto-start the orchestrator's HTTP server if it isn't
+  already running. Same visual language as the admin/ TUI: header bar,
+  scrollable content area, command input at bottom. Appearance configured via
+  client/config/CLI_config.json.
 
-  Entry point: chat_loop(verbose, color_hex, font_size)
+  Once one 1072-line file; now a package of focused modules — state (shared
+  mutable UI state, accessed as state.X), conn, colors, session, history,
+  render, vnc, net, autostart, response, help, operator, dispatch, app. The
+  __init__ exposes the sole public entry point:
+
+  Entry point: chat_loop(verbose, color_hex, font_size)  (in app.py)
 
 LAYOUT
   Row 0       Header: gorgon + spinner while waiting + server URL + VM list
@@ -2031,7 +2036,7 @@ IMPORTANT NOTES
     string matches the actual module path when reading older commits/docs.
 
 ────────────────────────────────────────────────────────────────────────────────
-client/cli/commands.py
+client/cli/commands/  (package)
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Direct local QEMU commands — no AI, no chat loop. Dispatches sub-commands
@@ -2041,7 +2046,14 @@ PURPOSE
   otherwise. Some commands (launch, when a VM exists both locally and on a
   configured remote server) offer a local-vs-remote choice.
 
-FUNCTION: run(args, verbose=False)
+  Once one 1169-line run() with a ~30-branch if/elif; now a package. One
+  Command subclass per file (stop.py, launch.py, snapshot.py, mission.py,
+  contract.py, agent.py, …), auto-registered via __init_subclass__ + pkgutil
+  discovery — adding a command is dropping a file. Shared machinery is in
+  context.py; the dispatcher (run) lives in __init__.py and applies the
+  operator gate + per-command min_args. Adding a command no longer edits run().
+
+FUNCTION: run(args, verbose=False)  (in commands/__init__.py)
   IN:  args List[str] (argv), verbose bool
   OUT: nothing (renders directly to console)
   Large dispatch on args[0]: list / status / monitor / launch / stop /
@@ -2339,27 +2351,31 @@ ADMIN  (files/admin/)
 ────────────────────────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────────────────────────
-admin/admin_tui.py
+admin/  (package; entry point admin/admin_tui.py)
 ────────────────────────────────────────────────────────────────────────────────
 PURPOSE
   Standalone curses fullscreen admin dashboard. Runs as its OWN process
   (`gorgon-admin`), completely independent of the orchestrator/executor —
   it can run on any machine that can reach the orchestrator over HTTP, and
-  is configured entirely via admin/connection_config.json +
-  admin/admin_config.json. This is a real behavior change from the
+  is configured entirely via admin/config/ (connection_config.json +
+  admin_config.json, over admin_config.defaults.json). Once one admin_tui.py
+  file; now an admin/ package (config, state, api_client, server_control,
+  render, commands, keyboard, app) behind a thin admin_tui.py entry point that
+  keeps the gorgon-admin alias path stable. Commands are one class per file
+  under admin/commands/. This is a real behavior change from the
   pre-restructure two-tier layout: the admin TUI no longer calls
   manager.launch_vm()/manager.stop_vm() etc. in-process. Every VM operation
   (launch/stop/kill/stopall/list) now goes over HTTP through the
   orchestrator's real /execute and /events endpoints using a Bearer token
-  (from API_TOKEN, or ~/.gorgon.token, or admin/connection_config.json's
+  (from API_TOKEN, or ~/.gorgon.token, or admin/config/connection_config.json's
   "token" key). Only start-server / shutdown / kill-server / status remain
   local-process operations — and even those only work meaningfully when the
   admin TUI happens to run on the same machine as the orchestrator (they
   pgrep for a local "api_server" process).
 
   Launch:  gorgon-admin  (alias added by the install scripts)
-  Config:  admin/connection_config.json (orchestrator_url, token),
-           admin/admin_config.json (text_color hex, font_size, refresh_rate_s,
+  Config:  admin/config/connection_config.json (orchestrator_url, token),
+           admin/config/admin_config.json (text_color hex, font_size, refresh_rate_s,
            default_port, log_path, events_display_limit)
 
 LAYOUT (curses, differential updates — no flicker)
@@ -2419,7 +2435,7 @@ KEY HELPERS
   _server_online() — GET /health, 2-second result cache.
   _local_pid() — `pgrep -f api_server`, used only by the local-process
     commands.
-  _allowed_tools() — mirrors client/cli/commands.py's helper exactly: reads
+  _allowed_tools() — mirrors client/cli/commands/context.py's helper exactly: reads
     orchestrator.executor_client._ALLOWED_TOOLS so the help overlay doesn't
     advertise commands that would actually be rejected (dispatch already
     enforces the allowlist for free via /execute -> execute_tool(); this is

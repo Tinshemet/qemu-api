@@ -959,7 +959,7 @@ setup_provider.sh
 setup_client.sh
   Thin-client setup. Run on the user's laptop. Installs only Python venv +
   requests + rich. Prompts for SERVER_URL and API_TOKEN. Writes
-  client/connection_config.json and adds the gorgon alias.
+  client/config/connection_config.json and adds the gorgon alias.
 
 setup_wsl2.ps1
   Windows PowerShell script. Run as Admin after install.sh (or

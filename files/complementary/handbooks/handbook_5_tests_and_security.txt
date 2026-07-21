@@ -440,7 +440,7 @@ Token storage — client machine (the one sending the token):
   Primary: API_TOKEN environment variable, entered when setup_client.sh
   prompts for it (or pre-set: API_TOKEN=... bash setup_client.sh).
   Written into the client's shell rc in a labelled block, and into
-  client/connection_config.json.
+  client/config/connection_config.json.
   Sent as the Bearer token on every /chat and /execute request.
 
 Token quality:

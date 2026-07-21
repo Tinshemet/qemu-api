@@ -19,12 +19,12 @@ corresponding config.json values. Precedence is: env var → config.json key
 → hardcoded fallback in the reading module (shown below as "Default").
 
 SERVER_URL
-  Default:  "http://localhost:8080"  (from client/connection_config.json →
-            server_url, and from admin/connection_config.json → orchestrator_url)
+  Default:  "http://localhost:8080"  (from client/config/connection_config.json →
+            server_url, and admin/config/connection_config.json → orchestrator_url)
   Values:   "http://host:port" | "https://host:port"
   Effect:   URL of the gorgon orchestrator that the chat client / admin TUI
             connects to.
-  Read by:  client/ui/chat_client.py, admin/admin_tui.py
+  Read by:  client/config, admin/config
 
 API_URL
   Default:  "local"  (from orchestrator/connection_config.json → url)
@@ -52,8 +52,8 @@ API_TOKEN
             API_TOKEN first, then falls back to ~/.gorgon.token (file). If
             neither is set, orchestrator/http/api_server.py exits with an
             error at startup.
-  Read by:  client/ui/chat_client.py (sent in Authorization header),
-            admin/admin_tui.py (sent in Authorization header),
+  Read by:  client/config (sent in Authorization header),
+            admin/config (sent in Authorization header),
             orchestrator/http/api_server.py (compared against incoming tokens)
   Also read from: ~/.gorgon.token (file fallback, orchestrator side only)
 
@@ -81,7 +81,7 @@ API_TIMEOUT
             is reading it)
   Values:   Integer (seconds)
   Effect:   HTTP request timeout for /chat, /execute, and executor calls.
-  Read by:  client/ui/chat_client.py, orchestrator/executor_client.py
+  Read by:  client/config, orchestrator/executor_client.py
 
 API_CA_CERT
   Default:  None
@@ -89,14 +89,14 @@ API_CA_CERT
   Effect:   When set, the reader uses this CA to verify the remote TLS
             cert. Used for self-signed certificates. When unset, the system
             CA bundle is used (correct for Let's Encrypt).
-  Read by:  client/ui/chat_client.py, orchestrator/executor_client.py
+  Read by:  client/config, orchestrator/executor_client.py
 
 API_VERIFY_SSL
   Default:  "1" (verify enabled)
   Values:   "1" (verify) | "0" (skip verification)
   Effect:   "0" disables TLS certificate verification entirely.
             NEVER use in production — only for local development.
-  Read by:  client/ui/chat_client.py, orchestrator/executor_client.py
+  Read by:  client/config, orchestrator/executor_client.py
 
 OLLAMA_MODEL
   Default:  "qwen2.5:7b" (from orchestrator/ai/config.json → ollama.model)
@@ -1250,8 +1250,17 @@ executor/config.json (section 8); this file is purely tool_executor's own
 defaults/validation data, nothing about transport or auth.
 
 ────────────────────────────────────────────────────────────────────────────────
-13. client/CLI_config.json  (read by client/ui/chat_client.py)
+13. client/config/CLI_config.json  (+ CLI_config.defaults.json)
 ────────────────────────────────────────────────────────────────────────────────
+
+Client config lives in the client/config/ package. Every setting + its default
+is in CLI_config.defaults.json (the manifest); CLI_config.json holds only the
+user's overrides and WINS on merge. The loader (client/config/__init__.py) reads
+both and exposes named constants — the chat UI (client/ui/chat_client/) and the
+direct CLI (client/cli/) consume those, no longer json.load-ing files directly.
+The keys below are the appearance/behaviour ones a user usually overrides; see
+CLI_config.defaults.json for the full list (palette colours, glyphs, spinner,
+hint line, autostart spawn params, timeouts, paths, VNC port, …).
 
 {
   "text_color": "#7355a3",
@@ -1277,20 +1286,24 @@ defaults/validation data, nothing about transport or auth.
     # When auto-launching a VM at chat startup, how many times (and how
     # far apart) to poll for it to come up before giving up — 20 × 0.5s = 10s max.
 
-  "iso_distro_keywords": [
-    ["ubuntu", "Ubuntu"], ["debian", "Debian"], ["mint", "Linux Mint"],
-    ["fedora", "Fedora"], ["arch", "Arch Linux"], ["kali", "Kali Linux"],
-    ["raspios", "Raspberry Pi OS"], ["raspberry", "Raspberry Pi OS"],
-    ["win11", "Windows 11"], ["win10", "Windows 10"], ["windows", "Windows"],
-    ["macos", "macOS"], ["darwin", "macOS"]
-  ]
-    # [filename_substring, display_name] pairs used to prettify an ISO
-    # filename into a human-readable OS label in the client UI.
+  # NOTE: iso_distro_keywords was REMOVED. The client no longer keeps its own
+  # ISO→OS keyword table — that was a drifting duplicate of the executor's
+  # authoritative data (executor/api/config.json's iso_os_keywords/linux_distros,
+  # consumed by infer_os_name). The ISO-vs-declared-OS mismatch check now runs
+  # server-side (executor _vm_constants.iso_os_warning), and create_vm returns an
+  # `iso_os_warning` field the client just renders. Single source of truth.
 }
 
 ────────────────────────────────────────────────────────────────────────────────
-14. client/connection_config.json  (read by client/ui/chat_client.py)
+14. client/config/connection_config.json  (+ connection_config.defaults.json)
 ────────────────────────────────────────────────────────────────────────────────
+
+Same defaults+overrides model as #13 (defaults in connection_config.defaults.json,
+overrides here win; env vars win over both). connection_config.json holds what
+setup_client.sh writes (server_url, token, ca_cert, verify_ssl, timeout); the
+rest come from the defaults manifest — including several timeouts
+(health_timeout_s 2, request_timeout_s 10, image_meta_timeout_s 60),
+default_port, and the vnc_viewer_candidates list.
 
 {
   "server_url": "http://localhost:8080",
@@ -1320,7 +1333,7 @@ defaults/validation data, nothing about transport or auth.
 }
 
 ────────────────────────────────────────────────────────────────────────────────
-15. admin/connection_config.json  (read by admin/admin_tui.py)
+15. admin/config/connection_config.json  (loaded by admin/config)
 ────────────────────────────────────────────────────────────────────────────────
 
 {
@@ -1337,13 +1350,20 @@ Written by complementary/install_admin.sh during setup; can also be edited
 by hand to point the dashboard at a different orchestrator.
 
 ────────────────────────────────────────────────────────────────────────────────
-16. admin/admin_config.json  (read by admin/admin_tui.py)
+16. admin/config/admin_config.json  (+ admin_config.defaults.json)
 ────────────────────────────────────────────────────────────────────────────────
+
+Same defaults+overrides model. admin_config.defaults.json is the full manifest
+(~60 keys: palette, glyphs, timeouts, server-spawn params, AND every dashboard
+layout offset — column x-positions, widths, truncations, help-box sizing);
+admin_config.json holds only overrides (shipped: text_color, font_size). The
+loader is admin/config/__init__.py; the admin TUI (admin/ package) reads its
+named constants. The commonly-overridden keys:
 
 {
   "text_color": "#7355a3",
     # Hex color for body/dim text in the admin TUI (same mechanism as
-    # client/CLI_config.json's text_color).
+    # client/config/CLI_config.json's text_color).
 
   "font_size": 20,
     # Font size hint — same xterm escape mechanism as CLI_config. Larger
@@ -1356,7 +1376,7 @@ by hand to point the dashboard at a different orchestrator.
 
   "default_port": 8080,
     # Used only as a display/label fallback; the actual connection target
-    # comes from orchestrator_url in admin/connection_config.json.
+    # comes from orchestrator_url in admin/config/connection_config.json.
 
   "log_path": "/tmp/gorgon-orchestrator.log",
     # Path the admin TUI tails for the orchestrator's log panel.
