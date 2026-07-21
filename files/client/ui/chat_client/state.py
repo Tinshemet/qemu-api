@@ -12,6 +12,8 @@ thread; ``quit_event`` ends the loop.
 import queue
 import threading
 
+from client import config as _cfg
+
 history       = []                 # (curses_attr, text) tuples
 lock          = threading.Lock()
 resp_q        = queue.Queue()      # HTTP / mission worker puts results here
@@ -31,12 +33,13 @@ remote_profiles = []
 commands        = []               # command catalog (help source of truth)
 allowed_tools   = set()            # executor allowed-tools list for help filtering
 
-# shortcut command sets — defaults, overridable from /sync
-sc_list      = {"list", "vms", "ls"}
-sc_system    = {"system"}
-sc_profiles  = {"profiles"}
-sc_templates = {"templates"}
-sc_drift     = {"drift"}
-sc_clear     = {"clear session", "forget", "/clear"}
-sc_help      = {"help", "?", "/help"}
-exit_cmds    = {"exit", "quit", "q", "bye"}
+# shortcut command sets — defaults from client/config, overridable from /sync.
+# Copied (set(...)) so the per-session /sync reassignments never touch the config.
+sc_list      = set(_cfg.SC_LIST)
+sc_system    = set(_cfg.SC_SYSTEM)
+sc_profiles  = set(_cfg.SC_PROFILES)
+sc_templates = set(_cfg.SC_TEMPLATES)
+sc_drift     = set(_cfg.SC_DRIFT)
+sc_clear     = set(_cfg.SC_CLEAR)
+sc_help      = set(_cfg.SC_HELP)
+exit_cmds    = set(_cfg.EXIT_CMDS)

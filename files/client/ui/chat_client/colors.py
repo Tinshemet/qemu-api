@@ -1,21 +1,22 @@
 """
 chat_client/colors.py — curses colour pairs for the chat TUI.
 
-The palette, custom-colour slot, and hex fallback come from client/config. The
-C_* ids are symbolic colour-pair slots (structural, not tunables).
+The palette, custom-colour slot, hex fallback, and the C_* colour-pair slot ids
+all come from client/config (CLI_config.*.json); the ids are aliased to local
+names so the draw code stays readable.
 """
 
 import curses
 
 from client import config as _cfg
 
-C_HEADER = 1
-C_CYAN   = 2
-C_GREEN  = 3
-C_RED    = 4
-C_DIM    = 5
-C_YELLOW = 6
-C_BOLD   = 7
+C_HEADER = _cfg.C_HEADER
+C_CYAN   = _cfg.C_CYAN
+C_GREEN  = _cfg.C_GREEN
+C_RED    = _cfg.C_RED
+C_DIM    = _cfg.C_DIM
+C_YELLOW = _cfg.C_YELLOW
+C_BOLD   = _cfg.C_BOLD
 
 _CUSTOM_COLOR_SLOT = _cfg.CUSTOM_COLOR_SLOT   # first free slot above the standard 8+8
 

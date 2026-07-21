@@ -86,8 +86,27 @@ CUSTOM_COLOR_SLOT  = _UI["custom_color_slot"]
 DIM_FALLBACK_SLOT  = _UI["dim_fallback_slot"]
 COLOR_FALLBACK_RGB = tuple(_UI["color_fallback_rgb"])
 
+# curses colour-pair slot ids (unique handles for init_pair / color_pair)
+C_HEADER = _UI["color_pair_header"]
+C_CYAN   = _UI["color_pair_cyan"]
+C_GREEN  = _UI["color_pair_green"]
+C_RED    = _UI["color_pair_red"]
+C_DIM    = _UI["color_pair_dim"]
+C_YELLOW = _UI["color_pair_yellow"]
+C_BOLD   = _UI["color_pair_bold"]
+
 # ── UI strings ──────────────────────────────────────────────────────────────────
 GLYPH_RUNNING  = _UI["glyph_running"]
 GLYPH_STOPPED  = _UI["glyph_stopped"]
 SPINNER_FRAMES = _UI["spinner_frames"]
 HINT_LINE      = _UI["hint_line"]
+
+# ── chat shortcut command sets (defaults; overridable per-session from /sync) ────
+SC_LIST      = set(_UI["shortcut_list"])
+SC_SYSTEM    = set(_UI["shortcut_system"])
+SC_PROFILES  = set(_UI["shortcut_profiles"])
+SC_TEMPLATES = set(_UI["shortcut_templates"])
+SC_DRIFT     = set(_UI["shortcut_drift"])
+SC_CLEAR     = set(_UI["shortcut_clear"])
+SC_HELP      = set(_UI["shortcut_help"])
+EXIT_CMDS    = set(_UI["exit_commands"])

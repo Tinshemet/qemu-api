@@ -29,8 +29,25 @@
   "dim_fallback_slot":       8,
   "color_fallback_rgb":      [667, 667, 667],
 
+  "color_pair_header":       1,
+  "color_pair_cyan":         2,
+  "color_pair_green":        3,
+  "color_pair_red":          4,
+  "color_pair_dim":          5,
+  "color_pair_yellow":       6,
+  "color_pair_bold":         7,
+
   "glyph_running":           "● ",
   "glyph_stopped":           "○ ",
   "spinner_frames":          "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
-  "hint_line":               "  list  system  profiles  templates  drift  /clear  help  q=quit"
+  "hint_line":               "  list  system  profiles  templates  drift  /clear  help  q=quit",
+
+  "shortcut_list":           ["list", "vms", "ls"],
+  "shortcut_system":         ["system"],
+  "shortcut_profiles":       ["profiles"],
+  "shortcut_templates":      ["templates"],
+  "shortcut_drift":          ["drift"],
+  "shortcut_clear":          ["clear session", "forget", "/clear"],
+  "shortcut_help":           ["help", "?", "/help"],
+  "exit_commands":           ["exit", "quit", "q", "bye"]
 }
