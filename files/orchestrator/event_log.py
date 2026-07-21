@@ -52,6 +52,15 @@ def _summarise_result(result: Any) -> str:
     return "ok"
 
 
+def _result_ok(result: Any) -> bool:
+    """Boolean success flag, matching the engine's own `ok` convention — so the
+    event log can feed reward_cost's tool_counts/p_self estimators (which key off
+    `ok`) directly, instead of only carrying the display-oriented `outcome`."""
+    if isinstance(result, dict):
+        return not (result.get("success") is False or result.get("error"))
+    return True
+
+
 def log_event(tool: str, args: Dict[str, Any], result: Any, duration_ms: float) -> None:
     """Append one event line to the log. Safe to call from any thread.
 
@@ -79,6 +88,7 @@ def log_event(tool: str, args: Dict[str, Any], result: Any, duration_ms: float) 
             "tool":        tool,
             "args":        _summarise_args(tool, args),
             "outcome":     _summarise_result(result),
+            "ok":          _result_ok(result),
             "duration_ms": round(duration_ms, 1),
         }
         with open(_LOG_FILE, "a") as f:

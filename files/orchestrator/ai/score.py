@@ -211,6 +211,7 @@ def run_score(
     select_tools:   Optional[Callable[[str, List[Dict]], List[Dict]]] = None,
     max_retries:    int = 2,
     max_depth:      int = 3,
+    ledger:         Optional[List[Dict[str, Any]]] = None,
     **_legacy,
 ) -> Dict[str, Any]:
     """Reduce `goal` to primitive tool calls and execute them; return tree + ledger.
@@ -292,7 +293,10 @@ def run_score(
     ce_floor        = engine.ce_floor
     retry_penalty   = engine.retry_penalty
 
-    ledger: List[Dict[str, Any]] = []
+    # Caller may pass its own ledger list (so it can read verified verdicts LIVE
+    # as the run proceeds — see autonomous.run_autonomous's p_of); default owns one.
+    if ledger is None:
+        ledger = []
     _RETRY_STATUS = {"failed", "unverified"}   # soft failures worth a different approach
 
     def _approach_desc(node: Dict[str, Any]) -> str:

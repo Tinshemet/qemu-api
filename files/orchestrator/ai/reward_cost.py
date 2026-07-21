@@ -152,12 +152,33 @@ def compound_ce(n_steps: int, cfg: Optional[Dict[str, float]] = None, *,
 import math
 
 
+# Pseudo-tools the engine runs for control flow / verification, NOT goal-advancing
+# leaves: checkpoints, rollbacks, and read-only finding probes. They must not
+# pollute p_self (fraction of SUCCESSFUL LEAVES) or the per-tool p_world store —
+# checkpoints ~always succeed, so counting them biases p̂_self upward, which would
+# make the NEXT run LESS cautious (lower θ/λ, deeper budget). Backwards.
+_NON_LEAF_TOOLS = frozenset({"checkpoint", "rollback", "guest_probe"})
+
+
+def _entry_ok(e: Dict[str, Any]) -> bool:
+    """Whether a ledger/event entry recorded a success. Ledger entries carry a
+    boolean `ok`; event-log entries (event_log.py) instead carry a string
+    `outcome` ("ok"/error text) with no `ok` field — support both so either
+    source can feed the estimators without a schema mismatch silently scoring
+    every tool as a failure."""
+    if "ok" in e:
+        return bool(e.get("ok"))
+    return e.get("outcome") == "ok"
+
+
 def p_self_estimate(ledger, default: float = 0.9) -> float:
     """The weak model's aggregate reliability `p̂_self`, measured BACKWARD from the
     ledger (fraction of executed leaves that succeeded). p_self is forward-UNmeasurable
     per-move (asking the model to self-rate is a second bad draw), so it's a GLOBAL
     control, never priced per-node. Empty ledger → `default`."""
-    outs = [1.0 if e.get("ok") else 0.0 for e in (ledger or []) if e.get("tool")]
+    outs = [1.0 if _entry_ok(e) else 0.0
+            for e in (ledger or [])
+            if e.get("tool") and e.get("tool") not in _NON_LEAF_TOOLS]
     return sum(outs) / len(outs) if outs else default
 
 
@@ -170,11 +191,11 @@ def tool_counts(ledger) -> Dict[str, Dict[str, int]]:
     counts: Dict[str, Dict[str, int]] = {}
     for e in ledger or []:
         t = e.get("tool")
-        if not t:
+        if not t or t in _NON_LEAF_TOOLS:
             continue
         a = counts.setdefault(t, {"ok": 0, "n": 0})
         a["n"] += 1
-        if e.get("ok"):
+        if _entry_ok(e):
             a["ok"] += 1
     return counts
 

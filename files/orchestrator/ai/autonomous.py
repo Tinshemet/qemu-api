@@ -175,7 +175,9 @@ def make_ce_estimator(call_model, tools, cost_of, cfg=None, reward=None, p_of=No
             # price the deep route with per-step partial credit. Unknown sub-tools → the
             # LEARNED-AVERAGE p_world (`compound_p`, the mean of this env's observed tool
             # reliability) when available, else the static default; plus a nominal per-step cost.
-            return _compound_ce(n_steps, c, reward=R, p=compound_p, cost=_leaf_cost(None, c))
+            # compound_p may be a live callable (recomputed per read) or a plain float.
+            _cp = compound_p() if callable(compound_p) else compound_p
+            return _compound_ce(n_steps, c, reward=R, p=_cp, cost=_leaf_cost(None, c))
         cost = _leaf_cost(cost_of(name), c)
         p = p_of(name) if p_of else c["p_world"]
         mu = p * R - cost
@@ -373,14 +375,26 @@ def run_autonomous(
     # (smoothed toward the static default). Recomputed per call against the growing
     # `events` log, so a tool that starts failing mid-mission has its p_world fall and OR
     # ranking routes around it AS THE RUN PROCEEDS — not just between runs.
+    # Shared with run_score so p_of reads the SAME ledger the persisted p_world is
+    # learned from (score.py records the VERIFIED verdict there). Counting `events`
+    # instead would raise a tool's live p_world on a bare tool-return success while
+    # the ledger — and the next run — lower it after verification fails: the learned
+    # parameter would contradict itself. One source, no contradiction.
+    run_ledger: List[Dict[str, Any]] = []
     def p_of(tool: str) -> float:
-        counts = _merge_counts(prior_counts, _tool_counts(events))
+        counts = _merge_counts(prior_counts, _tool_counts(run_ledger))
         return _p_world_lookup(_p_world_estimate(counts, rc_cfg or None), rc_cfg or None)(tool)
-    # Learned-AVERAGE p_world (mean of prior tool reliability) — the estimator prices a
+    # Learned-AVERAGE p_world (mean of tool reliability) — the estimator prices a
     # COMPOUND route's unknown sub-tools with this data-grounded prior instead of the
-    # static default. None (no history) → compound_ce falls back to the static p_world.
-    _pw_prior = _p_world_estimate(prior_counts, rc_cfg or None)
-    compound_p = (sum(_pw_prior.values()) / len(_pw_prior)) if _pw_prior else None
+    # static default. LIVE, mirroring p_of: recomputed over prior + this run's ledger
+    # each time it's read, so a tool degrading mid-run lowers deep-route pricing too —
+    # a frozen-at-start value would contradict the live-p_world design above. None (no
+    # history) → compound_ce falls back to the static p_world. (The per-tool Beta prior
+    # in _p_world_estimate already pins sparse-data tools near p₀, so this unweighted
+    # mean isn't dominated by 1-observation outliers.)
+    def compound_p() -> Optional[float]:
+        live = _p_world_estimate(_merge_counts(prior_counts, _tool_counts(run_ledger)), rc_cfg or None)
+        return (sum(live.values()) / len(live)) if live else None
     # OR worth-it: rank alternatives by CE and prune the ones below θ. The estimator
     # prices the tool each alternative would use (contract risk = cost); θ from rc_cfg.
     estimate = make_ce_estimator(call_model, tools, _contract.tool_risk,
@@ -397,7 +411,7 @@ def run_autonomous(
         goal,
         call_model=call_model, execute=_exec, tools=tools, engine=engine,
         build_context=build_context, select_tools=select_tools,
-        max_retries=max_retries, max_depth=max_depth,
+        max_retries=max_retries, max_depth=max_depth, ledger=run_ledger,
     )
     result["events"] = events
     result["disposition"] = _contract.disposition()
