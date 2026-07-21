@@ -7,7 +7,7 @@
 #
 #  What this does:
 #    1. Installs Python deps (requests, windows-curses on Windows)
-#    2. Writes admin/connection_config.json with the orchestrator URL + token
+#    2. Writes admin/config/connection_config.json with the orchestrator URL + token
 #    3. Adds a  gorgon-admin  shell alias
 #
 #  Run as your normal user:
@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 FILES_DIR="$REPO_ROOT/files"
 ADMIN_DIR="$FILES_DIR/admin"
-CFG_FILE="$ADMIN_DIR/connection_config.json"
+CFG_FILE="$ADMIN_DIR/config/connection_config.json"
 TOKEN_FILE="$HOME/.gorgon.token"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -74,6 +74,7 @@ header "Writing Config"
 python3 - <<PYEOF
 import json, os
 path = "$CFG_FILE"
+os.makedirs(os.path.dirname(path), exist_ok=True)   # admin/config/ ships with the repo, but be safe
 cfg = {}
 try:
     cfg = json.load(open(path))
@@ -113,5 +114,5 @@ echo ""
 echo -e "    ${BOLD}gorgon-admin${RESET}   — open the admin dashboard"
 echo ""
 echo -e "  The admin TUI connects to: ${CYAN}${ORCH_URL}${RESET}"
-echo -e "  Edit ${CYAN}files/admin/connection_config.json${RESET} to change the target."
+echo -e "  Edit ${CYAN}files/admin/config/connection_config.json${RESET} to change the target."
 echo ""

@@ -1,8 +1,0 @@
-{
-  "text_color":          "#7355a3",
-  "font_size":           20,
-  "refresh_rate_s":      1.0,
-  "default_port":        8080,
-  "log_path":            "/tmp/gorgon-orchestrator.log",
-  "events_display_limit": 200
-}
