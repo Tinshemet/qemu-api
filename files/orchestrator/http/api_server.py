@@ -164,8 +164,11 @@ def _require_operator_auth(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_auth),
     session_cookie: Optional[str] = Cookie(default=None, alias=_SESSION_COOKIE_NAME),
 ) -> None:
-    """Stricter than _require_auth — applied only to /chat and /execute, the
-    primary human-interactive surfaces.
+    """Stricter than _require_auth — applied to /chat and /execute (the primary
+    human-interactive surfaces) plus operator/token management (/operators
+    create+delete, /rotate-token): high-impact endpoints where the shared token
+    must not suffice once an operator exists. In particular, operator deletion
+    is gated here because emptying the store would disable auth entirely.
 
     The plain API_TOKEN is shipped as the same default value
     (connection_config.json's "token") in both the server's and the client's
@@ -175,12 +178,12 @@ def _require_operator_auth(
     mandatory, for exactly the surfaces this feature was built to gate.
 
     Once an operator account exists, ONLY a valid operator session (bearer or
-    cookie) is accepted here — the shared token no longer suffices. Every
-    other _require_auth-gated endpoint (rotate-token, sync, events, ...)
-    keeps accepting the plain token unchanged; this is deliberately scoped to
-    /chat and /execute only. Pre-bootstrap (no operators yet) behaves
+    cookie) is accepted here — the shared token no longer suffices. The
+    remaining _require_auth-gated endpoints (sync, events, ...) keep accepting
+    the plain token unchanged. Pre-bootstrap (no operators yet) behaves
     identically to _require_auth, including the plain-token fallback for
-    non-localhost callers.
+    non-localhost callers — so first-operator creation from localhost still
+    works with no credentials.
     """
     from orchestrator.auth import sessions as _op_sessions
     from orchestrator.auth import store as _op_store
@@ -541,7 +544,7 @@ def clear_session(session_id: str) -> Dict[str, Any]:
     return {"ok": True, "session_id": session_id}
 
 
-@app.post("/rotate-token", dependencies=[Depends(_require_auth)])
+@app.post("/rotate-token", dependencies=[Depends(_require_operator_auth)])
 def rotate_token(new_token: str = Body(..., embed=True)) -> Dict[str, Any]:
     """Replace the in-memory token and persist it to ~/.gorgon.token."""
     global _TOKEN
@@ -605,7 +608,7 @@ def logout(
     return {"success": True}
 
 
-@app.post("/operators", dependencies=[Depends(_require_auth)])
+@app.post("/operators", dependencies=[Depends(_require_operator_auth)])
 def create_operator_endpoint(body: CreateOperatorRequest) -> Dict[str, Any]:
     """Create a new operator account.
 
@@ -629,13 +632,14 @@ def list_operators_endpoint() -> Dict[str, Any]:
     return {"operators": _op_store.list_operators()}
 
 
-@app.delete("/operators/{username}", dependencies=[Depends(_require_auth)])
+@app.delete("/operators/{username}", dependencies=[Depends(_require_operator_auth)])
 def delete_operator_endpoint(username: str) -> Dict[str, Any]:
     """Delete an operator account by username."""
     from orchestrator.auth import store as _op_store
     result = _op_store.delete_operator(username)
     if not result.get("success"):
-        raise HTTPException(status_code=404, detail=result.get("error"))
+        status = 409 if result.get("reason") == "last_operator" else 404
+        raise HTTPException(status_code=status, detail=result.get("error"))
     return result
 
 

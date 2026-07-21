@@ -84,8 +84,24 @@ def validate_session(token: Optional[str]) -> Optional[str]:
     entry = data.get(token)
     if not entry:
         return None
-    expires = datetime.fromisoformat(entry["expires"])
+    # A malformed entry (missing/unparseable `expires`) must fail closed, not
+    # 500 the request — drop it and treat the token as invalid.
+    try:
+        expires = datetime.fromisoformat(entry["expires"])
+    except (KeyError, ValueError, TypeError):
+        data.pop(token, None)
+        _save(data)
+        return None
     if datetime.now(timezone.utc) >= expires:
+        data.pop(token, None)
+        _save(data)
+        return None
+    # A session must not outlive its operator: if the account was deleted after
+    # this token was issued, the token stops authorizing immediately rather than
+    # coasting to its TTL. (store never imports sessions, so this local import
+    # is cycle-free.)
+    from orchestrator.auth import store as _store
+    if entry.get("username") not in _store.list_operators():
         data.pop(token, None)
         _save(data)
         return None

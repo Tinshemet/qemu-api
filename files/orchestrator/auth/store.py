@@ -102,6 +102,10 @@ def verify_password(username: str, password: str) -> bool:
     data  = _load()
     entry = data.get(username)
     if not entry:
+        # Compute a throwaway scrypt anyway so a nonexistent username costs the
+        # same wall-clock as a real one — otherwise the instant return leaks
+        # which usernames exist (timing-based enumeration).
+        _hash_password(password, secrets.token_bytes(16))
         return False
     salt     = bytes.fromhex(entry["salt"])
     expected = entry["password_hash"]
@@ -115,10 +119,23 @@ def list_operators() -> List[str]:
 
 
 def delete_operator(username: str) -> Dict[str, Any]:
-    """Delete an operator account by username."""
+    """Delete an operator account by username.
+
+    Refuses to remove the last remaining operator: because every auth gate
+    keys off ``operators_exist()``, emptying the store would silently revert
+    the CLI and the HTTP localhost bypass to bootstrap-open mode. Disabling
+    auth must be an explicit, deliberate act — not a side effect of deleting
+    the final account.
+    """
     data = _load()
     if username not in data:
-        return {"success": False, "error": f"Operator '{username}' not found."}
+        return {"success": False, "reason": "not_found",
+                "error": f"Operator '{username}' not found."}
+    if len(data) == 1:
+        return {"success": False, "reason": "last_operator",
+                "error": (f"Cannot delete '{username}': it is the last operator. "
+                          "Removing it would disable operator authentication and "
+                          "revert to localhost-open mode. Create another operator first.")}
     del data[username]
     _save(data)
     return {"success": True}
