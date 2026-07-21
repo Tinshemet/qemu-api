@@ -83,7 +83,7 @@ except ImportError:
     render_fleet     = _render_json
     render_fleets    = _render_json
 
-_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
+_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "connection_config.json")
 try:
     _CONN      = json.load(open(_CFG_PATH))
     _SERVER    = os.environ.get("SERVER_URL", _CONN.get("server_url", "http://localhost:8080"))

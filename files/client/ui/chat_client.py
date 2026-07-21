@@ -29,9 +29,9 @@ except ImportError:
 
 # ── Connection config ─────────────────────────────────────────────────────────
 
-_CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "connection_config.json")
+_CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "connection_config.json")
 _CFG       = json.load(open(_CFG_PATH))
-_UI_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CLI_config.json")
+_UI_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "CLI_config.json")
 _UI_CFG      = json.load(open(_UI_CFG_PATH)) if os.path.exists(_UI_CFG_PATH) else {}
 
 _WRAP_WIDTH         = _UI_CFG.get("wrap_width",              120)

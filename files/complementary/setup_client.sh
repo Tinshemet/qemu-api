@@ -8,7 +8,7 @@
 #  What this installs:
 #    • Python venv + requests, rich
 #    • Shell alias: gorgon  (starts the AI chat client)
-#    • client/connection_config.json with SERVER_URL and token
+#    • client/config/connection_config.json with SERVER_URL and token
 #
 #  Run as your normal user:
 #    bash setup_client.sh
@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$HOME/qemu-env"
-CLIENT_CFG="$FILES_DIR/client/connection_config.json"
+CLIENT_CFG="$FILES_DIR/client/config/connection_config.json"
 
 # ── colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'

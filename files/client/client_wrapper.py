@@ -25,7 +25,7 @@ import json
 import os
 import sys
 
-_CLI_CFG_PATH = os.path.join(os.path.dirname(__file__), "CLI_config.json")
+_CLI_CFG_PATH = os.path.join(os.path.dirname(__file__), "config", "CLI_config.json")
 
 
 def _load_cli_config() -> dict:
