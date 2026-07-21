@@ -1,4 +1,5 @@
 {
+  "vm_base": "~/.qemu_vms",
   "valid_machine_types": [
     "q35",
     "pc",

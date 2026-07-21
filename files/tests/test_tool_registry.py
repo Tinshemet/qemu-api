@@ -41,7 +41,7 @@ def main():
     print("registry ↔ dispatch (the drift guard)")
     check("every dispatched tool is in the registry", not (dispatched - set(KNOWN_TOOLS)))
     check("every registry tool is actually dispatched", not (set(KNOWN_TOOLS) - dispatched))
-    check("48 tools", len(KNOWN_TOOLS) == 48)
+    check("50 tools", len(KNOWN_TOOLS) == 50)
 
     print("\nconsumers DERIVE from the registry (same object, not a copy)")
     import executor.server as srv
