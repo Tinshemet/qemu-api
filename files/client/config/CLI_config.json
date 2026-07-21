@@ -1,24 +1,4 @@
 {
-  "text_color":              "#7355a3",
-  "font_size":               13,
-  "wrap_width":              120,
-  "terminal_rows":           44,
-  "terminal_cols":           200,
-  "autostart_poll_count":    20,
-  "autostart_poll_interval_s": 0.5,
-  "iso_distro_keywords": [
-    ["ubuntu",    "Ubuntu"],
-    ["debian",    "Debian"],
-    ["mint",      "Linux Mint"],
-    ["fedora",    "Fedora"],
-    ["arch",      "Arch Linux"],
-    ["kali",      "Kali Linux"],
-    ["raspios",   "Raspberry Pi OS"],
-    ["raspberry", "Raspberry Pi OS"],
-    ["win11",     "Windows 11"],
-    ["win10",     "Windows 10"],
-    ["windows",   "Windows"],
-    ["macos",     "macOS"],
-    ["darwin",    "macOS"]
-  ]
+  "text_color": "#7355a3",
+  "font_size":  13
 }

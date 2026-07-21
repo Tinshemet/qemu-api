@@ -1,0 +1,9 @@
+{
+  "server_url":            "http://localhost:8080",
+  "token":                 "",
+  "ca_cert":               null,
+  "verify_ssl":            true,
+  "timeout":               120,
+  "vnc_viewer_candidates": ["vncviewer", "tigervnc", "xtigervncviewer", "gvncviewer"],
+  "io_chunk_bytes":        4194304
+}

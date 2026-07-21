@@ -1,0 +1,10 @@
+{
+  "text_color":              "#aaaaaa",
+  "font_size":               13,
+  "wrap_width":              120,
+  "terminal_rows":           44,
+  "terminal_cols":           200,
+  "autostart_poll_count":    20,
+  "autostart_poll_interval_s": 0.5,
+  "log_path":                "/tmp/gorgon-orchestrator.log"
+}

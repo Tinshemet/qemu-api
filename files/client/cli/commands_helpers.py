@@ -24,17 +24,11 @@ try:
 except ImportError:
     manager = None                                                            # type: ignore[assignment]
 
-_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "connection_config.json")
-try:
-    _CONN    = json.load(open(_CFG_PATH))
-    _SERVER  = os.environ.get("SERVER_URL", _CONN.get("server_url", "http://localhost:8080"))
-    _TOKEN   = os.environ.get("API_TOKEN",  _CONN.get("token", ""))
-    _TIMEOUT = int(os.environ.get("API_TIMEOUT", _CONN.get("timeout", 120)))
-    _CA_CERT = os.environ.get("API_CA_CERT", _CONN.get("ca_cert") or None)
-    _VERIFY  = False if os.environ.get("API_VERIFY_SSL", "1") == "0" else (_CA_CERT or _CONN.get("verify_ssl", True))
-    _HEADERS = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}
-except Exception:
-    _SERVER, _TOKEN, _TIMEOUT, _VERIFY, _HEADERS = "http://localhost:8080", "", 120, True, {}
+# Connection settings from the shared loader (client/config), under the same
+# module-level names this file already uses.
+from client import config as _cfg
+_SERVER, _TOKEN, _TIMEOUT = _cfg.SERVER, _cfg.TOKEN, _cfg.TIMEOUT
+_CA_CERT, _VERIFY, _HEADERS = _cfg.CA_CERT, _cfg.VERIFY, _cfg.HEADERS
 
 
 def _require_manager() -> None:

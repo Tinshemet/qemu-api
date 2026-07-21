@@ -83,20 +83,13 @@ except ImportError:
     render_fleet     = _render_json
     render_fleets    = _render_json
 
-_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "connection_config.json")
-try:
-    _CONN      = json.load(open(_CFG_PATH))
-    _SERVER    = os.environ.get("SERVER_URL", _CONN.get("server_url", "http://localhost:8080"))
-    _TOKEN     = os.environ.get("API_TOKEN",  _CONN.get("token", ""))
-    _TIMEOUT   = int(os.environ.get("API_TIMEOUT", _CONN.get("timeout", 120)))
-    _CA_CERT   = os.environ.get("API_CA_CERT", _CONN.get("ca_cert") or None)
-    _VERIFY    = False if os.environ.get("API_VERIFY_SSL", "1") == "0" else (_CA_CERT or _CONN.get("verify_ssl", True))
-    _HEADERS   = {"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}
-    _VNC_VIEWERS = _CONN.get("vnc_viewer_candidates", ["vncviewer", "tigervnc", "xtigervncviewer"])
-    _IO_CHUNK    = _CONN.get("io_chunk_bytes", 4 * 1024 * 1024)
-except Exception:
-    _SERVER, _TOKEN, _TIMEOUT, _VERIFY, _HEADERS = "http://localhost:8080", "", 120, True, {}
-    _VNC_VIEWERS, _IO_CHUNK = [], 4 * 1024 * 1024
+# Connection settings come from the shared loader (client/config), which merges
+# connection_config.defaults.json + connection_config.json and applies the env
+# overrides once. Kept under the same module-level names the rest of this file uses.
+from client import config as _cfg
+_SERVER, _TOKEN, _TIMEOUT = _cfg.SERVER, _cfg.TOKEN, _cfg.TIMEOUT
+_CA_CERT, _VERIFY, _HEADERS = _cfg.CA_CERT, _cfg.VERIFY, _cfg.HEADERS
+_VNC_VIEWERS, _IO_CHUNK = _cfg.VNC_VIEWERS, _cfg.IO_CHUNK
 
 try:
     from executor.api.qemu_config import (

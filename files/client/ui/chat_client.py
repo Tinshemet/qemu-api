@@ -29,26 +29,19 @@ except ImportError:
 
 # ── Connection config ─────────────────────────────────────────────────────────
 
-_CFG_PATH  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "connection_config.json")
-_CFG       = json.load(open(_CFG_PATH))
-_UI_CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "CLI_config.json")
-_UI_CFG      = json.load(open(_UI_CFG_PATH)) if os.path.exists(_UI_CFG_PATH) else {}
+# Connection + appearance settings come from the shared loader (client/config),
+# which merges the defaults/overrides JSON and applies env overrides once.
+from client import config as _cfg
 
-_WRAP_WIDTH         = _UI_CFG.get("wrap_width",              120)
-_AUTOSTART_POLLS    = _UI_CFG.get("autostart_poll_count",     20)
-_AUTOSTART_INTERVAL = _UI_CFG.get("autostart_poll_interval_s", 0.5)
-_ISO_DISTRO_KEYWORDS = [
-    (pair[0], pair[1]) for pair in _UI_CFG.get("iso_distro_keywords", [])
-]
+_WRAP_WIDTH         = _cfg.WRAP_WIDTH
+_AUTOSTART_POLLS    = _cfg.AUTOSTART_POLL_COUNT
+_AUTOSTART_INTERVAL = _cfg.AUTOSTART_POLL_INTERVAL_S
 
-SERVER_URL = os.environ.get("SERVER_URL",   _CFG.get("server_url", "http://localhost:8080"))
-_TOKEN     = os.environ.get("API_TOKEN",    _CFG.get("token",      ""))
-_TIMEOUT   = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))
-_CA_CERT   = os.environ.get("API_CA_CERT", _CFG.get("ca_cert") or None)
-_VERIFY    = (
-    False if os.environ.get("API_VERIFY_SSL", "1") == "0"
-    else (_CA_CERT or _CFG.get("verify_ssl", True))
-)
+SERVER_URL = _cfg.SERVER
+_TOKEN     = _cfg.TOKEN
+_TIMEOUT   = _cfg.TIMEOUT
+_CA_CERT   = _cfg.CA_CERT
+_VERIFY    = _cfg.VERIFY
 # Prefer this box's logged-in operator session over the static API_TOKEN —
 # /chat now requires a session specifically once an operator account exists
 # (see orchestrator/http/api_server.py's _require_operator_auth), so the
@@ -288,28 +281,6 @@ def _try_open_vnc(port: int) -> Optional[str]:
 # ── Tool result rendering ─────────────────────────────────────────────────────
 
 
-def _iso_distro_hint(iso_name: str) -> str:
-    """Return the distro name implied by the ISO filename.
-
-    Args:
-        iso_name: ISO filename or path (only the basename is examined).
-
-    Returns:
-        Lowercase distro name (e.g. ``"ubuntu"``, ``"windows"``), or
-        ``''`` if no keyword matched.
-
-    Example::
-
-        _iso_distro_hint("ubuntu-22.04-desktop-amd64.iso")  # → "ubuntu"
-        _iso_distro_hint("Win11_23H2_English_x64.iso")       # → "windows"
-        _iso_distro_hint("unknown.iso")                       # → ""
-    """
-    s = iso_name.lower()
-    for keyword, distro in _ISO_DISTRO_KEYWORDS:
-        if keyword in s:
-            return distro
-    return ""
-
 def _render_tool_result(tool: str, result: dict) -> None:
     """Render a tool result into the scrollback, formatted per tool type."""
     if tool == "list_vms":
@@ -377,17 +348,12 @@ def _render_tool_result(tool: str, result: dict) -> None:
         if result.get("success"):
             _vm_msg = result.get("message") or f"VM '{result.get('name', '')}' created."
             _add(f"  ✓ {_vm_msg}", _cp(C_GREEN))
-            iso_name = (result.get("iso_name") or "").lower()
-            os_name  = (result.get("os_name")  or "").lower()
-            iso_distro = _iso_distro_hint(iso_name)
-            if iso_distro and os_name and iso_distro not in os_name and os_name not in iso_distro:
-                _add(f"  ⚠ ISO ({result['iso_name']}) looks like {iso_distro}"
-                     f" but OS declared as '{result['os_name']}' — may be wrong.",
-                     _cp(C_YELLOW) | curses.A_BOLD)
-                _add( "    To fix: delete the VM and recreate, specifying the correct OS name.",
-                     _cp(C_DIM))
-            elif iso_distro and not os_name:
-                _add(f"  ℹ ISO suggests distro: {iso_distro}", _cp(C_DIM))
+            # The ISO-vs-declared-OS mismatch check is done server-side (the
+            # executor owns the ISO/OS keyword data — the single source of truth);
+            # the client just renders the advisory when present.
+            _iso_warn = result.get("iso_os_warning")
+            if _iso_warn:
+                _add(f"  ⚠ {_iso_warn}", _cp(C_YELLOW) | curses.A_BOLD)
         else:
             _add(f"  ✖ {result.get('error', 'create_vm failed')}", _cp(C_RED))
 
@@ -540,7 +506,7 @@ def _autostart_server(stdscr: "curses.window") -> bool:
     except Exception:
         pass  # no token file — run without an API token (orchestrator may allow it)
 
-    _log_path = _UI_CFG.get("log_path", "/tmp/gorgon-orchestrator.log")
+    _log_path = _cfg.LOG_PATH
     import subprocess as _sp
     _sp.Popen(
         [sys.executable, "-m", "uvicorn",

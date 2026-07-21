@@ -9,7 +9,7 @@ Usage:
     gorgon -cs                    Clear saved session before starting
     gorgon -tf <name>             Fingerprint report for a VM
 
-Appearance is configured via CLI_config.json (same directory as this file):
+Appearance is configured via config/CLI_config.json:
     text_color   Hex color for body text, e.g. "#aaaaaa"
     font_size    Terminal font size hint, e.g. 13
 
@@ -21,19 +21,7 @@ Examples:
     gorgon -tf myvm               Fingerprint report for myvm
 """
 
-import json
-import os
 import sys
-
-_CLI_CFG_PATH = os.path.join(os.path.dirname(__file__), "config", "CLI_config.json")
-
-
-def _load_cli_config() -> dict:
-    """Load the client CLI config (accent colour, font size), or defaults."""
-    try:
-        return json.load(open(_CLI_CFG_PATH))
-    except Exception:
-        return {}
 
 
 def main() -> None:
@@ -70,9 +58,9 @@ def main() -> None:
         from client.cli.commands import clear_session_flag
         clear_session_flag()
 
-    cfg       = _load_cli_config()
-    color_hex = cfg.get("text_color", "#aaaaaa")
-    font_size = int(cfg.get("font_size", 13))
+    from client import config as _cfg
+    color_hex = _cfg.TEXT_COLOR
+    font_size = _cfg.FONT_SIZE
 
     if argv:
         from client.cli.commands import run
