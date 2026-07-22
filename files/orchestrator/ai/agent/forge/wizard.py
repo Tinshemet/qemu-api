@@ -6,6 +6,7 @@ forge_interactive() is the Doorman-driven dialogue that elicits the spec first.
 Every forge frontend (terminal CLI, chat wizard) routes through these.
 """
 
+import json
 import os
 from typing import Any, Dict
 
@@ -39,6 +40,13 @@ def finalize_forge(spec: Dict[str, Any], safeword: str, write_dir: str = ".",
     if os.path.exists(path) and not overwrite:
         return None, [f"{path} exists — choose a different agent name"]
     write_grgn(g, path)
+    # Scaffold an inherit-everything skin.json beside the contract, so the bundle is
+    # complete and the operator has a per-agent appearance file to edit (null = global).
+    skin_path = os.path.join(bundle_dir, "skin.json")
+    if not os.path.exists(skin_path):
+        from shared.skin import SKIN_KEYS
+        with open(skin_path, "w") as sf:
+            json.dump({k: None for k in SKIN_KEYS}, sf, indent=2)
     return path, []
 
 

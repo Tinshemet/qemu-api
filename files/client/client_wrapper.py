@@ -81,7 +81,18 @@ class ClientCLI:
             run(argv, verbose=verbose)
         else:
             from client.ui.chat_client import chat_loop
-            chat_loop(verbose=verbose, color_hex=_cfg.TEXT_COLOR, font_size=_cfg.FONT_SIZE)
+            skin = self._active_skin({"text_color": _cfg.TEXT_COLOR, "font_size": _cfg.FONT_SIZE})
+            chat_loop(verbose=verbose, color_hex=skin["text_color"], font_size=skin["font_size"])
+
+    def _active_skin(self, base: dict) -> dict:
+        """The active agent's appearance skin laid over the global defaults (``base``).
+        Degrades to ``base`` if the skin/contract layer is unavailable."""
+        try:
+            from shared.skin import load_skin
+            from orchestrator.ai.agent.contract import active_agent_key
+            return load_skin(active_agent_key(), base)
+        except Exception:
+            return base
 
 
 if __name__ == "__main__":
