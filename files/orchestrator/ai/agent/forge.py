@@ -423,8 +423,15 @@ def _reward_render(value) -> str:
 
 
 def _load_fields() -> Dict[str, Any]:
-    """The declarative forge field schema (questions, order, parsers, defaults)."""
-    return json.load(open(os.path.join(_AI, "forge_fields.json")))
+    """The forge field schema. The config blocks (header, safeword_prompt, intent,
+    wizard) come from forge_fields.json; the ``fields`` list is the SINGLE SOURCE
+    built from the contract Field classes (fields.FORGE_FIELD_ORDER) — so adding a
+    Field subclass grows the wizard. The parse/validate strategies (_FIELD_TYPES)
+    stay shared with mission authoring, which loads its own mission_fields.json."""
+    from .fields import forge_schema_fields
+    cfg = json.load(open(os.path.join(_AI, "forge_fields.json")))
+    cfg["fields"] = forge_schema_fields()
+    return cfg
 
 
 def _set_dotted(spec: Dict[str, Any], key: str, value: Any) -> None:

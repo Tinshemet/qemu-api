@@ -1,5 +1,5 @@
 {
-  "_doc": "Declarative field schema for AGENT (contract) forging. A contract creates the agent — its identity and DEFAULT parameters — and nothing else: goals/titles/acceptance live on missions (mission_fields.json), not here. forge.py loads this; both the terminal CLI and the chat wizard iterate it. Field order IS the elicitation order. `parse` names a FieldType strategy resolved via forge._FIELD_TYPES (str | csv | toolkit | importance | expiry). essential: asked in the simpler terminal forge; non-essential fields are asked only in the full flow and otherwise take their default. ask=false sets a constant without prompting.",
+  "_doc": "Config blocks for AGENT (contract) forging. The FIELD DEFINITIONS now live as classes in fields.py (fields.FORGE_FIELD_ORDER) — the single source both the terminal CLI and the chat wizard iterate via forge._load_fields(); adding a Field subclass grows the wizard. This file keeps only the non-field config: the header, the safeword prompt, and the intent/wizard behaviour blocks. `parse` strategies are resolved via forge._FIELD_TYPES and stay shared with mission authoring (mission_fields.json).",
   "header": "═ Forge an agent (contract) ═  ·  identity + defaults; a mission gives it a goal later",
   "safeword_prompt": "Agent is coherent. Sign with a SAFEWORD to seal it (blank to cancel)",
   "intent": {
@@ -12,18 +12,5 @@
     "max_password_attempts": 3,
     "cancel_words": ["cancel", "abort", "quit", "/cancel", "stop"],
     "password_prompt": "Operator password:"
-  },
-  "fields": [
-    {"key": "persona.name", "prompt": "Agent name", "parse": "str", "essential": true},
-    {"key": "persona.role", "prompt": "Role", "parse": "str"},
-    {"key": "persona.disposition", "prompt": "Disposition [human-confirm|autonomous]", "parse": "str", "default": "autonomous"},
-    {"key": "scrutiny", "prompt": "Default scrutiny [strict|medium|loose]", "parse": "str", "default": "strict"},
-    {"key": "tools.list", "prompt": "Toolkit — whitelist tools (comma-separated)", "parse": "toolkit", "essential": true},
-    {"key": "tools.mode", "ask": false, "value": "whitelist"},
-    {"key": "forbidden", "prompt": "Red lines — tools to forbid (comma-separated, blank for none)", "parse": "toolkit", "conflicts_with": "tools.list"},
-    {"key": "ethics", "prompt": "Ethics", "parse": "str"},
-    {"key": "legality", "prompt": "Legality", "parse": "str"},
-    {"key": "reward", "prompt": "Default reward — how much does a typical mission matter? [routine|important|critical]", "parse": "importance", "default": "important", "levels": {"routine": 3, "important": 10, "critical": 30}},
-    {"key": "expiry", "prompt": "Expiry — when does this agent expire? (YYYY-MM-DD, a duration like 30d, or blank for never)", "parse": "expiry"}
-  ]
+  }
 }
