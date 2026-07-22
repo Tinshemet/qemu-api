@@ -364,7 +364,8 @@ def chat(req: ChatRequest, operator: Optional[str] = Depends(_current_operator))
     from orchestrator.executor_client import execute_tool
     from orchestrator.ai.agent import forge_chat
     from orchestrator.ai.agent import forge as _forge
-    _FORGE_DIR = os.path.dirname(os.path.abspath(_forge.__file__))
+    import shared.bundle as _bundle
+    _FORGE_DIR = _bundle.AGENTS_ROOT   # a forged agent lands in its bundle
 
     _evict_expired_sessions()
     sid     = req.session_id or str(uuid.uuid4())

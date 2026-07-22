@@ -533,7 +533,12 @@ def finalize_forge(spec: Dict[str, Any], safeword: str, write_dir: str = ".",
         return None, ["a safeword is required to sign (the kill-switch)"]
     sign(g, safeword)
     name = (spec.get("persona", {}).get("name") or "agent").lower()
-    path = os.path.join(write_dir, f"{name}.grgn")
+    # A forged agent is a BUNDLE: write_dir/<name>/<name>.grgn (production passes the
+    # bundle root AGENTS_ROOT; a test passes a temp dir). The folder is the agent's
+    # self-contained home — missions/findings/skin land beside the contract.
+    bundle_dir = os.path.join(write_dir, name)
+    os.makedirs(bundle_dir, exist_ok=True)
+    path = os.path.join(bundle_dir, f"{name}.grgn")
     if os.path.exists(path) and not overwrite:
         return None, [f"{path} exists — choose a different agent name"]
     write_grgn(g, path)

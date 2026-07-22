@@ -21,7 +21,8 @@ class ContractCommand(Command):
             console.print("[bold red]Contract forging unavailable on this checkout "
                           "(orchestrator package not present).[/bold red]")
             return
-        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))
+        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))   # code-resident templates
+        import shared.bundle as _bundle
         from shared import audit as _audit
         _op = _auth_sessions.current_username() if _auth_sessions else None
         sub = rest[0] if rest else ""
@@ -31,7 +32,7 @@ class ContractCommand(Command):
             _full = "--full" in rest
             _p = _forge.forge_interactive(
                 ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
-                out=console.print, write_dir=_agent_dir, essential_only=not _full)
+                out=console.print, write_dir=_bundle.AGENTS_ROOT, essential_only=not _full)
             if _p:
                 _audit.record("contract.forge", os.path.basename(_p), _op)
         elif sub == "show":
@@ -39,7 +40,7 @@ class ContractCommand(Command):
             from shared import agent_select as _sel
             target = rest[1] if len(rest) >= 2 else (          # no arg → the active agent
                 os.environ.get("GORGON_AGENT") or _sel.get_selection() or "doorman.grgn")
-            path = target if os.path.isabs(target) else os.path.join(_agent_dir, target)
+            path = _bundle.resolve_grgn(target, _agent_dir)    # bundle-first, code fallback
             g, st = _read_grgn(path)
             if g is None:
                 console.print(f"[bold red]Cannot read {os.path.basename(target)} ({st}).[/bold red]")
@@ -51,7 +52,7 @@ class ContractCommand(Command):
             from shared.grgn_sign import read as _read_grgn
             from shared import agent_select as _sel
             active = os.path.basename(os.environ.get("GORGON_AGENT") or _sel.get_selection() or "doorman.grgn")
-            files = sorted(_glob.glob(os.path.join(_agent_dir, "*.grgn")))
+            files = _bundle.list_agent_grgns(_agent_dir)       # bundle contracts + code templates
             if not files:
                 console.print("[dim]No contracts found.[/dim]")
             from orchestrator.ai.agent import revocation as _rev
@@ -72,7 +73,7 @@ class ContractCommand(Command):
             if not _require_operator_password("sign a contract"):
                 return
             from shared.grgn_sign import read as _read_grgn
-            path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
+            path = _bundle.resolve_grgn(rest[1], _agent_dir)
             g, st = _read_grgn(path)
             if g is None:
                 console.print(f"[bold red]Cannot read {rest[1]} ({st}).[/bold red]")
@@ -90,7 +91,7 @@ class ContractCommand(Command):
                 return
             import subprocess, tempfile
             from shared.grgn_sign import read as _read_grgn
-            path = rest[1] if os.path.isabs(rest[1]) else os.path.join(_agent_dir, rest[1])
+            path = _bundle.resolve_grgn(rest[1], _agent_dir)
             g, st = _read_grgn(path)
             if g is None:
                 console.print(f"[bold red]Cannot read {rest[1]} ({st}).[/bold red]")

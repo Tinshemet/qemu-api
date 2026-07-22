@@ -38,6 +38,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from .fields import build_fields, ExpiryField
+from shared.bundle import Bundle, resolve_grgn as _resolve_grgn
 
 # The tool registry — the FACTS source of truth (what tools exist + signatures).
 # Guarded like score.py's import so this module still loads in orchestrator-only
@@ -64,6 +65,13 @@ def _is_expired(grgn: Dict[str, Any]) -> bool:
     return ExpiryField().is_expired((grgn or {}).get("contract", {}) or {})
 
 
+def agent_grgn_path(agent_file: str, code_dir: str) -> str:
+    """Resolve an agent selection to its .grgn path — bundle-first, code-dir fallback.
+    Thin alias over the shared authority ``shared.bundle.resolve_grgn`` so the loader
+    and the contract commands resolve identically."""
+    return _resolve_grgn(agent_file, code_dir)
+
+
 def _load_active() -> "tuple":
     """Resolve + integrity-gate the active .grgn, returning (grgn, agent_path, status).
 
@@ -79,8 +87,8 @@ def _load_active() -> "tuple":
         _resolve_agent = lambda: "doorman.grgn"                                # type: ignore[assignment]
     agent_file = _resolve_agent()
     here       = os.path.dirname(__file__)
-    agent_path = agent_file if os.path.isabs(agent_file) else os.path.join(here, agent_file)
     doorman    = os.path.join(here, "doorman.grgn")
+    agent_path = agent_grgn_path(agent_file, here)
     if not os.path.isfile(agent_path):
         # A stale selection (deleted file) must not brick startup — fall back safely.
         agent_path = doorman

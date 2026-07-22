@@ -93,10 +93,11 @@ def _maybe_forge_contract(ui: str) -> bool:
     if not _repl_require_operator_password("forge a contract"):
         return True  # handled (aborted) — do not fall through to the model
     from orchestrator.ai.agent import forge as _forge
+    import shared.bundle as _bundle
     _forge.forge_interactive(
         ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
         out=console.print,
-        write_dir=os.path.dirname(os.path.abspath(_forge.__file__)),
+        write_dir=_bundle.AGENTS_ROOT,   # a forged agent lands in its bundle
     )
     return True
 

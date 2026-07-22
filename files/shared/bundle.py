@@ -12,6 +12,7 @@ module attribute (not a bound import) so a test isolates every bundle path by
 patching it once.
 """
 
+import glob
 import os
 
 from shared.config import AGENTS_DIR
@@ -81,3 +82,36 @@ def list_bundles() -> list:
         return []
     return sorted(n for n in os.listdir(AGENTS_ROOT)
                   if os.path.isdir(os.path.join(AGENTS_ROOT, n)))
+
+
+def resolve_grgn(name_or_file: str, code_dir: str = None) -> str:
+    """The .grgn path for an agent selection (the single resolution authority).
+
+    An absolute path is returned as-is; otherwise the bundle contract
+    (~/.qemu_vms/_agents/<name>/<name>.grgn) wins if it exists, falling back to
+    ``<code_dir>/<name_or_file>`` — where the built-in doorman and any not-yet-migrated
+    agent live. The NAME is the selection's basename without extension.
+    """
+    if os.path.isabs(name_or_file):
+        return name_or_file
+    name = os.path.splitext(os.path.basename(name_or_file))[0]
+    b = Bundle(name)
+    if b.has_contract():
+        return b.contract_path
+    return os.path.join(code_dir, name_or_file) if code_dir else b.contract_path
+
+
+def list_agent_grgns(code_dir: str = None) -> list:
+    """Every agent .grgn path: bundle contracts first, then the code-resident
+    templates (doorman, …) not shadowed by a bundle of the same name."""
+    paths, seen = [], set()
+    for name in list_bundles():
+        b = Bundle(name)
+        if b.has_contract():
+            paths.append(b.contract_path)
+            seen.add(name)
+    if code_dir and os.path.isdir(code_dir):
+        for f in sorted(glob.glob(os.path.join(code_dir, "*.grgn"))):
+            if os.path.splitext(os.path.basename(f))[0] not in seen:
+                paths.append(f)
+    return paths

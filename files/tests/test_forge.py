@@ -110,8 +110,8 @@ def main():
     check("captured the elicited toolkit + red lines",
           g["contract"]["toolkit"] == ["list_vms", "run_guest_command"] and g["contract"]["forbidden"] == ["delete_network"])
     check("no goal/campaign on the forged agent", "campaign" not in g["contract"])
-    os.remove(path)
-    os.rmdir(d)
+    import shutil
+    shutil.rmtree(d)     # the forged agent lives in a <name>/ bundle subfolder
 
     # a blank safeword cancels (nothing written) — the contract is coherent, so the
     # blank safeword is what cancels.
@@ -119,7 +119,7 @@ def main():
     d2 = tempfile.mkdtemp()
     check("blank safeword cancels (no file)",
           forge_interactive(ask=lambda p: next(ans2), out=lambda s: None, write_dir=d2) is None)
-    os.rmdir(d2)
+    shutil.rmtree(d2)
 
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)
