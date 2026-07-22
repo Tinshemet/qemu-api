@@ -843,6 +843,14 @@
       "effect": null,
       "rev": false
     },
+    "run_command": {
+      "req": [
+        "code"
+      ],
+      "vm": false,
+      "effect": null,
+      "rev": false
+    },
     "scan_isos": {
       "req": [],
       "vm": false,

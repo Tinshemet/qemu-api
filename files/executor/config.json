@@ -3,5 +3,7 @@
   "port": 8001,
   "token": "",
   "io_chunk_bytes": 4194304,
-  "tar_chunk_bytes": 65536
+  "tar_chunk_bytes": 65536,
+  "run_command_timeout_s": 60,
+  "run_command_max_output_bytes": 1048576
 }
