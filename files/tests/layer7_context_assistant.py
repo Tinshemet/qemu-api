@@ -12,21 +12,21 @@ Four randomised categories (mirrors layer 2 and layer 6 patterns):
   clean        — all required fields grounded in prompt → must pass silently
 """
 
-import json, pathlib, random, time, traceback
+import random, time, traceback
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from .shared import ContextAssistantTest, TestResult, check_context
-from orchestrator.ai.chat.context_assistant import scan_tool_hints
-
-_CFG_PATH = pathlib.Path(__file__).parents[1] / "orchestrator" / "ai" / "context_assistant_config.json"
-with _CFG_PATH.open() as _f:
-    _CA_CFG = json.load(_f)
+# The context-assistant config moved to orchestrator/ai/chat/ in the ai-clustering
+# refactor. Read the field maps straight from the live module (SSOT) rather than
+# re-opening the file by an absolute path — which had gone stale (it pointed at the
+# pre-refactor orchestrator/ai/ location) and broke test_api.py's collection.
+from orchestrator.ai.chat.context_assistant import (
+    scan_tool_hints, _REQUIRED_FIELDS, _HIGH_STAKES,
+)
 
 # tool_hints moved to the canonical tool registry (single source); read it there.
 from executor.command_catalog import TOOL_TRIGGERS as _TOOL_HINTS
-_REQUIRED_FIELDS: Dict[str, List[str]] = _CA_CFG["required_fields"]
-_HIGH_STAKES:     Dict[str, List[str]] = _CA_CFG["high_stakes_optional"]
 
 # Distinctive substrings from each message template in context_assistant_config.json
 _TYPE_SIGNATURES: Dict[str, str] = {
