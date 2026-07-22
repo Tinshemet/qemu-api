@@ -14,6 +14,37 @@ from typing import Any, Dict, Optional
 from . import session_store
 
 
+def _handle_grant_command(message: str) -> Optional[str]:
+    """Operator run_command grant commands, handled deterministically. Returns a reply, or None
+    if the message isn't a grant command. Operator-only by construction: only a typed user
+    message reaches here, and the AI emits tool calls, not user messages — it can't self-grant.
+
+      grant read <path>    grant net / allow net    revoke net    revoke (clear all)    grants
+    """
+    from orchestrator import run_command_grants as grants
+    m   = message.strip()
+    low = m.lower()
+    if low in ("grants", "show grants", "grant status"):
+        return grants.describe()
+    if low in ("revoke", "revoke grants", "clear grants", "ungrant"):
+        grants.clear()
+        return "run_command grants revoked — back to workspace-only, no network."
+    if low in ("grant net", "allow net", "grant network", "allow network"):
+        grants.set_net(True)
+        return "run_command network access GRANTED for this session."
+    if low in ("revoke net", "deny net", "revoke network", "block net"):
+        grants.set_net(False)
+        return "run_command network access revoked."
+    if low.startswith("grant read"):
+        path = m[len("grant read"):].strip().lstrip(":").strip()
+        if not path:
+            return "Usage: grant read <path>"
+        r = grants.add_read(path)
+        return (f"run_command read access GRANTED for this session: {r['path']}"
+                if r.get("success") else f"Could not grant: {r.get('error')}")
+    return None
+
+
 def handle_chat(req: Any, operator: Optional[str]) -> Dict[str, Any]:
     """
     Process one AI chat turn server-side and return the response.
@@ -39,6 +70,13 @@ def handle_chat(req: Any, operator: Optional[str]) -> Dict[str, Any]:
     pending_tool  = session.get("pending_tool")
     critical_step2 = session.get("critical_step2", False)
     forge_wizard   = session.get("forge_wizard")
+
+    # ── Operator run_command grants (deterministic; the AI never reaches this — it emits
+    # tool calls, not user messages). Skipped mid forge-wizard (those are wizard answers).
+    if forge_wizard is None:
+        _greply = _handle_grant_command(req.message)
+        if _greply is not None:
+            return {"session_id": sid, "text": _greply, "tool_results": [], "needs_input": None}
 
     # ── Forge wizard: deterministic multi-turn contract elicitation ───────────
     # High-impact, so it opens with operator re-auth. Runs entirely here, never

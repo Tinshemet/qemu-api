@@ -236,6 +236,14 @@ def execute_tool(tool_name: str, args: dict, verbose: bool = False, log: bool = 
         if "vnc_bind_local" not in args:
             args["vnc_bind_local"] = False
 
+    if tool_name == "run_command":
+        # Grants are OPERATOR-controlled: strip anything the AI supplied and inject the current
+        # operator grants server-side, so the model can never widen its own sandbox. Travels in
+        # the args to the executor (works in split mode too).
+        from orchestrator import run_command_grants as _rc_grants
+        args = {k: v for k, v in dict(args).items() if k != "_grants"}
+        args["_grants"] = _rc_grants.snapshot()
+
     # Enforce VM allowlist — report as "not found" to avoid leaking existence
     if tool_name in _VM_TOOLS and _ALLOWED_VMS:
         vm_name = args.get("name", "")

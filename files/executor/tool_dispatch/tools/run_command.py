@@ -40,12 +40,15 @@ _INTERP = {
 _RO_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/opt")
 
 
-def _bwrap_argv(inner: list) -> list:
+def _bwrap_argv(inner: list, grants: dict) -> list:
     """Wrap the interpreter argv in a bubblewrap jail: workspace read-write, a minimal
-    read-only system view, no network, everything else absent."""
-    argv = [
-        "bwrap",
-        "--unshare-net",                       # no network by default
+    read-only system view, and — unless the operator granted otherwise — no network and no
+    reads outside the workspace. `grants` (operator-controlled, injected at dispatch) may add
+    read-only binds and re-enable the network."""
+    argv = ["bwrap"]
+    if not grants.get("net"):
+        argv += ["--unshare-net"]                 # no network unless the operator granted it
+    argv += [
         "--unshare-ipc",
         "--unshare-uts",
         "--die-with-parent",
@@ -53,11 +56,14 @@ def _bwrap_argv(inner: list) -> list:
         "--proc", "/proc",
         "--dev", "/dev",
         "--tmpfs", "/tmp",
-        "--bind", WORKSPACE_DIR, WORKSPACE_DIR,  # the ONLY writable path
+        "--bind", WORKSPACE_DIR, WORKSPACE_DIR,   # the ONLY writable path
         "--chdir", WORKSPACE_DIR,
-        "--setenv", "HOME", WORKSPACE_DIR,       # ~ resolves into the workspace
+        "--setenv", "HOME", WORKSPACE_DIR,        # ~ resolves into the workspace
     ]
     for p in _RO_SYSTEM:
+        if os.path.exists(p):
+            argv += ["--ro-bind", p, p]
+    for p in grants.get("read_paths", []):        # operator-granted read paths (read-only)
         if os.path.exists(p):
             argv += ["--ro-bind", p, p]
     return argv + ["--"] + inner
@@ -82,7 +88,8 @@ class RunCommandTool(Tool):
                               "Install it with: sudo apt install bubblewrap")}
 
         os.makedirs(WORKSPACE_DIR, exist_ok=True)
-        argv = _bwrap_argv(interp + [code])
+        grants = args.get("_grants") or {}   # operator-controlled, injected at dispatch (never from the AI)
+        argv = _bwrap_argv(interp + [code], grants)
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT_S)
         except subprocess.TimeoutExpired:

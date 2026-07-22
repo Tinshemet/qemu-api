@@ -1,6 +1,11 @@
 # Design: General-Command Primitive (restore everyday operations, ledger-native)
 
-Status: **DRAFT / for review** · Author: session 2026-07-23 · Supersedes the `save_output` tool idea
+Status: **IMPLEMENTED (MVP)** · Author: session 2026-07-23 · Supersedes the `save_output` tool idea
+
+> **Shipped:** run_command (bwrap-confined) · local_probe + make_probe `local:` routing · prompt
+> un-fence · operator session grants (read paths + network, §4.2). Fully on the branch. Remaining
+> future work is the "Out (later)" list in §12 (seccomp-hardened profile, streaming, discovery
+> findings-schema, non-Linux fallback).
 
 ---
 
