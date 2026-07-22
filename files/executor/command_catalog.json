@@ -851,6 +851,15 @@
       "effect": null,
       "rev": false
     },
+    "local_probe": {
+      "req": [
+        "assertion",
+        "target"
+      ],
+      "vm": false,
+      "effect": null,
+      "rev": false
+    },
     "scan_isos": {
       "req": [],
       "vm": false,

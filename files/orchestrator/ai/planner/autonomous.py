@@ -68,22 +68,29 @@ def make_library_verifier(vms_getter: Callable[[], Dict[str, Dict[str, Any]]]):
 
 
 def make_probe(execute: Callable[[str, Dict], Any]):
-    """A probe(spec) -> Optional[bool] that verifies a `probe:` predicate clause
-    with an actual read-only guest_probe. spec is "vm:assertion:target" (e.g.
-    "web01:port_listening:443"). Returns the assertion's truth, or None when it
-    can't be verified (malformed spec, or the probe itself failed) — the caller
-    treats None as "unverifiable", never as "done"."""
+    """A probe(spec) -> Optional[bool] that verifies a `probe:` predicate clause with a real
+    read-only probe. spec is "scope:assertion:target[:value]":
+      • a VM name in the scope slot (e.g. "web01:port_listening:443") → guest_probe (in-VM);
+      • the sentinel "local" or "host" (e.g. "local:file_exists:out.csv") → local_probe, which
+        verifies run_command's effects in the host workspace.
+    Returns the assertion's truth, or None when it can't be verified (malformed spec, or the
+    probe itself failed) — the caller treats None as "unverifiable", never as "done"."""
     def probe(spec: str) -> Optional[bool]:
-        parts = (spec or "").split(":", 3)            # vm:assertion:target[:value]
+        parts = (spec or "").split(":", 3)            # scope:assertion:target[:value]
         if len(parts) < 3 or not all(parts[:3]):
             return None
-        pargs = {"name": parts[0], "assertion": parts[1], "target": parts[2]}
-        if len(parts) == 4 and parts[3]:              # file_contains/matches/user_in_group operand
-            pargs["value"] = parts[3]
-        res = execute("guest_probe", pargs)
+        scope, assertion, target = parts[0], parts[1], parts[2]
+        value = parts[3] if len(parts) == 4 and parts[3] else None
+        if scope in ("local", "host"):
+            tool, pargs = "local_probe", {"assertion": assertion, "target": target}
+        else:
+            tool, pargs = "guest_probe", {"name": scope, "assertion": assertion, "target": target}
+        if value is not None:                         # file_contains/matches/user_in_group operand
+            pargs["value"] = value
+        res = execute(tool, pargs)
         if isinstance(res, dict) and res.get("success"):
             return bool(res.get("holds"))
-        return None                                   # channel/agent failure → unverifiable
+        return None                                   # channel/probe failure → unverifiable
     return probe
 
 

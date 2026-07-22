@@ -23,6 +23,7 @@ _LOG_DEFAULT_LINES     = _CFG["log_default_lines"]
 VM_BASE_DIR            = os.path.expanduser(_CFG["dirs"]["vm_base"])
 TEMPLATES_DIR          = os.path.expanduser(_CFG["dirs"]["templates"])
 TEMPLATE_LABEL         = _CFG.get("template_label", "template")
+WORKSPACE_DIR          = os.path.join(VM_BASE_DIR, "workspace")   # run_command scratch/output area
 
 
 def _template_dir(name: str) -> str:

@@ -639,6 +639,68 @@
  {
   "type": "function",
   "function": {
+   "name": "run_command",
+   "description": "Run an ordinary shell or python command on the HOST to do everyday work — create/read/transform files, format data (CSV/JSON/text), zip, etc. — instead of asking for a specialized tool. Runs sandboxed (bubblewrap): it can ONLY write under the workspace (~/.gorgon/workspace, which is the working directory); writes anywhere else fail and secrets are unreadable. Like run_guest_command, success only means the command RAN — for a step to count as done, declare its effect as a post-condition and verify it with local_probe (e.g. after writing vms.csv, probe local:file_exists on it).",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "code": {
+      "type": "string",
+      "description": "The shell command or python source to run. Working directory is the workspace — write any outputs there (e.g. 'printf ... > vms.csv')."
+     },
+     "lang": {
+      "type": "string",
+      "enum": [
+       "shell",
+       "python"
+      ],
+      "description": "'shell' (run via /bin/sh -c) or 'python' (run via python3 -c). Default 'shell'."
+     }
+    },
+    "required": [
+     "code"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "local_probe",
+   "description": "Verify a single read-only fact on the HOST workspace and return whether it HOLDS (true/false) — grounded proof, not a claim. The host twin of guest_probe: confirm a run_command effect actually happened (e.g. the file was written) before treating a step as done. Targets are workspace-relative (or absolute paths under ~/.gorgon/workspace); anything outside the workspace is not readable. assertion + target: file_exists / dir_exists (path) · is_writable (path) · command_available (command name). file_contains (target=path, value=substring) and file_matches (target=path, value=regex) also need `value`.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "assertion": {
+      "type": "string",
+      "enum": [
+       "file_exists",
+       "dir_exists",
+       "file_contains",
+       "file_matches",
+       "is_writable",
+       "command_available"
+      ]
+     },
+     "target": {
+      "type": "string",
+      "description": "Workspace-relative path (or a command name for command_available)."
+     },
+     "value": {
+      "type": "string",
+      "description": "Second operand: file_contains (substring), file_matches (regex)."
+     }
+    },
+    "required": [
+     "assertion",
+     "target"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
    "name": "guest_ping",
    "description": "Check whether a VM's guest agent answers — confirms the guest OS itself is alive and responsive, not just that the QEMU process is running. Use for liveness checks distinct from vm_status.",
    "parameters": {
