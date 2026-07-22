@@ -2,6 +2,7 @@
   "agent_selection_file": "~/.gorgon.agent",
   "default_agent": "doorman.grgn",
   "agent_env_var": "GORGON_AGENT",
+  "agents_dir": "~/.qemu_vms/_agents",
 
   "audit_log_file": "~/.gorgon.audit.log",
   "signing_key_file": "~/.gorgon.key",
