@@ -21,13 +21,13 @@ _AI = os.path.dirname(__file__)
 
 
 def _schema() -> dict:
-    """The mission field schema: the config blocks (header, seal_prompt) from
-    mission_fields.json + the ``fields`` list built from the mission Field classes
-    (fields.MISSION_FIELD_ORDER) — the single source, so adding a class grows the
-    wizard. Shape strategies stay shared with agent forging."""
+    """The mission field schema: the config blocks (header, seal_prompt) + the
+    elicitation ORDER (``field_order``) from mission_fields.json, with the per-field
+    schema built from the mission Field classes (fields.py). Reorder/enable a field via
+    the JSON; add a field via a class. Shape strategies stay shared with agent forging."""
     from .fields import mission_schema_fields
     cfg = json.load(open(os.path.join(_AI, "mission_fields.json")))
-    cfg["fields"] = mission_schema_fields()
+    cfg["fields"] = mission_schema_fields(cfg.get("field_order", []))
     return cfg
 
 

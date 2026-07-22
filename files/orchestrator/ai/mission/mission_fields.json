@@ -1,5 +1,17 @@
 {
-  "_doc": "Config blocks for the MISSION wizard — what you task an agent to do. The FIELD DEFINITIONS now live as classes in fields.py (fields.MISSION_FIELD_ORDER), the single source mission_forge._schema() builds from; adding a Field subclass grows the wizard. This file keeps only the non-field config: the header and the seal prompt. Fields reuse the shared forge shape strategies (str/csv/predicate/optfloat/toolkit).",
+  "_doc": "Config for the MISSION wizard — what you task an agent to do. The field DEFINITIONS (prompt/shape/essential) live as classes in fields.py; this file holds the non-field config plus `field_order` — the elicitation order (and which fields are active). Reorder / enable / disable a mission field by editing field_order here; the class supplies its schema. Fields reuse the shared forge shape strategies (str/csv/predicate/optfloat/toolkit).",
   "header": "═ Author a mission ═  (title + goal required; blank = inherit the agent's default)",
-  "seal_prompt": "Mission is coherent. Seal it? (blank to cancel, or type a note to confirm)"
+  "seal_prompt": "Mission is coherent. Seal it? (blank to cancel, or type a note to confirm)",
+  "field_order": [
+    "title",
+    "goal",
+    "sub_goals",
+    "success_predicate",
+    "reward",
+    "importance",
+    "weight",
+    "tool_whitelist",
+    "tool_blacklist",
+    "scrutiny"
+  ]
 }

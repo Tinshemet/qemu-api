@@ -23,13 +23,12 @@ from orchestrator.preflight.validator import set_custom_mode
 from .context_assistant import extract_slots
 from ..agent.contract import is_critical as contract_is_critical
 
-_MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
+_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+_MC  = _CFG["vm_defaults"]          # machine-config defaults for the create_vm spec preview
 try:
     from executor.tool_dispatch.tool_executor import _VM_DEFS
 except ImportError:
-    _VM_DEFS = {"disk_size_gb": 60, "network_mode": "nat", "disk_bus": "virtio"}
-
-_CFG = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
+    _VM_DEFS = _CFG["vm_defs"]      # disk/net fallback when the executor package is absent
 _OS_KEYWORDS = set(_CFG["os_keywords_gate"])
 _RECENT_CONTEXT_WINDOW = _CFG["chat"].get("recent_context_window", 6)
 

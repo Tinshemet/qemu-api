@@ -62,16 +62,19 @@ class ScrutinyField(Field):
     spec_key = "scrutiny"; prompt = "Scrutiny level (blank = agent default)"; shape = "str"
 
 
-# The mission wizard's fields, IN ELICITATION ORDER. Adding a field = add a class here.
-# (This is the AUTHORING schema — a subset of the Mission model's valid fields in
-# mission.py, which also carries non-authored fields like success_criteria/reward_cost.)
-MISSION_FIELD_ORDER = (
+# Every mission field class, indexed by key. Adding a field = add a class here; the
+# ELICITATION ORDER (and which fields are active) is DATA — mission_fields.json's
+# `field_order` — so reordering/enabling a field is a JSON edit, not a code change.
+_FIELD_CLASSES = (
     TitleField, GoalField, SubGoalsField, SuccessPredicateField, RewardField,
     ImportanceField, WeightField, ToolWhitelistField, ToolBlacklistField, ScrutinyField,
 )
+_BY_KEY = {c.spec_key: c for c in _FIELD_CLASSES}
 
 
-def mission_schema_fields() -> List[Dict[str, Any]]:
-    """The mission wizard's field list (schema dicts), in elicitation order — the
-    single source that replaced mission_fields.json's ``fields`` array."""
-    return [cls.schema() for cls in MISSION_FIELD_ORDER]
+def mission_schema_fields(field_order: List[str]) -> List[Dict[str, Any]]:
+    """The mission wizard's field schema, in the order given by ``field_order``
+    (mission_fields.json). Each key looks up its Field class; unknown keys are
+    skipped. This is the AUTHORING schema — a subset of the Mission model's valid
+    fields in mission.py (which also carries non-authored success_criteria/reward_cost)."""
+    return [_BY_KEY[k].schema() for k in field_order if k in _BY_KEY]

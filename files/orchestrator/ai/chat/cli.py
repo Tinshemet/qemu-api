@@ -18,7 +18,6 @@ from typing import List
 from rich.panel import Panel
 from rich.table import Table
 
-_MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
 from orchestrator.executor_client import get_ovmf as _get_ovmf  # noqa: E402
 from .session import (
     AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session,
@@ -33,10 +32,9 @@ from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
 from orchestrator.executor_client import API_URL, _VERIFY
 try:
-    from executor.tool_dispatch.tool_executor import manager, _VM_DEFS
+    from executor.tool_dispatch.tool_executor import manager
 except ImportError:
     manager = None                                                            # type: ignore[assignment]
-    _VM_DEFS = {"disk_size_gb": 60, "network_mode": "nat", "disk_bus": "virtio"}
 from orchestrator.preflight.validator import set_custom_mode, _preflight_check
 from orchestrator.auth import store as _auth_store, sessions as _auth_sessions
 from .chat_turn import (  # per-turn processing (extracted from this file)
@@ -155,9 +153,9 @@ def chat_loop(verbose: bool = False) -> None:
         def _liveness_loop() -> None:
             """Background thread — ping the executor every 30s and warn if it stops responding."""
             import time as _t
-            while not _liveness_stop.wait(30):
+            while not _liveness_stop.wait(_CFG["liveness"]["ping_interval_sec"]):
                 try:
-                    r = _req.get(f"{API_URL}/health", timeout=5, verify=_VERIFY)
+                    r = _req.get(f"{API_URL}/health", timeout=_CFG["liveness"]["health_timeout_sec"], verify=_VERIFY)
                     if not r.ok:
                         console.print(f"\n[bold yellow]⚠ Executor health check failed ({r.status_code}) — it may have restarted.[/bold yellow]")
                 except Exception:
@@ -338,13 +336,13 @@ def chat_loop(verbose: bool = False) -> None:
         # the model gave text instead of calling a tool.
         if state.user_wants_action and not state.tool_executed:
             _runtime_drift_count += 1
-            if _runtime_drift_count >= 6:
+            if _runtime_drift_count >= _CFG["drift_thresholds"]["critical_consec"]:
                 console.print(
                     f"[bold red]✖ drift critical: {_runtime_drift_count} consecutive turns "
                     f"with no tool call — the model is likely poisoned. "
                     f"Type 'clear session' now.[/bold red]"
                 )
-            elif _runtime_drift_count >= 3:
+            elif _runtime_drift_count >= _CFG["drift_thresholds"]["warn_consec"]:
                 console.print(
                     f"[bold yellow]⚠ drift detected: {_runtime_drift_count} consecutive "
                     f"turns with no tool call — type 'clear session' to reset[/bold yellow]"

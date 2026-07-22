@@ -156,7 +156,7 @@ def process_message(
                 if m.get("role") == "user"
                 and not str(m.get("content", "")).startswith("_INTERNAL_")
             ]
-            _recent_context = " ".join(_recent_user_msgs[-6:])
+            _recent_context = " ".join(_recent_user_msgs[-_CFG["chat"]["recent_context_window"]:])
             if not _context_assistant_fired:
                 _known_names = None
                 if tool_name in _VM_TOOLS:

@@ -17,6 +17,22 @@
     "tool_loop_max_override": 100,
     "recent_context_window": 6
   },
+  "vm_defaults": {
+    "os_type": "linux",
+    "cpu_cores": 2,
+    "memory_mb": 2048,
+    "machine_type": "q35",
+    "uefi": false
+  },
+  "vm_defs": {
+    "disk_size_gb": 60,
+    "network_mode": "nat",
+    "disk_bus": "virtio"
+  },
+  "liveness": {
+    "ping_interval_sec": 30,
+    "health_timeout_sec": 5
+  },
   "exit_commands": [
     "exit",
     "quit",
