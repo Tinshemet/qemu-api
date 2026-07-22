@@ -10,8 +10,6 @@ the value coercions as :class:`ValueType` strategies (one class per shape), whic
 kills the procedural coerce if/elif.
 """
 
-import json
-import os
 from typing import Any, Dict, Optional
 
 
@@ -96,21 +94,40 @@ class ClaimType:
         return spec
 
 
+# The claim-type registry, in code. Each is a ClaimType(name, value_type, assertion?,
+# operand?). A type WITH an assertion is probe-GROUNDED (recorded only if guest_probe
+# confirms it); a type WITHOUT one is the agent's unverified CLAIM (surfaced honestly,
+# a human confirms it). Adding a type = one line here — but a grounded type also needs
+# its `assertion` implemented in the executor's guest_probe, so these live with the code,
+# not in operator config.
+_TYPES = (
+    ClaimType("path",         "string", "path_exists"),
+    ClaimType("dir",          "string", "path_is_dir"),
+    ClaimType("port_open",    "int",    "port_listening"),
+    ClaimType("process",      "string", "process_running"),
+    ClaimType("user",         "string", "user_exists"),
+    ClaimType("service",      "string", "service_active"),
+    ClaimType("tool",         "string", "command_available"),
+    ClaimType("writable",     "string", "is_writable"),
+    ClaimType("executable",   "string", "is_executable"),
+    ClaimType("setuid",       "string", "is_setuid"),
+    ClaimType("reachable",    "string", "host_reachable", operand=True),
+    ClaimType("connection",   "string", "connection_to"),
+    ClaimType("cron",         "string", "cron_has"),
+    ClaimType("phone_number", "string"),
+    ClaimType("email",        "string"),
+    ClaimType("balance",      "int"),
+    ClaimType("hostname",     "string"),
+    ClaimType("note",         "string"),
+)
+_BY_NAME: Dict[str, ClaimType] = {t.name: t for t in _TYPES}
+
+
 def load_claim_types() -> Dict[str, ClaimType]:
-    """The claim-type registry {name: ClaimType} built from claim_types.json."""
-    try:
-        with open(os.path.join(os.path.dirname(__file__), "claim_types.json")) as f:
-            raw = json.load(f).get("types", {}) or {}
-    except Exception:
-        return {}
-    out: Dict[str, ClaimType] = {}
-    for name, spec in raw.items():
-        if isinstance(spec, dict):
-            out[name] = ClaimType(name, spec.get("value_type", "string"),
-                                  spec.get("assertion"), spec.get("operand", False))
-    return out
+    """The claim-type registry {name: ClaimType}."""
+    return dict(_BY_NAME)
 
 
 def claim_type(name: str) -> Optional[ClaimType]:
     """The ClaimType for a name, or None if it isn't a declared type."""
-    return load_claim_types().get(name)
+    return _BY_NAME.get(name)
