@@ -1,0 +1,17 @@
+{
+  "_doc": "The reward-cost calibration knobs (θ/λ/H/κ/weights/priors). Structure is designed; VALUES are tuned per deployment. A .grgn contract's formula.reward_cost block overrides any of these per agent (contract.reward_cost_cfg → cfg_with). Meanings: theta = worth-it threshold on CE (act iff CE > θ); lambda = risk aversion (CE = μ − (λ/2)σ²); H = holding/WIP cost per open step; kappa = irreversibility route-bias in a leaf's cost; w_resource/w_time = weights on resource commitment / time; time = default per-leaf time estimate; p_world = default per-leaf world-success probability; R = default reward for closing the ROOT goal; beta/gamma = how hard p_self raises θ / λ; rho_min = min acceptable branch success prob (sets the depth budget); alpha = sub-goal reward share (0 = book only at root); p_world_k = Beta-prior pseudocount for LEARNING p_world.",
+  "theta":      0.0,
+  "lambda":     0.5,
+  "H":          0.05,
+  "kappa":      0.2,
+  "w_resource": 1.0,
+  "w_time":     0.3,
+  "time":       1.0,
+  "p_world":    0.9,
+  "R":          1.0,
+  "beta":       1.0,
+  "gamma":      1.0,
+  "rho_min":    0.5,
+  "alpha":      0.0,
+  "p_world_k":  4.0
+}

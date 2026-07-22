@@ -38,23 +38,17 @@ the real calibration risk, so they're all in DEFAULTS and overridable per call.
 """
 from typing import Any, Callable, Dict, List, Optional
 
-# The calibration knobs. Structure is designed; VALUES are not — tune per deployment.
-DEFAULTS: Dict[str, float] = {
-    "theta":      0.0,   # worth-it threshold on CE (act iff CE > θ)
-    "lambda":     0.5,   # risk aversion; risk_appetite = −λ (CE = μ − (λ/2)σ²)
-    "H":          0.05,  # holding / WIP cost per open step on a branch
-    "kappa":      0.2,   # irreversibility route-bias in a leaf's cost
-    "w_resource": 1.0,   # weight on resource commitment
-    "w_time":     0.3,   # weight on time
-    "time":       1.0,   # default per-leaf time estimate
-    "p_world":    0.9,   # default per-leaf world-success probability
-    "R":          1.0,   # default signed reward for closing the ROOT goal (contract sets this)
-    "beta":       1.0,   # how hard p_self raises the worth-it threshold θ
-    "gamma":      1.0,   # how hard p_self raises risk-aversion λ
-    "rho_min":    0.5,   # min acceptable branch success prob (sets the depth budget)
-    "alpha":      0.0,   # sub-goal reward share (0 = book only at root; see economics.to_plan)
-    "p_world_k":  4.0,   # Beta-prior pseudocount for LEARNING p_world (shrinks toward the default)
-}
+# The calibration knobs. Structure is designed; VALUES are not — tuned per deployment
+# in reward_cost.json (a .grgn contract's formula.reward_cost overrides per agent). See
+# that file's _doc for each knob's meaning.
+def _load_defaults() -> Dict[str, float]:
+    import json as _json
+    import os as _os
+    with open(_os.path.join(_os.path.dirname(__file__), "reward_cost.json")) as _f:
+        return {k: v for k, v in _json.load(_f).items() if not k.startswith("_")}
+
+
+DEFAULTS: Dict[str, float] = _load_defaults()
 
 
 def cfg_with(overrides: Optional[Dict[str, float]]) -> Dict[str, float]:
