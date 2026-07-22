@@ -80,3 +80,19 @@ def test_unknown_lang_rejected():
 def test_missing_code_rejected():
     r = _t.run({"lang": "shell"}, None)
     assert not r["success"] and "code" in r.get("error", "").lower()
+
+
+# ── prompt integration: the model is un-fenced (unless the agent forbids run_command) ──
+def test_prompt_unfences_when_available():
+    from orchestrator.ai.chat.ollama_client import _build_system_prompt, _run_command_available
+    assert _run_command_available() is True
+    p = _build_system_prompt()
+    assert "EVERYDAY OPERATIONS" in p
+    assert "run_command" in p and "local_probe" in p and "Unverified" in p
+
+
+def test_prompt_gated_by_blacklist(monkeypatch):
+    import orchestrator.ai.chat.ollama_client as oc
+    monkeypatch.setattr(oc, "is_forbidden", lambda tool, args=None: tool == "run_command")
+    assert oc._run_command_available() is False
+    assert "EVERYDAY OPERATIONS" not in oc._build_system_prompt()

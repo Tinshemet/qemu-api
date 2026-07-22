@@ -15,7 +15,7 @@ import requests
 
 from orchestrator.executor_client import get_ovmf as _get_ovmf, get_profiles as list_profiles
 from ..active_library import LIBRARY
-from ..agent.contract      import system_prompt_template
+from ..agent.contract      import system_prompt_template, default_toolkit, is_forbidden
 from ..tools        import TOOLS
 from shared.display import console
 import orchestrator.preflight.host_probe as _host_probe
@@ -29,6 +29,34 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", _OLLAMA["model"])
 
 # Assembles the LLM system prompt from live OVMF/profile state and custom-mode flag.
 # In: nothing → Out: str
+# General-capability guidance appended to EVERY agent's prompt (unless the agent forbids
+# run_command). Un-fences the model from the VM-only tool regime for ordinary work, and
+# enforces the probe-verify honesty rule so an effect isn't "done" until it's confirmed.
+_EVERYDAY_OPS = """
+
+═══ EVERYDAY OPERATIONS (run_command) ═══
+You are NOT limited to the VM tools for ordinary computer work. To create/read/transform
+files, format data (CSV/JSON/text), and similar everyday tasks, WRITE THE COMMAND with
+run_command (lang="shell" or "python") — do not ask for or invent a specialized tool.
+  • Sandboxed: run_command can only WRITE under the workspace (its working directory); writes
+    elsewhere fail. Reading outside the workspace or using the network needs the OPERATOR to
+    grant it for this session — ask; you cannot grant it yourself.
+  • run_command success means the command RAN, not that the goal is met. To treat a step as
+    done, VERIFY the effect with local_probe (e.g. after writing vms.csv, local_probe
+    file_exists on it) — the same rule as guest_probe for VM commands. Unverified ≠ done.
+  • run_command runs on the HOST; run_guest_command runs INSIDE a VM. Pick by target."""
+
+
+def _run_command_available() -> bool:
+    """True if the active agent may use run_command — not blacklisted, and (if the agent
+    declares an explicit toolkit whitelist) included in it. Governs whether the everyday-ops
+    guidance is added, so a blacklisting agent's prompt never mentions a tool it can't use."""
+    tk = default_toolkit()
+    if tk and "run_command" not in tk:
+        return False
+    return not is_forbidden("run_command")
+
+
 def _build_system_prompt() -> str:
     """Assemble the system prompt (tool list + rules) sent to the model."""
     profiles    = [p["name"] for p in list_profiles()]
@@ -59,6 +87,8 @@ def _build_system_prompt() -> str:
         ("{state_section}", state_section),
     ):
         prompt = prompt.replace(token, value)
+    if _run_command_available():
+        prompt += _EVERYDAY_OPS
     return prompt
 
 
