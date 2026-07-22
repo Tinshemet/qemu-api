@@ -15,8 +15,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai import revocation as R
-from orchestrator.ai import mission as M
+from orchestrator.ai.agent import revocation as R
+from orchestrator.ai.mission import mission as M
 
 _PASS = 0
 _FAIL = 0

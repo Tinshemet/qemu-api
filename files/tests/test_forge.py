@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.forge import forge, review, sign
+from orchestrator.ai.agent.forge import forge, review, sign
 
 _PASS = 0
 _FAIL = 0
@@ -85,7 +85,7 @@ def main():
 
     print("\nforge_interactive (the `gorgon contract forge` dialogue)")
     import tempfile
-    from orchestrator.ai.forge import forge_interactive
+    from orchestrator.ai.agent.forge import forge_interactive
     from shared.grgn_sign import read as _read_grgn
     import json as _json
     # field order: name, role, disposition, scrutiny, toolkit, red lines, ethics,

@@ -17,9 +17,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.findings import Findings, yield_fact, DEFAULT_SCHEMA
-from orchestrator.ai.autonomous import make_goal_verifier, run_autonomous
-import orchestrator.ai.contract as C
+from orchestrator.ai.planner.findings import Findings, yield_fact, DEFAULT_SCHEMA
+from orchestrator.ai.planner.autonomous import make_goal_verifier, run_autonomous
+import orchestrator.ai.agent.contract as C
 
 _PASS = 0
 _FAIL = 0

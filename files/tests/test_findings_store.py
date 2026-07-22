@@ -14,8 +14,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai import findings_store as store
-from orchestrator.ai.findings import Findings
+from orchestrator.ai.planner import findings_store as store
+from orchestrator.ai.planner.findings import Findings
 
 _PASS = 0
 _FAIL = 0
@@ -84,7 +84,7 @@ def main():
     check("a path-traversal agent name is sanitized",
           os.path.dirname(store.tool_stats_path("../../etc/passwd")) == store._DIR)
     # the round-trip a fresh process does: load → learn p_world
-    from orchestrator.ai.reward_cost import p_world_estimate
+    from orchestrator.ai.planner.reward_cost import p_world_estimate
     pw = p_world_estimate(store.load_tool_counts("barenboim"))
     check("reloaded counts feed learned p_world", 0.0 < pw["scan"] < 1.0)
     check("clear wipes the learned tallies (stale after a range change)",

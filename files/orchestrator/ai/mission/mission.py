@@ -19,7 +19,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import contract as _contract
+from ..agent import contract as _contract
 
 _DIR = os.path.expanduser("~/.gorgon/missions")
 
@@ -197,7 +197,7 @@ def load(name: str, agent: Optional[str] = None) -> Tuple[Optional["Mission"], s
     or missing mission returns (None, status) — fail-closed, like a bad .grgn."""
     agent = agent or _contract.active_agent_key()
     try:
-        from . import revocation as _revocation
+        from ..agent import revocation as _revocation
         if _revocation.is_voided(agent):
             return None, "voided"          # the owning agent is disabled → so is this mission
     except Exception:
@@ -233,7 +233,7 @@ def list_missions(agent: Optional[str] = None) -> List[Dict[str, Any]]:
     """The agent's sealed missions as [{name, title, goal, status}], sorted by name."""
     agent = agent or _contract.active_agent_key()
     try:
-        from . import revocation as _revocation
+        from ..agent import revocation as _revocation
         if _revocation.is_voided(agent):
             return []                      # voided agent → its missions are disabled
     except Exception:

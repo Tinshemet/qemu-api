@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.reward_cost import (
+from orchestrator.ai.planner.reward_cost import (
     DEFAULTS, cfg_with, leaf_cost, ce, worth_it, backup, economics,
 )
 
@@ -85,7 +85,7 @@ def main():
     check("worth-it (reward beats cost)", econ["worth_it"] is True)
 
     print("\np_self: measured from the ledger, drives the dials")
-    from orchestrator.ai.reward_cost import p_self_estimate, dials, should_commit
+    from orchestrator.ai.planner.reward_cost import p_self_estimate, dials, should_commit
     led = [{"tool": "a", "ok": True}, {"tool": "b", "ok": True},
            {"tool": "c", "ok": True}, {"tool": "d", "ok": False}]
     check("p_self = fraction of leaves that succeeded", approx(p_self_estimate(led), 0.75))
@@ -137,7 +137,7 @@ def main():
     check("partial run still banks the closed sub-goal's share (μ > 0)", pe["mu"] > 0.0)
 
     print("\neconomics_tree: per-NODE μ/CE breakdown (verbose autonomous view)")
-    from orchestrator.ai.reward_cost import economics_tree
+    from orchestrator.ai.planner.reward_cost import economics_tree
     tree2 = {"goal": "root", "status": "done", "children": [
         {"goal": "a", "status": "done", "tool": "t"},
         {"goal": "b", "status": "done", "children": [
@@ -152,7 +152,7 @@ def main():
                                      reward=10.0, cfg={"alpha": 0.5, "w_time": 0.0, "time": 0.0})["ce"]))
 
     print("\ncompound_ce: α steers the LIVE worth-it gate for deep routes")
-    from orchestrator.ai.reward_cost import compound_ce
+    from orchestrator.ai.planner.reward_cost import compound_ce
     # a 5-step route: at α=0 its CE is the fizzled full-depth value; α>0 lifts it.
     fizz = compound_ce(5, cfg_with({"alpha": 0.0, "H": 0.0}), reward=10.0, p=0.9, cost=0.1)
     lift = compound_ce(5, cfg_with({"alpha": 0.6, "H": 0.0}), reward=10.0, p=0.9, cost=0.1)
@@ -166,7 +166,7 @@ def main():
           compound_ce(0, cfg_with(None), reward=10.0) is None)
 
     print("\nlearned p_world: per-tool success rate from observed outcomes (not RL)")
-    from orchestrator.ai.reward_cost import (tool_counts, merge_counts, p_world_estimate, p_world_lookup)
+    from orchestrator.ai.planner.reward_cost import (tool_counts, merge_counts, p_world_estimate, p_world_lookup)
     led2 = [{"tool": "reliable", "ok": True}] * 8 + [{"tool": "reliable", "ok": False}] * 2 + \
            [{"tool": "flaky", "ok": False}] * 6 + [{"tool": "flaky", "ok": True}] * 2
     counts = tool_counts(led2)

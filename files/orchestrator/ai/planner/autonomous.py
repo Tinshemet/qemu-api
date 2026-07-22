@@ -22,7 +22,7 @@ actually change the world.
 from typing import Any, Callable, Dict, List, Optional
 
 from .score import run_score, _first_tool_call, _NODE_SYSTEM, DECOMPOSE_TOOL
-from . import contract as _contract
+from ..agent import contract as _contract
 from .method_cache import seeded as _seeded_cache
 from .findings import Findings, DEFAULT_SCHEMA
 from .reward_cost import (economics as _economics, p_self_estimate as _p_self, dials as _dials,
@@ -306,7 +306,7 @@ def run_autonomous(
     # store must never brick a run.
     if persist_claims:
         try:
-            from .contract import active_agent_key as _agent_key
+            from ..agent.contract import active_agent_key as _agent_key
             from . import findings_store as _store
             agent_key = agent_key or _agent_key()
             findings.merge(_store.load(agent_key))
@@ -364,7 +364,7 @@ def run_autonomous(
         prior_counts = prior.get("tool_counts") or {}
     if not prior_counts and persist_claims:       # no in-memory forward-feed → the durable
         try:                                       # per-agent store IS the cross-run p_world memory
-            from .contract import active_agent_key as _agent_key
+            from ..agent.contract import active_agent_key as _agent_key
             from . import findings_store as _store
             agent_key = agent_key or _agent_key()
             prior_counts = _store.load_tool_counts(agent_key)
@@ -473,9 +473,9 @@ def run_autonomous_live(goal: str, **kw) -> Dict[str, Any]:
     runtime. Requires a running Ollama and executor; the active agent is whatever
     GORGON_AGENT points at (a Conductor .grgn for a real autonomous run).
     """
-    from .ollama_client import _call_ollama
-    from .tools import TOOLS
-    from .active_library import LIBRARY
+    from ..chat.ollama_client import _call_ollama
+    from ..tools import TOOLS
+    from ..active_library import LIBRARY
     from orchestrator.executor_client import execute_tool
 
     kw.setdefault("persist_claims", True)              # the real runtime persists claims

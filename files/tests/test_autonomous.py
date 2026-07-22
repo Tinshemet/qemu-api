@@ -14,8 +14,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.autonomous import run_autonomous, make_library_verifier
-from orchestrator.ai.mission import Mission
+from orchestrator.ai.planner.autonomous import run_autonomous, make_library_verifier
+from orchestrator.ai.mission.mission import Mission
 
 _PASS = 0
 _FAIL = 0

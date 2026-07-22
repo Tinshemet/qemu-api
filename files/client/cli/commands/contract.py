@@ -16,7 +16,7 @@ class ContractCommand(Command):
         # asks only the essential fields (name / goal / toolkit / done-when) and
         # defaults the rest; `--full` walks every field in forge_fields.json.
         try:
-            from orchestrator.ai import forge as _forge
+            from orchestrator.ai.agent import forge as _forge
         except ImportError:
             console.print("[bold red]Contract forging unavailable on this checkout "
                           "(orchestrator package not present).[/bold red]")
@@ -54,7 +54,7 @@ class ContractCommand(Command):
             files = sorted(_glob.glob(os.path.join(_agent_dir, "*.grgn")))
             if not files:
                 console.print("[dim]No contracts found.[/dim]")
-            from orchestrator.ai import revocation as _rev
+            from orchestrator.ai.agent import revocation as _rev
             for p in files:
                 name = os.path.basename(p)
                 g, st = _read_grgn(p)
@@ -128,7 +128,7 @@ class ContractCommand(Command):
             # disabled (the void cascade). High-impact → operator-gated.
             if not _require_operator_password("void an agent"):
                 return
-            from orchestrator.ai import revocation as _rev
+            from orchestrator.ai.agent import revocation as _rev
             key = os.path.splitext(os.path.basename(rest[1]))[0]
             if _rev.void(key):
                 _audit.record("contract.void", key, _op)
@@ -140,7 +140,7 @@ class ContractCommand(Command):
         elif sub == "restore" and len(rest) >= 2:
             if not _require_operator_password("restore an agent"):
                 return
-            from orchestrator.ai import revocation as _rev
+            from orchestrator.ai.agent import revocation as _rev
             key = os.path.splitext(os.path.basename(rest[1]))[0]
             if _rev.restore(key):
                 _audit.record("contract.restore", key, _op)

@@ -23,7 +23,7 @@ from .session import (
     set_verbose, get_verbose,
 )
 from shared.display import console, print_banner
-from .active_library     import LIBRARY
+from ..active_library     import LIBRARY
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots, proactive_prep
 from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
@@ -132,12 +132,12 @@ def _maybe_forge_contract(ui: str) -> bool:
     so a question about contracts still reaches the AI. Detection is shared with
     the chat wizard so both surfaces trigger identically.
     """
-    from orchestrator.ai import forge_chat as _forge_chat
+    from orchestrator.ai.agent import forge_chat as _forge_chat
     if not _forge_chat.looks_like_forge_intent(ui):
         return False
     if not _repl_require_operator_password("forge a contract"):
         return True  # handled (aborted) — do not fall through to the model
-    from orchestrator.ai import forge as _forge
+    from orchestrator.ai.agent import forge as _forge
     _forge.forge_interactive(
         ask=lambda p: console.input(f"[bold cyan]{p}:[/bold cyan] ").strip(),
         out=console.print,
@@ -312,7 +312,7 @@ def chat_loop(verbose: bool = False) -> None:
             continue
 
         # sign/edit/show/list a contract → point at the CLI (they act on a file)
-        from orchestrator.ai import forge_chat as _fc
+        from orchestrator.ai.agent import forge_chat as _fc
         _contract_redirect = _fc.contract_cli_redirect(_ui)
         if _contract_redirect:
             console.print(f"[yellow]{_contract_redirect}[/yellow]")

@@ -14,7 +14,7 @@ import json
 import os
 from typing import Callable, Optional
 
-from . import forge as _forge
+from ..agent import forge as _forge
 from . import mission as _mission
 
 _AI = os.path.dirname(__file__)

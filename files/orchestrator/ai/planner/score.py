@@ -28,13 +28,13 @@ from typing import Any, Callable, Dict, List, Optional
 # executor package — steering is simply skipped then.
 try:
     from executor.command_catalog import POST_CREATE_ATTACH as _POST_CREATE_ATTACH
-    from orchestrator.ai.context_assistant import _NARROW_CORE_TOOLS
-    from orchestrator.ai.contract import gate_action as _default_gate
-    from orchestrator.ai.contract import success_criterion as _default_criterion
-    from orchestrator.ai.findings import (yield_fact as _yield_fact, extract_value as _extract_value,
+    from orchestrator.ai.chat.context_assistant import _NARROW_CORE_TOOLS
+    from orchestrator.ai.agent.contract import gate_action as _default_gate
+    from orchestrator.ai.agent.contract import success_criterion as _default_criterion
+    from orchestrator.ai.planner.findings import (yield_fact as _yield_fact, extract_value as _extract_value,
                                            finding_probe_spec as _finding_probe_spec)
-    from orchestrator.ai.contract import is_forbidden as _default_legal, consent_verb as _consent_verb
-    from orchestrator.ai.contract import tool_risk as _tool_risk
+    from orchestrator.ai.agent.contract import is_forbidden as _default_legal, consent_verb as _consent_verb
+    from orchestrator.ai.agent.contract import tool_risk as _tool_risk
 except ImportError:
     _POST_CREATE_ATTACH: Dict[str, Dict[str, str]] = {}
     _NARROW_CORE_TOOLS = frozenset()
@@ -272,7 +272,7 @@ def run_score(
     A node's status is one of: done / failed / partial / blocked / skipped /
     no_action / unverified. A recovered node carries retries/tried/recovered.
     """
-    from orchestrator.ai.engine import Engine
+    from orchestrator.ai.planner.engine import Engine
     if engine is None:                       # legacy kwargs (gate=…, verify=…) → Engine
         engine = Engine.from_kwargs(_legacy)
     # Unpack the policy bundle into the local names the body already uses (defaults

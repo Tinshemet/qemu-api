@@ -11,7 +11,7 @@ class ClaimFindingTool(Tool):
     names = ("claim_finding",)
     def run(self, args, ctx):
         try:
-            from orchestrator.ai.findings import claim_type as _ct, coerce_value as _cv
+            from orchestrator.ai.planner.findings import claim_type as _ct, coerce_value as _cv
             spec = _ct(args.get("type"))
         except Exception:
             spec = None

@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.contract import (
+from orchestrator.ai.agent.contract import (
     resolve_tier, formula_tier, tier_rank, stricter, tool_risk,
     pinned_disagreements, orphan_entries, registry_tools, confirm_meta,
     system_prompt_template, PERSONA, TIERS, _TOOLS,
@@ -93,7 +93,7 @@ def test_formula_monotonic():
 
 
 def _score(tool):
-    from orchestrator.ai.contract import _risk_score
+    from orchestrator.ai.agent.contract import _risk_score
     return _risk_score(tool_risk(tool))
 
 
@@ -122,7 +122,7 @@ def test_agent_file():
 
 def test_disposition_handling():
     print("[disposition] tier is handled per the agent's role")
-    from orchestrator.ai.contract import disposition, gate_action, _HANDLING
+    from orchestrator.ai.agent.contract import disposition, gate_action, _HANDLING
     # This module loads the default agent (doorman.grgn) = human-confirm.
     check("doorman disposition is human-confirm", disposition() == "human-confirm")
     check("delete_vm -> ask_double", gate_action("delete_vm") == "ask_double")
@@ -148,7 +148,7 @@ def test_risk_breakdown_and_verbose():
     """The verbose debug panel's data sources: risk_breakdown (weights → score → tier)
     and the persisted verbose toggle."""
     print("\nrisk_breakdown: weighted factors + verbose toggle (debug panel)")
-    from orchestrator.ai.contract import risk_breakdown
+    from orchestrator.ai.agent.contract import risk_breakdown
     bd = risk_breakdown("delete_vm", {"name": "x"})
     check("contributions sum to the total score",
           abs(sum(f["contribution"] for f in bd["factors"]) - bd["score"]) < 1e-9)
@@ -158,7 +158,7 @@ def test_risk_breakdown_and_verbose():
     check("an unassessed tool → not assessed, tier none, gate proceed",
           unknown["assessed"] is False and unknown["resolved_tier"] == "none" and unknown["action"] == "proceed")
 
-    from orchestrator.ai.session import set_verbose, get_verbose
+    from orchestrator.ai.chat.session import set_verbose, get_verbose
     _orig = get_verbose()
     try:
         set_verbose(True)

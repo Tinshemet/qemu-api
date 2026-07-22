@@ -13,9 +13,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.killswitch import KillSwitch
-from orchestrator.ai.engine import Engine
-from orchestrator.ai.score import run_score
+from orchestrator.ai.planner.killswitch import KillSwitch
+from orchestrator.ai.planner.engine import Engine
+from orchestrator.ai.planner.score import run_score
 
 _PASS = 0
 _FAIL = 0
@@ -81,7 +81,7 @@ def main():
     check("ledger preserved what ran (suspend, not wipe)", len(r["ledger"]) == 1 and r["ledger"][0]["tool"] == "stop_vm")
 
     print("\ncontract arms it")
-    from orchestrator.ai import contract as C
+    from orchestrator.ai.agent import contract as C
     check("contract.safeword() exposes the campaign safeword (None for the Doorman)", C.safeword() is None)
 
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")

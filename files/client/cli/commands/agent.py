@@ -24,7 +24,7 @@ class AgentCommand(Command):
         import glob as _glob
         from shared import agent_select as _sel
         from shared import audit as _audit
-        from orchestrator.ai import forge as _forge
+        from orchestrator.ai.agent import forge as _forge
         _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))
         _resolve  = lambda f: f if os.path.isabs(f) else os.path.join(_agent_dir, f)
         _op       = _auth_sessions.current_username() if _auth_sessions else None
@@ -47,7 +47,7 @@ class AgentCommand(Command):
         def _change_allowed() -> bool:
             # (1) the active contract may forbid agent-switching entirely
             try:
-                from orchestrator.ai.contract import is_forbidden
+                from orchestrator.ai.agent.contract import is_forbidden
                 if is_forbidden("switch_agent"):
                     console.print("[bold red]The active contract forbids switching agents "
                                   "(switch_agent is blacklisted).[/bold red]")

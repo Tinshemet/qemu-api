@@ -13,8 +13,8 @@ class ClaimCommand(Command):
         # PENDING and can't close a goal until a human vouches for it. Confirming or
         # rejecting one asserts/retracts truth the AI will ACT on — high-impact, so
         # it's operator-gated (same bar as switching the agent or forging a contract).
-        from orchestrator.ai import findings_store as _store
-        from orchestrator.ai.contract import active_agent_key as _agent_key
+        from orchestrator.ai.planner import findings_store as _store
+        from orchestrator.ai.agent.contract import active_agent_key as _agent_key
         from shared import audit as _audit
         _op  = _auth_sessions.current_username() if _auth_sessions else None
         _key = _agent_key()

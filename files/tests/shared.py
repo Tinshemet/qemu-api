@@ -24,8 +24,8 @@ from orchestrator.sanitizer.sanitizer import _sanitise_args, _resolve_iso
 from orchestrator.preflight.validator import (
     _preflight_check, _validate_with_internet, _validate_profile_for_host,
 )
-from orchestrator.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL, TOOLS, _build_system_prompt
-from orchestrator.ai.context_assistant import check_context
+from orchestrator.ai.chat.ollama_client import OLLAMA_URL, OLLAMA_MODEL, TOOLS, _build_system_prompt
+from orchestrator.ai.chat.context_assistant import check_context
 from orchestrator.preflight.validator import (
     _get_qemu_machine_types, _get_qemu_cpu_models,
     _is_arm_cpu, _is_x86_cpu, _net_get, _net_head,

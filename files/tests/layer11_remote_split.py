@@ -362,7 +362,7 @@ def _t_chat_auth_wrong_token() -> List[str]:
 
 def _t_chat_happy_path() -> List[str]:
     client, token = _make_test_client()
-    with patch("orchestrator.ai.cli.process_message",
+    with patch("orchestrator.ai.chat.cli.process_message",
                side_effect=_fake_process_message(text="You have 2 VMs.")):
         resp = client.post(
             "/chat",
@@ -404,7 +404,7 @@ def _t_chat_session_persistence() -> List[str]:
         }
 
     headers = {"Authorization": f"Bearer {token}"}
-    with patch("orchestrator.ai.cli.process_message", side_effect=tracking_pm):
+    with patch("orchestrator.ai.chat.cli.process_message", side_effect=tracking_pm):
         r1 = client.post("/chat", json={"message": "first message"}, headers=headers)
         sid = r1.json().get("session_id")
         r2 = client.post("/chat", json={"message": "second message", "session_id": sid},
@@ -434,7 +434,7 @@ def _t_chat_returns_needs_input() -> List[str]:
         "tool_name": "stop_vm",
         "proposed":  "myvm",
     }
-    with patch("orchestrator.ai.cli.process_message",
+    with patch("orchestrator.ai.chat.cli.process_message",
                side_effect=_fake_process_message(text="", needs_input=needs)):
         resp = client.post(
             "/chat",
@@ -463,7 +463,7 @@ def _t_chat_auto_confirm_passed_through() -> List[str]:
         received["auto_confirm"] = auto_confirm
         return {"text": "done", "messages": messages, "tool_results": [], "needs_input": None}
 
-    with patch("orchestrator.ai.cli.process_message", side_effect=capturing_pm):
+    with patch("orchestrator.ai.chat.cli.process_message", side_effect=capturing_pm):
         resp = client.post(
             "/chat",
             json={"message": "yes", "auto_confirm": True},
@@ -482,7 +482,7 @@ def _t_chat_delete_session() -> List[str]:
     client, token = _make_test_client()
     headers = {"Authorization": f"Bearer {token}"}
 
-    with patch("orchestrator.ai.cli.process_message",
+    with patch("orchestrator.ai.chat.cli.process_message",
                side_effect=_fake_process_message(text="hi")):
         r1 = client.post("/chat", json={"message": "hello"}, headers=headers)
 
@@ -512,7 +512,7 @@ def _t_chat_missing_message_field() -> List[str]:
 def _t_chat_junk_extra_fields() -> List[str]:
     """junk — unknown extra fields in JSON body → ignored, request succeeds."""
     client, token = _make_test_client()
-    with patch("orchestrator.ai.cli.process_message",
+    with patch("orchestrator.ai.chat.cli.process_message",
                side_effect=_fake_process_message(text="ok")):
         resp = client.post(
             "/chat",
@@ -532,7 +532,7 @@ def _t_chat_junk_extra_fields() -> List[str]:
 def _t_chat_foreign_session_id() -> List[str]:
     """foreign — session_id for a nonexistent session → treated as new session, no crash."""
     client, token = _make_test_client()
-    with patch("orchestrator.ai.cli.process_message",
+    with patch("orchestrator.ai.chat.cli.process_message",
                side_effect=_fake_process_message(text="fresh start")):
         resp = client.post(
             "/chat",
@@ -550,7 +550,7 @@ def _t_chat_foreign_session_id() -> List[str]:
 def _t_chat_conflict_auto_confirm_no_prior_input() -> List[str]:
     """conflict — auto_confirm=True with no prior needs_input in session → no crash."""
     client, token = _make_test_client()
-    with patch("orchestrator.ai.cli.process_message",
+    with patch("orchestrator.ai.chat.cli.process_message",
                side_effect=_fake_process_message(text="all good")):
         resp = client.post(
             "/chat",
@@ -1499,7 +1499,7 @@ def _t_direct_cli_gate() -> List[str]:
     _require_auth. Exercised directly, no TestClient involved."""
     issues = []
     with _isolated_auth_paths():
-        from orchestrator.ai.direct_cli import _operator_gate_ok
+        from orchestrator.ai.chat.direct_cli import _operator_gate_ok
         from orchestrator.auth import sessions as op_sessions
         from orchestrator.auth import store as op_store
 

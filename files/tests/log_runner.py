@@ -15,9 +15,9 @@ import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
-from orchestrator.ai import contract as C
-from orchestrator.ai.score import run_score, _first_tool_call
-from orchestrator.ai.autonomous import make_library_verifier
+from orchestrator.ai.agent import contract as C
+from orchestrator.ai.planner.score import run_score, _first_tool_call
+from orchestrator.ai.planner.autonomous import make_library_verifier
 
 _AI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator/ai")
 _CFG = json.load(open(os.path.join(_AI, "config.json")))["ollama"]

@@ -21,8 +21,8 @@ class MissionCommand(Command):
         #   gorgon mission run <name>          run a sealed mission
         #   gorgon mission "<goal>"            quick ad-hoc task (ephemeral)
         try:
-            from orchestrator.ai import mission as _M
-            from orchestrator.ai import mission_forge as _MF
+            from orchestrator.ai.mission import mission as _M
+            from orchestrator.ai.mission import mission_forge as _MF
         except ImportError:
             console.print("[bold red]Mission subsystem unavailable (orchestrator package not present).[/bold red]")
             return
@@ -30,7 +30,7 @@ class MissionCommand(Command):
         def _fire(goal: str, mission_obj=None) -> None:
             """Run the autonomous loop on a goal (optionally under a sealed mission)."""
             try:
-                from orchestrator.ai.autonomous import run_autonomous_live
+                from orchestrator.ai.planner.autonomous import run_autonomous_live
             except ImportError:
                 console.print("[bold red]Autonomous runner unavailable.[/bold red]")
                 return
@@ -73,7 +73,7 @@ class MissionCommand(Command):
                 _op = _auth_sessions.current_username() if _auth_sessions else None
                 _audit.record("mission.new", os.path.basename(path), _op)
         elif sub == "list":
-            from orchestrator.ai.contract import active_agent_key as _agent_key
+            from orchestrator.ai.agent.contract import active_agent_key as _agent_key
             ms = _M.list_missions()
             console.print(f"[bold]Missions for agent [cyan]{_agent_key()}[/cyan][/bold]")
             if not ms:

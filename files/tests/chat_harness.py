@@ -1,5 +1,5 @@
 """
-chat_harness.py — deterministic driver for orchestrator.ai.cli.chat_loop.
+chat_harness.py — deterministic driver for orchestrator.ai.chat.cli.chat_loop.
 
 chat_loop is an 781-line interactive REPL with no seams for testing on its own.
 This harness mocks every I/O / AI / tool-execution boundary so a scenario can be
@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from unittest.mock import patch
 
-import orchestrator.ai.cli as cli
-import orchestrator.ai.chat_turn as chat_turn
-import orchestrator.ai.chat_types as chat_types
+import orchestrator.ai.chat.cli as cli
+import orchestrator.ai.chat.chat_turn as chat_turn
+import orchestrator.ai.chat.chat_types as chat_types
 import shared.display as _display
 
 

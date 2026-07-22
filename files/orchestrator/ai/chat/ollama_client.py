@@ -14,9 +14,9 @@ from typing import Dict, List
 import requests
 
 from orchestrator.executor_client import get_ovmf as _get_ovmf, get_profiles as list_profiles
-from .active_library import LIBRARY
-from .contract      import system_prompt_template
-from .tools        import TOOLS
+from ..active_library import LIBRARY
+from ..agent.contract      import system_prompt_template
+from ..tools        import TOOLS
 from shared.display import console
 import orchestrator.preflight.host_probe as _host_probe
 

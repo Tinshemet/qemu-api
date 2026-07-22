@@ -15,10 +15,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.engine import Engine
-from orchestrator.ai.score import run_score
-from orchestrator.ai.autonomous import make_goal_verifier
-import orchestrator.ai.contract as C
+from orchestrator.ai.planner.engine import Engine
+from orchestrator.ai.planner.score import run_score
+from orchestrator.ai.planner.autonomous import make_goal_verifier
+import orchestrator.ai.agent.contract as C
 
 _PASS = 0
 _FAIL = 0

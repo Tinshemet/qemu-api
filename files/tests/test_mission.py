@@ -13,8 +13,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.mission import Mission, validate
-from orchestrator.ai import contract as c
+from orchestrator.ai.mission.mission import Mission, validate
+from orchestrator.ai.agent import contract as c
 
 _PASS = 0
 _FAIL = 0
@@ -67,14 +67,14 @@ def main():
     check("predicate returned", m5.predicate() == [{"criterion": "found", "target": "ip(web01)"}])
 
     print("\nprune: blank optional fields drop out so they inherit")
-    from orchestrator.ai.mission import prune
+    from orchestrator.ai.mission.mission import prune
     p = prune({"title": "t", "goal": "g", "reward": None, "sub_goals": [], "importance": 2.0})
     check("blanks pruned, set values + required kept", p == {"title": "t", "goal": "g", "importance": 2.0})
 
     print("\nwizard + storage: author → seal (encrypted) → load → run-by-name")
     import tempfile
-    from orchestrator.ai import mission as Mstore
-    from orchestrator.ai import mission_forge as MF
+    from orchestrator.ai.mission import mission as Mstore
+    from orchestrator.ai.mission import mission_forge as MF
     Mstore._DIR = tempfile.mkdtemp()               # isolate from ~/.gorgon
     # answers in schema order + seal confirm
     answers = iter(["Recon web01", "map ports", "scan, fingerprint", "found:ip(web01)",
@@ -116,7 +116,7 @@ def main():
     check("a critical mission books strictly more reward than a normal one", crit_m.reward() > base_m.reward())
 
     print("\nmission plan: declared sub_goals seed the reward-bearing decomposition")
-    from orchestrator.ai.autonomous import render_mission_plan
+    from orchestrator.ai.planner.autonomous import render_mission_plan
     plan = render_mission_plan(["recon the subnet", "harden web01"])
     check("each declared step is enumerated in the plan", "1. recon the subnet" in plan and "2. harden web01" in plan)
     check("the plan frames steps as reward-bearing closures", "earns its share of the reward" in plan)

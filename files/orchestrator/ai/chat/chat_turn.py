@@ -17,7 +17,7 @@ from shared.display import console, render_vm_specs
 from orchestrator.executor_client import execute_tool, live_vm_names, API_URL, _VM_TOOLS
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
 from orchestrator.preflight.validator import _preflight_check, _show_preflight_warning
-from .active_library import LIBRARY
+from ..active_library import LIBRARY
 from .context_assistant import check_context
 
 _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
@@ -31,7 +31,7 @@ from .chat_types import (  # base types + pure transforms (extracted from this f
     TurnState, GateOutcome, _is_critical, _build_vm_spec_rows,
     _maybe_enable_custom_mode, _resolve_os_type, _build_pre_gate_result,
 )
-from .contract import (   # the active agent's contract — single source for confirmation
+from ..agent.contract import (   # the active agent's contract — single source for confirmation
     gate_action, confirm_meta, confirms_by_name, FLEET_CONFIRM_ACTIONS,
 )
 
@@ -44,7 +44,7 @@ def _render_debug_panel(tool_name: str, raw_args: dict) -> None:
     from rich.table import Table
     from rich import box as _box
     try:
-        from . import contract as _contract
+        from ..agent import contract as _contract
         bd = _contract.risk_breakdown(tool_name, raw_args)
         rc = {**_reward_cost_defaults(), **_contract.reward_cost_cfg()}
     except Exception as e:
@@ -72,7 +72,7 @@ def _render_debug_panel(tool_name: str, raw_args: dict) -> None:
 def _reward_cost_defaults() -> dict:
     """The reward-cost DEFAULTS, so the debug panel shows a full knob set even when the
     contract only overrides a few."""
-    from .reward_cost import DEFAULTS
+    from ..planner.reward_cost import DEFAULTS
     return dict(DEFAULTS)
 _CFG            = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _OS_KEYWORDS    = set(_CFG["os_keywords_gate"])

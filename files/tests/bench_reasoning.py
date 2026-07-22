@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from executor.api.qemu_config import MachineConfig
 from executor.tool_dispatch.tool_executor import manager
 from orchestrator.ai.active_library import LIBRARY
-from orchestrator.ai.ollama_client import _build_system_prompt
+from orchestrator.ai.chat.ollama_client import _build_system_prompt
 from tests.shared import AITest
 from tests.layer3_ai import call_ollama, run_ai_test
 

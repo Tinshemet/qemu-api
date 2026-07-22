@@ -21,7 +21,7 @@ from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from orchestrator.executor_client import get_all_profiles
 from orchestrator.preflight.validator import set_custom_mode
 from .context_assistant import extract_slots
-from .contract import is_critical as contract_is_critical
+from ..agent.contract import is_critical as contract_is_critical
 
 _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q35", "uefi": False}
 try:

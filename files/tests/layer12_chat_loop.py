@@ -1,5 +1,5 @@
 """
-layer12_chat_loop.py — characterization tests for orchestrator.ai.cli.chat_loop.
+layer12_chat_loop.py — characterization tests for orchestrator.ai.chat.cli.chat_loop.
 
 chat_loop has no unit-test coverage today; it is an 781-line interactive REPL.
 These tests pin its *current* observable behavior (which tools get executed, with

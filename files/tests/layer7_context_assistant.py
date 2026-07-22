@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from .shared import ContextAssistantTest, TestResult, check_context
-from orchestrator.ai.context_assistant import scan_tool_hints
+from orchestrator.ai.chat.context_assistant import scan_tool_hints
 
 _CFG_PATH = pathlib.Path(__file__).parents[1] / "orchestrator" / "ai" / "context_assistant_config.json"
 with _CFG_PATH.open() as _f:

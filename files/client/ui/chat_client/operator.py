@@ -15,8 +15,8 @@ def mission_worker(goal, mission_name, verbose) -> None:
     autonomous loop is long-running, so it can't block the curses draw loop; the
     result is rendered on the main thread from the drain (see render_mission_result)."""
     try:
-        from orchestrator.ai.autonomous import run_autonomous_live
-        from orchestrator.ai import mission as M
+        from orchestrator.ai.planner.autonomous import run_autonomous_live
+        from orchestrator.ai.mission import mission as M
         if mission_name:
             mobj, st = M.load(mission_name)
             if not mobj:
@@ -54,8 +54,8 @@ def render_mission_result(m: dict) -> None:
 
 def apply_claim(action: str, fact: str) -> None:
     """Confirm/reject a claim in the active agent's store (post operator re-auth)."""
-    from orchestrator.ai import findings_store as store
-    from orchestrator.ai.contract import active_agent_key
+    from orchestrator.ai.planner import findings_store as store
+    from orchestrator.ai.agent.contract import active_agent_key
     key = active_agent_key()
     ok = store.confirm(key, fact) if action == "confirm" else store.reject(key, fact)
     if ok:
@@ -66,8 +66,8 @@ def apply_claim(action: str, fact: str) -> None:
 
 def handle_claim(arg: str) -> None:
     """`claim [list] | confirm <fact> | reject <fact>` inside the chat."""
-    from orchestrator.ai import findings_store as store
-    from orchestrator.ai.contract import active_agent_key
+    from orchestrator.ai.planner import findings_store as store
+    from orchestrator.ai.agent.contract import active_agent_key
     key = active_agent_key()
     parts = arg.split()
     sub = parts[0] if parts else "list"
@@ -95,8 +95,8 @@ def handle_claim(arg: str) -> None:
 
 def handle_mission(arg: str, verbose: bool) -> None:
     """`mission [list] | run <name> | new | "<goal>"` inside the chat."""
-    from orchestrator.ai import mission as M
-    from orchestrator.ai.contract import active_agent_key
+    from orchestrator.ai.mission import mission as M
+    from orchestrator.ai.agent.contract import active_agent_key
     parts = arg.split()
     sub = parts[0] if parts else "list"
     if sub == "list" or not parts:

@@ -123,8 +123,8 @@ def main():
     check("action trimmed + lowercased", r["action"] == "status" and r["success"] is True)
 
     print("\ngate config — high-stakes fleet actions")
-    from orchestrator.ai.chat_turn import _FLEET_CONFIRM_ACTIONS as _CT
-    from orchestrator.ai.http_chat import _FLEET_CONFIRM_ACTIONS as _HC
+    from orchestrator.ai.chat.chat_turn import _FLEET_CONFIRM_ACTIONS as _CT
+    from orchestrator.ai.chat.http_chat import _FLEET_CONFIRM_ACTIONS as _HC
     check("chat_turn confirms exec+stop only", _CT == {"exec", "stop"})
     check("http_chat matches chat_turn (no dual-path drift)", _HC == _CT)
 

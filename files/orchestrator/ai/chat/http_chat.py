@@ -18,11 +18,11 @@ from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from orchestrator.executor_client import execute_tool, live_vm_names, _VM_TOOLS
 from orchestrator.preflight.validator import _preflight_check
 from .ollama_client import _call_ollama
-from .active_library import LIBRARY
+from ..active_library import LIBRARY
 from .context_assistant import check_context, extract_slots, proactive_prep
 from .session import get_loop_max
 from .chat_turn import _is_critical
-from .contract import resolve_tier, confirm_meta, FLEET_CONFIRM_ACTIONS
+from ..agent.contract import resolve_tier, confirm_meta, FLEET_CONFIRM_ACTIONS
 try:
     from executor.tool_dispatch.tool_executor import manager
 except ImportError:

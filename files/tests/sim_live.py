@@ -27,9 +27,9 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
-from orchestrator.ai import contract as C
-from orchestrator.ai.autonomous import run_autonomous
-from orchestrator.ai.score import _first_tool_call
+from orchestrator.ai.agent import contract as C
+from orchestrator.ai.planner.autonomous import run_autonomous
+from orchestrator.ai.planner.score import _first_tool_call
 
 _AI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator/ai")
 _CFG = json.load(open(os.path.join(_AI, "config.json")))["ollama"]
@@ -67,7 +67,7 @@ def build_model(mode, model_name):
 
     def call_model(messages, tools):
         if mode == "doorman":
-            from orchestrator.ai.ollama_client import _build_system_prompt
+            from orchestrator.ai.chat.ollama_client import _build_system_prompt
             messages = [{"role": "system", "content": _build_system_prompt()}] + messages
         goal = next((m["content"].replace("Goal: ", "") for m in reversed(messages) if m["role"] == "user"), "?")
         offered = [t["function"]["name"] for t in tools]

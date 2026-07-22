@@ -82,7 +82,7 @@ def _active_agent_warnings() -> List[str]:
     tool-reference drift vs. the executor. Never raises."""
     warnings: List[str] = []
     try:
-        from orchestrator.ai import contract as _contract
+        from orchestrator.ai.agent import contract as _contract
         status = _contract.agent_signature_status()
         if status == "tampered":
             warnings.append("SECURITY: active agent file failed its integrity check "
@@ -110,7 +110,7 @@ async def _startup() -> None:
     from orchestrator.executor_client import sync as _sync
     _sync()
     try:
-        from orchestrator.ai import contract as _contract
+        from orchestrator.ai.agent import contract as _contract
         from shared.grgn_sign import ensure_integrity
         ensure_integrity(_contract._AGENT_PATH)       # sign plaintext templates (TOFU)
     except Exception:
@@ -282,7 +282,7 @@ def health() -> Dict[str, Any]:
 @app.get("/info", dependencies=[Depends(_require_auth)])
 def info() -> Dict[str, Any]:
     """Return server-side runtime info for the client banner."""
-    from orchestrator.ai.ollama_client import OLLAMA_URL, OLLAMA_MODEL
+    from orchestrator.ai.chat.ollama_client import OLLAMA_URL, OLLAMA_MODEL
     try:
         import executor.api.qemu_config as _qc
         ovmf = _qc.OVMF
@@ -360,10 +360,10 @@ def chat(req: ChatRequest, operator: Optional[str] = Depends(_current_operator))
     needs_input with the question.  The client shows the dialog and re-sends
     the user's reply with auto_confirm=True once confirmed.
     """
-    from orchestrator.ai.cli import process_message
+    from orchestrator.ai.chat.cli import process_message
     from orchestrator.executor_client import execute_tool
-    from orchestrator.ai import forge_chat
-    from orchestrator.ai import forge as _forge
+    from orchestrator.ai.agent import forge_chat
+    from orchestrator.ai.agent import forge as _forge
     _FORGE_DIR = os.path.dirname(os.path.abspath(_forge.__file__))
 
     _evict_expired_sessions()

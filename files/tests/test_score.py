@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from orchestrator.ai.score import run_score, DECOMPOSE_TOOL
+from orchestrator.ai.planner.score import run_score, DECOMPOSE_TOOL
 
 _PASS = 0
 _FAIL = 0
@@ -185,7 +185,7 @@ def main():
     check("with a declared+passing post-condition → done", r["root"]["status"] == "done")
 
     print("\ndeterministic finding-validation: a finding counts only if a probe confirms it")
-    from orchestrator.ai.findings import Findings
+    from orchestrator.ai.planner.findings import Findings
     _fs = {"scan_port": {"fact": "open({name}:{port})", "value": "state",
                          "verify": "{name}:port_listening:{port}"}}
     _ptools = [{"type": "function", "function": {"name": "scan_port", "parameters": {}}}]
@@ -315,7 +315,7 @@ def main():
     check("no referendum → categorical halt (backward compat)", r["root"].get("reason") == "contract_halt" and calls == [])
 
     print("\nmethod cache: a known goal decomposes with ZERO model calls")
-    from orchestrator.ai.method_cache import seeded
+    from orchestrator.ai.planner.method_cache import seeded
     calls = {"n": 0}
     def counting_model(messages, tools):
         calls["n"] += 1   # a cache HIT must not reach here for the split
@@ -341,7 +341,7 @@ def main():
     check("no tool call → no_action", r["root"]["status"] == "no_action")
 
     print("\nlate-step grounding: progress carry-forward")
-    from orchestrator.ai.score import _progress_summary
+    from orchestrator.ai.planner.score import _progress_summary
     led = [{"tool": "create_vm", "args": {"name": "probe"}, "ok": True},
            {"tool": "create_network", "args": {"net_name": "labnet"}, "ok": True}]
     ps = _progress_summary(led)

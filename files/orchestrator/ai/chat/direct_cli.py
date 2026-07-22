@@ -42,7 +42,7 @@ except ImportError:
 
 
 _SHARED_API_CFG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
     "executor", "api", "config.json",
 )
 try:
@@ -654,7 +654,7 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
     elif cmd == "contract":
         # gorgon contract forge | show <file> | sign <file> <safeword>
         import os, json as _json
-        from orchestrator.ai import forge as _forge
+        from orchestrator.ai.agent import forge as _forge
         _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))
         sub = rest[0] if rest else ""
         if sub == "forge":
@@ -689,8 +689,8 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
         # gorgon claim [list] | confirm <fact> | reject <fact> — review the per-agent
         # CLAIM store: unverifiable facts a run parked as `pending` for a human to judge.
         # confirm → the fact becomes USABLE (loaded into the next run); reject → dropped.
-        from orchestrator.ai import findings_store as _store
-        from orchestrator.ai import contract as _contract
+        from orchestrator.ai.planner import findings_store as _store
+        from orchestrator.ai.agent import contract as _contract
         agent = _contract.active_agent_key()
         sub   = rest[0] if rest else "list"
         if sub == "confirm" and len(rest) >= 2:
@@ -722,9 +722,9 @@ def cli_direct(args: List[str], verbose: bool = False) -> None:
         # gorgon reliability [agent] — inspect the LEARNED per-tool p_world (how often
         # each primitive actually succeeds), accumulated in the durable tool-stats store.
         # Read-only; defaults to the active agent, or pass an agent key to inspect another.
-        from orchestrator.ai import findings_store as _store
-        from orchestrator.ai import contract as _contract
-        from orchestrator.ai.reward_cost import p_world_estimate as _pwe, cfg_with as _cfgw
+        from orchestrator.ai.planner import findings_store as _store
+        from orchestrator.ai.agent import contract as _contract
+        from orchestrator.ai.planner.reward_cost import p_world_estimate as _pwe, cfg_with as _cfgw
         if rest and rest[0] == "reset":                # gorgon reliability reset [agent]
             agent = rest[1] if len(rest) >= 2 else _contract.active_agent_key()
             ok = _store.clear_tool_counts(agent)
