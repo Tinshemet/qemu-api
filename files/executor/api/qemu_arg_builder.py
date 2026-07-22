@@ -475,7 +475,7 @@ class QemuArgBuilder(_QemuSmbiosMixin):
     def _qmp(self) -> None:
         """Append QMP chardev/mon args; Unix socket on Linux/macOS, TCP on Windows."""
         if sys.platform == "win32":
-            port = self.cfg.qmp_tcp_port or _next_free_port(
+            port = self.cfg.qmp_tcp_port or next_free_port(
                 _CFG["ports"].get("qmp_port_start", 9000), []
             )
             self.cfg.qmp_tcp_port = port
@@ -505,7 +505,7 @@ class QemuArgBuilder(_QemuSmbiosMixin):
         if not self.cfg.guest_agent or self.cfg.stealth or self.is_arm:
             return
         if sys.platform == "win32":
-            port = self.cfg.qga_tcp_port or _next_free_port(
+            port = self.cfg.qga_tcp_port or next_free_port(
                 _CFG["ports"].get("qga_port_start", 9300), []
             )
             self.cfg.qga_tcp_port = port
@@ -535,7 +535,7 @@ class QemuArgBuilder(_QemuSmbiosMixin):
         if not self.cfg.guest_agent or not self.cfg.stealth or self.is_arm:
             return
         if sys.platform == "win32":
-            port = self.cfg.serial_agent_tcp_port or _next_free_port(
+            port = self.cfg.serial_agent_tcp_port or next_free_port(
                 _CFG["ports"].get("serial_agent_port_start", 9400), []
             )
             self.cfg.serial_agent_tcp_port = port
@@ -549,7 +549,7 @@ class QemuArgBuilder(_QemuSmbiosMixin):
     def _monitor(self) -> None:
         """Append human-monitor chardev/mon args; Unix socket on Linux/macOS, TCP on Windows."""
         if sys.platform == "win32":
-            port = self.cfg.monitor_tcp_port or _next_free_port(
+            port = self.cfg.monitor_tcp_port or next_free_port(
                 _CFG["ports"].get("monitor_port_start", 9100), []
             )
             self.cfg.monitor_tcp_port = port
@@ -569,7 +569,7 @@ class QemuArgBuilder(_QemuSmbiosMixin):
     def _serial(self) -> None:
         """Append a serial console (Unix socket on Linux/macOS, TCP telnet on Windows)."""
         if sys.platform == "win32":
-            port = self.cfg.serial_tcp_port or _next_free_port(
+            port = self.cfg.serial_tcp_port or next_free_port(
                 _CFG["ports"].get("serial_port_start", 9200), []
             )
             self.cfg.serial_tcp_port = port
