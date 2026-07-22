@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from shared.config import EVENT_LOG_ROTATE_BYTES
+
 _LOG_DIR  = Path.home() / ".qemu_vms"
 _LOG_FILE = _LOG_DIR / "events.log"
-_MAX_BYTES = 10 * 1024 * 1024  # rotate at 10 MB
+_MAX_BYTES = EVENT_LOG_ROTATE_BYTES     # rotation threshold (default 10 MB, in shared config)
 
 
 def _summarise_args(tool: str, args: Dict[str, Any]) -> Dict[str, Any]:

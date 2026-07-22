@@ -50,6 +50,7 @@ AGENTS_DIR           = os.path.expanduser(_c("agents_dir"))   # ~/.qemu_vms/_age
 
 # ── on-disk secrets / logs ──────────────────────────────────────────────────────
 AUDIT_LOG_FILE   = os.path.expanduser(_c("audit_log_file"))
+EVENT_LOG_ROTATE_BYTES = _c("event_log_rotate_bytes")   # events.log rotation threshold
 SIGNING_KEY_FILE = os.path.expanduser(_c("signing_key_file"))
 TOKEN_FILE       = os.path.expanduser(_c("token_file"))
 
