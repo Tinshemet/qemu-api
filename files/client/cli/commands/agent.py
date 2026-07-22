@@ -25,7 +25,7 @@ class AgentCommand(Command):
         from shared import agent_select as _sel
         from shared import audit as _audit
         from orchestrator.ai.agent import forge as _forge
-        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))   # code-resident templates
+        from orchestrator.ai.agent import AGENT_DIR as _agent_dir   # code-resident templates
         _resolve  = lambda f: _bundle.resolve_grgn(f, _agent_dir)   # bundle-first, code fallback
         _op       = _auth_sessions.current_username() if _auth_sessions else None
 

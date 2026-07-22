@@ -15,7 +15,7 @@ class ContractCommand(Command):
         from orchestrator.ai.agent import forge as _forge
         from orchestrator.ai.agent import contract as _contract
         import shared.bundle as _bundle
-        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))   # code-resident templates
+        from orchestrator.ai.agent import AGENT_DIR as _agent_dir   # code-resident templates
         sub = rest[0] if rest else ""
         if sub == "forge":
             _forge.forge_interactive(

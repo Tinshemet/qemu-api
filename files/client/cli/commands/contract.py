@@ -21,7 +21,7 @@ class ContractCommand(Command):
             console.print("[bold red]Contract forging unavailable on this checkout "
                           "(orchestrator package not present).[/bold red]")
             return
-        _agent_dir = os.path.dirname(os.path.abspath(_forge.__file__))   # code-resident templates
+        from orchestrator.ai.agent import AGENT_DIR as _agent_dir   # code-resident templates
         import shared.bundle as _bundle
         from shared import audit as _audit
         _op = _auth_sessions.current_username() if _auth_sessions else None

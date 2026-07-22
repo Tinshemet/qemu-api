@@ -111,8 +111,8 @@ async def _startup() -> None:
     _sync()
     try:
         import shared.bundle as _bundle
-        from orchestrator.ai.agent import forge as _forge
-        _bundle.migrate(os.path.dirname(os.path.abspath(_forge.__file__)))   # legacy → bundles
+        from orchestrator.ai.agent import AGENT_DIR
+        _bundle.migrate(AGENT_DIR)   # legacy → bundles
     except Exception:
         pass
     try:

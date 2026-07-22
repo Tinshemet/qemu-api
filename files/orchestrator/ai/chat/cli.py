@@ -377,8 +377,8 @@ class OrchestratorCLI:
         state into ~/.qemu_vms/_agents/ bundles. Never blocks startup."""
         try:
             import shared.bundle as _bundle
-            from orchestrator.ai.agent import forge as _forge
-            _bundle.migrate(os.path.dirname(os.path.abspath(_forge.__file__)))
+            from orchestrator.ai.agent import AGENT_DIR
+            _bundle.migrate(AGENT_DIR)
         except Exception:
             pass
 
