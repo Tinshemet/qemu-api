@@ -37,6 +37,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from .fields import build_fields, ExpiryField
+
 # The tool registry — the FACTS source of truth (what tools exist + signatures).
 # Guarded like score.py's import so this module still loads in orchestrator-only
 # checkouts without the executor package (tools resolve to none then).
@@ -56,17 +58,10 @@ _HANDLING = {
 _HANDLING_FALLBACK = {"human-confirm": "ask_double", "autonomous": "halt"}
 
 
-def _is_expired(contract: Dict[str, Any]) -> bool:
-    """True if the contract carries an expiry date that is already past."""
-    con = (contract or {}).get("contract", {}) or {}
-    exp = con.get("expiry") or (con.get("campaign") or {}).get("expiry")   # agent-level, legacy fallback
-    if not exp:
-        return False
-    try:
-        from datetime import date
-        return date.fromisoformat(str(exp)) < date.today()
-    except Exception:
-        return False                               # unparseable → don't brick startup
+def _is_expired(grgn: Dict[str, Any]) -> bool:
+    """True if the agent's contract carries an expiry date that is already past.
+    Delegates to ExpiryField (the field owns the read + legacy fallback)."""
+    return ExpiryField().is_expired((grgn or {}).get("contract", {}) or {})
 
 
 def _load_active() -> "tuple":
@@ -290,6 +285,10 @@ class Contract:
         self.fleet_confirm_actions = frozenset(self.contract.get("fleet_actions", {}))
         self.disposition_name = self.persona.get("disposition", "human-confirm")
 
+        # The single-key, authorable fields (toolkit, red-lines, safeword, expiry,
+        # mission defaults) as objects — each owns its read + legacy fallback.
+        self.fields = build_fields()
+
     @classmethod
     def load(cls) -> "Contract":
         """Load the active agent (resolution + integrity gate) into a Contract."""
@@ -368,7 +367,7 @@ class Contract:
     def safeword(self) -> Optional[str]:
         """The active contract's safeword (kill-switch), or None. The harness arms
         its KillSwitch with this."""
-        return self.contract.get("safeword") or (self.contract.get("campaign") or {}).get("safeword")
+        return self.fields["safeword"].read(self.contract)
 
     def goal_predicate(self) -> Optional[list]:
         """The campaign's structured ROOT predicate — the checkable twin of the prose
@@ -378,7 +377,8 @@ class Contract:
 
     def _defaults(self) -> Dict[str, Any]:
         """The agent's DEFAULT mission parameters (a mission inherits any it doesn't
-        set), from an explicit ``defaults`` block with the legacy ``campaign`` fallback."""
+        set), from an explicit ``defaults`` block with the legacy ``campaign`` fallback.
+        Kept as the assembled-dict view; the per-field reads go through the Fields."""
         d = dict(self.contract.get("defaults") or {})
         camp = self.contract.get("campaign") or {}
         d.setdefault("reward", camp.get("reward", 1.0))
@@ -388,19 +388,19 @@ class Contract:
     def default_reward(self) -> float:
         """The agent's default payoff R for closing a goal (a mission's `reward`
         overrides it). 1.0 when unspecified."""
-        return float(self._defaults().get("reward", 1.0))
+        return self.fields["reward"].read(self.contract)
 
     def default_importance(self) -> float:
         """The agent's default mission importance (a reward multiplier); 1.0 unspecified."""
-        return float(self._defaults().get("importance", 1.0))
+        return self.fields["importance"].read(self.contract)
 
     def default_weight(self) -> float:
         """The agent's default mission weight (planning/scoring weight); 1.0 unspecified."""
-        return float(self._defaults().get("weight", 1.0))
+        return self.fields["weight"].read(self.contract)
 
     def default_scrutiny(self):
         """The agent's default scrutiny level (a mission may raise/lower it)."""
-        return self._defaults().get("scrutiny")
+        return self.fields["scrutiny"].read(self.contract)
 
     def campaign_reward(self) -> float:
         """Back-compat alias for :meth:`default_reward` (the agent's default payoff R)."""
@@ -415,19 +415,18 @@ class Contract:
     def default_toolkit(self) -> list:
         """The agent's default tool WHITELIST (a mission may narrow it). Empty means
         'no explicit whitelist' (all registered tools allowed, subject to blacklist)."""
-        camp = self.contract.get("campaign") or {}
-        return list(self.contract.get("toolkit") or camp.get("toolkit") or [])
+        return self.fields["toolkit"].read(self.contract)
 
     def default_blacklist(self) -> list:
         """The agent's default tool BLACKLIST (red lines) — a mission may add to it but
         never remove from it."""
-        return list(self.contract.get("forbidden") or [])
+        return self.fields["forbidden"].read(self.contract)
 
     def is_forbidden(self, tool: str, args: Optional[Dict[str, Any]] = None) -> bool:
         """LEGAL FILTER (gauntlet step A): a hard, categorical red line the tree may
         NEVER cross — dropped up front, never costed. Contract-declared via the .grgn
         ``forbidden`` list."""
-        return tool in set(self.contract.get("forbidden", []))
+        return self.fields["forbidden"].contains(self.contract, tool)
 
     def consent_verb(self, tool: str) -> str:
         """A human-readable consequence to SURFACE in a consent referendum."""
@@ -465,9 +464,8 @@ class Contract:
         gate). allowed_remote_tools None/empty ⇒ skip the second check."""
         issues: List[str] = []
         known      = set(_TOOL_SPECS)
-        camp       = self.contract.get("campaign", {}) or {}
-        toolkit    = set(self.contract.get("toolkit") or camp.get("toolkit") or [])
-        forbidden  = set(self.contract.get("forbidden", []) or [])
+        toolkit    = set(self.fields["toolkit"].read(self.contract))
+        forbidden  = set(self.fields["forbidden"].read(self.contract))
         referenced = toolkit | forbidden | set(self.tool_policy.tools)
         if known:
             for t in sorted(referenced - known):
