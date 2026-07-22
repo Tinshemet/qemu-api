@@ -381,201 +381,21 @@ class _VmGuestMixin:
         return {"success": True, "vm": name, "psk_provisioned": psk_provisioned}
 
 
-_GUEST_AGENT_SETUP_SH = r"""#!/usr/bin/env bash
-# Installs and enables qemu-guest-agent so the host can run commands in this VM.
-set -e
-echo "[guest-agent] installing qemu-guest-agent..."
-if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -qq && sudo apt-get install -y qemu-guest-agent
-elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y qemu-guest-agent
-elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -Sy --noconfirm qemu-guest-agent
-else
-    echo "ERROR: no supported package manager found (apt/dnf/pacman)." >&2
-    exit 1
-fi
-# The unit is qemu-guest-agent on most distros, qemu-ga on some.
-sudo systemctl enable --now qemu-guest-agent 2>/dev/null \
-  || sudo systemctl enable --now qemu-ga 2>/dev/null \
-  || echo "[guest-agent] enable the qemu-guest-agent service manually if it did not start."
-echo "[guest-agent] done."
-"""
+# ── Guest-side scripts (externalized to data files under guest_scripts/) ───────
+# Byte-exact extractions of what used to be embedded here: the qemu-guest-agent
+# installer (non-stealth), the stealth serial-agent daemon source (PSK-authenticated,
+# no PSK baked in), and the stealth setup wrapper — a bash template that embeds the
+# daemon at __STEALTH_DAEMON_SRC__ and carries __PSK_PLACEHOLDER__, which
+# generate_guest_agent_setup replaces with the VM's PSK before writing it out.
+_SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "guest_scripts")
 
 
-# The guest-side daemon for stealth VMs: speaks the PSK-authenticated JSON-line
-# protocol (see serial_agent_client.SerialAgentClient) over /dev/ttyS1 — the
-# second plain UART wired by qemu_arg_builder._serial_agent. No PSK is baked
-# into this source; the stealth setup script below writes it to a separate
-# 0600 file the daemon reads at startup. Single in-flight command at a time —
-# a raw UART has no multiplexing, so a second exec while one is outstanding
-# gets {"error": "busy"} rather than queueing or racing.
-_SERIAL_AGENT_DAEMON_PY = r'''#!/usr/bin/env python3
-"""sysdiagd — system diagnostics helper.
-
-Provides a local command channel over the serial console for automated
-health checks and diagnostics collection. Each session authenticates via a
-pre-shared key (HMAC-SHA256 challenge-response) before any command runs.
-"""
-import base64
-import hashlib
-import hmac
-import json
-import os
-import secrets
-import subprocess
-import threading
-import tty
-
-SERIAL_DEV = "/dev/ttyS1"
-PSK_PATH   = "/usr/lib/sysdiag/.sysdiag.key"
-
-_lock = threading.Lock()
-_current = None  # {"pid": int, "proc": Popen, "out": bytearray, "err": bytearray}
+def _load_script(name: str) -> str:
+    with open(os.path.join(_SCRIPTS_DIR, name)) as _f:
+        return _f.read()
 
 
-def _read_psk():
-    with open(PSK_PATH) as f:
-        return f.read().strip()
-
-
-def _open_serial():
-    fd = os.open(SERIAL_DEV, os.O_RDWR)
-    tty.setraw(fd)
-    return fd
-
-
-def _send(fd, obj):
-    os.write(fd, (json.dumps(obj) + "\n").encode())
-
-
-def _recv_line(fd, buf):
-    while b"\n" not in buf:
-        chunk = os.read(fd, 4096)
-        if not chunk:
-            raise ConnectionError("serial channel closed")
-        buf.extend(chunk)
-    line, _, rest = bytes(buf).partition(b"\n")
-    buf[:] = rest
-    return json.loads(line.decode())
-
-
-def _drain(stream, sink):
-    for chunk in iter(lambda: stream.read(4096), b""):
-        with _lock:
-            sink.extend(chunk)
-
-
-def _start_exec(command, args, shell):
-    global _current
-    with _lock:
-        if _current is not None and _current["proc"].poll() is None:
-            return {"error": "busy"}
-    argv = ["/bin/sh", "-c", command] if shell else [command] + list(args or [])
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = bytearray(), bytearray()
-    threading.Thread(target=_drain, args=(proc.stdout, out), daemon=True).start()
-    threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True).start()
-    with _lock:
-        _current = {"pid": proc.pid, "proc": proc, "out": out, "err": err}
-    return {"pid": proc.pid}
-
-
-def _exec_status(pid):
-    with _lock:
-        if _current is None or _current["pid"] != pid:
-            return {"error": "unknown pid"}
-        proc = _current["proc"]
-        if proc.poll() is None:
-            return {"exited": False}
-        return {
-            "exited":    True,
-            "exit_code": proc.returncode,
-            "stdout":    base64.b64encode(bytes(_current["out"])).decode(),
-            "stderr":    base64.b64encode(bytes(_current["err"])).decode(),
-        }
-
-
-def _handle(obj):
-    cmd = obj.get("cmd")
-    if cmd == "ping":
-        return {"pong": True}
-    if cmd == "exec":
-        return _start_exec(obj.get("command", ""), obj.get("args"), obj.get("shell", True))
-    if cmd == "exec-status":
-        return _exec_status(obj.get("pid"))
-    return {"error": "unknown command: %r" % (cmd,)}
-
-
-def main():
-    psk = _read_psk()
-    fd = _open_serial()
-    buf = bytearray()
-    authed = False
-    while True:
-        try:
-            msg = _recv_line(fd, buf)
-        except ConnectionError:
-            authed = False
-            continue
-        if "hello" in msg:
-            nonce = secrets.token_bytes(32)
-            _send(fd, {"challenge": nonce.hex()})
-            try:
-                resp = _recv_line(fd, buf)
-            except ConnectionError:
-                authed = False
-                continue
-            expected = hmac.new(psk.encode(), nonce, hashlib.sha256).hexdigest()
-            if hmac.compare_digest(resp.get("response", ""), expected):
-                _send(fd, {"auth": "ok"})
-                authed = True
-            else:
-                _send(fd, {"auth": "fail"})
-                authed = False
-            continue
-        if not authed:
-            _send(fd, {"error": "not authenticated"})
-            continue
-        _send(fd, _handle(msg))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-
-_STEALTH_AGENT_SETUP_SH = r"""#!/usr/bin/env bash
-# Installs and enables the stealth serial-agent daemon (COM2 command channel).
-# No package manager involved — the daemon is our own script, embedded below.
-set -e
-echo "[sysdiag] installing..."
-sudo mkdir -p /usr/lib/sysdiag
-
-sudo tee /usr/lib/sysdiag/sysdiagd > /dev/null <<'PYEOF'
-""" + _SERIAL_AGENT_DAEMON_PY + r"""PYEOF
-sudo chmod 755 /usr/lib/sysdiag/sysdiagd
-
-sudo tee /usr/lib/sysdiag/.sysdiag.key > /dev/null <<'PSKEOF'
-__PSK_PLACEHOLDER__
-PSKEOF
-sudo chmod 600 /usr/lib/sysdiag/.sysdiag.key
-
-sudo tee /etc/systemd/system/sysdiag-agent.service > /dev/null <<'UNITEOF'
-[Unit]
-Description=System diagnostics agent
-After=multi-user.target
-
-[Service]
-ExecStart=/usr/bin/python3 /usr/lib/sysdiag/sysdiagd
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-UNITEOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now sysdiag-agent
-echo "[sysdiag] done."
-"""
+_GUEST_AGENT_SETUP_SH   = _load_script("guest_agent_setup.sh")
+_SERIAL_AGENT_DAEMON_PY = _load_script("serial_agent_daemon.py")
+_STEALTH_AGENT_SETUP_SH = _load_script("stealth_agent_setup.sh.tmpl").replace(
+    "__STEALTH_DAEMON_SRC__", _SERIAL_AGENT_DAEMON_PY)

