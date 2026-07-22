@@ -23,6 +23,12 @@ MAX_MESSAGE_LEN:     int  = _CFG.get("max_message_length", 32_768)
 MAX_SESSIONS:        int  = _CFG.get("max_sessions", 1_000)
 SESSION_TTL_SECONDS: int  = _CFG.get("session_ttl_seconds", 3600)
 
+# ── image/bundle delivery (proxy to the executor) ──────────────────────────────
+IO_CHUNK_BYTES:         int = _CFG.get("io_chunk_bytes", 4 * 1024 * 1024)   # disk stream chunk
+BUNDLE_CHUNK_BYTES:     int = _CFG.get("bundle_chunk_bytes", 65_536)        # tar.gz proxy chunk
+PROXY_SHA256_TIMEOUT_S: int = _CFG.get("proxy_sha256_timeout_s", 30)        # sha256 proxy request
+PROXY_STREAM_TIMEOUT_S: int = _CFG.get("proxy_stream_timeout_s", 300)       # disk/bundle stream proxy
+
 LOCALHOST           = {"127.0.0.1", "::1", "localhost"}
 SESSION_COOKIE_NAME = "gorgon_session"
 

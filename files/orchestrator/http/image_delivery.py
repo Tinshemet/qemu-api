@@ -14,7 +14,9 @@ from fastapi.responses import StreamingResponse
 
 from executor.api._vm_constants import VM_BASE_DIR
 
-_CHUNK = 4 * 1024 * 1024  # 4 MB stream chunks
+from . import context
+
+_CHUNK = context.IO_CHUNK_BYTES  # disk stream chunk (config: io_chunk_bytes)
 
 
 def executor_url() -> str:
@@ -47,7 +49,7 @@ def image_sha256(vm_name: str) -> Dict[str, Any]:
         import requests as _req
         from orchestrator.executor_client import _VERIFY as _EV
         r = _req.get(f"{exec_url}/vms/{vm_name}/disk/sha256",
-                     headers=exec_headers(), timeout=30, verify=_EV)
+                     headers=exec_headers(), timeout=context.PROXY_SHA256_TIMEOUT_S, verify=_EV)
         if not r.ok:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -69,7 +71,7 @@ def image_download(vm_name: str, request: Request) -> StreamingResponse:
         upstream = _req.get(
             f"{exec_url}/vms/{vm_name}/disk",
             headers={**exec_headers(), "Range": request.headers.get("range", "")},
-            stream=True, timeout=300, verify=_EV,
+            stream=True, timeout=context.PROXY_STREAM_TIMEOUT_S, verify=_EV,
         )
         if not upstream.ok:
             raise HTTPException(status_code=upstream.status_code, detail=upstream.text)
@@ -136,11 +138,11 @@ def vm_bundle(vm_name: str) -> StreamingResponse:
     exec_url = executor_url()
     if exec_url:
         upstream = _req.get(f"{exec_url}/vms/{vm_name}/bundle",
-                            headers=exec_headers(), stream=True, timeout=300, verify=_EV)
+                            headers=exec_headers(), stream=True, timeout=context.PROXY_STREAM_TIMEOUT_S, verify=_EV)
         if not upstream.ok:
             raise HTTPException(status_code=upstream.status_code, detail=upstream.text)
         return StreamingResponse(
-            upstream.iter_content(chunk_size=65536),
+            upstream.iter_content(chunk_size=context.BUNDLE_CHUNK_BYTES),
             media_type="application/gzip",
             headers={"Content-Disposition": f'attachment; filename="{vm_name}.tar.gz"'},
         )

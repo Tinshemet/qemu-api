@@ -27,6 +27,7 @@ API_URL           = os.environ.get("API_URL",        _CFG.get("url",   "local"))
 # which almost never matches the executor's independently configured secret.
 _TOKEN            = os.environ.get("EXECUTOR_TOKEN", _CFG.get("token", ""))
 _TIMEOUT          = int(os.environ.get("API_TIMEOUT", _CFG.get("timeout", 120)))
+_SYNC_TIMEOUT     = int(_CFG.get("sync_timeout_s", 10))   # shorter timeout for startup /profiles+/capabilities
 _CA_CERT          = os.environ.get("API_CA_CERT", _CFG.get("ca_cert") or None)
 _VERIFY           = (
     False if os.environ.get("API_VERIFY_SSL", "1") == "0"
@@ -60,12 +61,12 @@ def sync() -> dict:
     if API_URL and API_URL != "local":
         hdrs = {"Authorization": f"Bearer {_TOKEN}"}
         try:
-            r = _requests.get(f"{API_URL}/profiles",     headers=hdrs, timeout=10, verify=_VERIFY)
+            r = _requests.get(f"{API_URL}/profiles",     headers=hdrs, timeout=_SYNC_TIMEOUT, verify=_VERIFY)
             profiles_data = r.json() if r.ok else {}
         except Exception:
             profiles_data = {}
         try:
-            r = _requests.get(f"{API_URL}/capabilities", headers=hdrs, timeout=10, verify=_VERIFY)
+            r = _requests.get(f"{API_URL}/capabilities", headers=hdrs, timeout=_SYNC_TIMEOUT, verify=_VERIFY)
             caps_data = r.json() if r.ok else {}
         except Exception:
             caps_data = {}
