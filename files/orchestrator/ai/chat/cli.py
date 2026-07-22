@@ -19,16 +19,16 @@ _MC = {"os_type": "linux", "cpu_cores": 2, "memory_mb": 2048, "machine_type": "q
 from orchestrator.executor_client import get_ovmf as _get_ovmf  # noqa: E402
 from .session import (
     AUTO_CLEAR_SESSION, clear_session, detect_drift, load_session,
-    save_session, set_auto_clear, set_loop_max, get_loop_max,
-    set_verbose, get_verbose,
+    save_session, get_loop_max, get_verbose,
 )
+from .shortcuts import handle_command   # the REPL shortcut dispatcher (list/system/drift/…)
 from shared.display import console, print_banner
 from ..active_library     import LIBRARY
 from .ollama_client      import OLLAMA_MODEL, OLLAMA_URL, _call_ollama
 from .context_assistant  import check_context, extract_slots, proactive_prep
 from orchestrator.sanitizer.context_gate import _REQUIRED as _GATE_REQUIRED
 from orchestrator.sanitizer.sanitizer import OS_TYPE_ALIASES
-from orchestrator.executor_client import execute_tool, API_URL, _VERIFY
+from orchestrator.executor_client import API_URL, _VERIFY
 try:
     from executor.tool_dispatch.tool_executor import manager, _VM_DEFS
 except ImportError:
@@ -44,8 +44,7 @@ from .http_chat import process_message  # re-exported: HTTP /chat entry (used by
 
 _CFG            = json.load(open(os.path.join(os.path.dirname(__file__), "config.json")))
 _EXIT_CMDS      = set(_CFG["exit_commands"])
-_SHORTCUTS      = _CFG["shortcut_commands"]
-_LOOP_MAX       = get_loop_max()   # respects tool_loop_max_override if set
+_LOOP_MAX       = get_loop_max()   # respects tool_loop_max_override if set (shortcuts mutate this)
 _ACTION_WORDS   = set(_CFG["action_words"])
 # State/read-query words. Folded into the "wants a tool" trigger so the model is
 # forced to ground factual questions ("which VMs are running?") in a tool call
@@ -53,53 +52,6 @@ _ACTION_WORDS   = set(_CFG["action_words"])
 _STATE_QUERY_WORDS = set(_CFG.get("state_query_words", []))
 _OS_KEYWORDS    = set(_CFG["os_keywords_gate"])
 _RENDERS_OUTPUT = set(_CFG.get("rendered_tools", []))
-
-
-def _show_drift_report(messages: list, runtime_drift_count: int) -> None:
-    """Render the session drift report (orphaned turns, consecutive no-tool count)."""
-    from rich.table import Table
-    from rich.text  import Text
-
-    user_count      = sum(1 for m in messages if m.get("role") == "user")
-    assistant_count = sum(1 for m in messages if m.get("role") == "assistant")
-    orphan_count    = user_count - assistant_count
-    orphan_pct      = int(orphan_count / user_count * 100) if user_count else 0
-
-    max_consec, consec = 0, 0
-    for m in messages:
-        if m.get("role") == "user":
-            consec += 1
-            max_consec = max(max_consec, consec)
-        else:
-            consec = 0
-
-    drift_result = detect_drift(messages)
-    if drift_result:
-        level, _ = drift_result
-        if level == "critical":
-            status_text = Text("✖ CRITICAL — model likely poisoned", style="bold red")
-        else:
-            status_text = Text("⚠ WARNING — early drift signal", style="bold yellow")
-    else:
-        status_text = Text("✓ HEALTHY", style="bold green")
-
-    t = Table(show_header=False, box=None, padding=(0, 2))
-    t.add_column("key",   style="dim")
-    t.add_column("value", style="bold")
-
-    t.add_row("Status",                  status_text)
-    t.add_row("Session messages",        str(len(messages)))
-    t.add_row("User turns",              str(user_count))
-    t.add_row("Verified responses",      str(assistant_count))
-    t.add_row("Orphaned turns",          f"{orphan_count}  ({orphan_pct}%)")
-    t.add_row("Max consecutive orphans", str(max_consec))
-    t.add_row("Runtime drift (turns)",   str(runtime_drift_count))
-
-    if drift_result:
-        _, msg = drift_result
-        t.add_row("Advice", Text(msg, style="yellow" if drift_result[0] == "warn" else "red"))
-
-    console.print(Panel(t, title="Session Drift Report", border_style="cyan"))
 
 
 # ── Chat loop ──────────────────────────────────────────────────────────────────
@@ -144,81 +96,6 @@ def _maybe_forge_contract(ui: str) -> bool:
         write_dir=os.path.dirname(os.path.abspath(_forge.__file__)),
     )
     return True
-
-
-def _handle_command(ui: str, messages: List[dict], runtime_drift_count: int,
-                    verbose: bool) -> bool:
-    """Handle a REPL slash-command shortcut, if the input is one.
-
-    Covers list / system / profiles / clear-session / drift / auto-clear on|off /
-    loop-limit. Returns True when it handled the input (the caller continues the
-    REPL), False when the input isn't a command (fall through to the AI).
-
-    Example::
-
-        _handle_command("list", messages, 0, False)   # → True (ran list_vms)
-        _handle_command("make a vm", messages, 0, False)  # → False
-    """
-    global _LOOP_MAX
-    _list_pfx = next((p for p in ("list ", "vms ", "ls ") if ui.startswith(p)), None)
-    if ui in _SHORTCUTS["list"] or _list_pfx:
-        _label = ui[len(_list_pfx):].strip() if (_list_pfx and ui not in _SHORTCUTS["list"]) else ""
-        execute_tool("list_vms", {"label": _label} if _label else {}, verbose)
-        return True
-    if ui in _SHORTCUTS["system"]:
-        execute_tool("check_system", {}, verbose)
-        return True
-    if ui in _SHORTCUTS["profiles"]:
-        execute_tool("list_profiles", {}, verbose)
-        return True
-    if ui in _SHORTCUTS["clear_session"]:
-        clear_session()
-        messages.clear()
-        console.print("[dim]Session cleared.[/dim]")
-        return True
-    if ui in _SHORTCUTS["drift"]:
-        _show_drift_report(messages, runtime_drift_count)
-        return True
-    if ui in _SHORTCUTS["auto_clear_on"]:
-        set_auto_clear(True)
-        console.print("[dim]Auto-clear enabled — session will be cleared on next start.[/dim]")
-        return True
-    if ui in _SHORTCUTS["auto_clear_off"]:
-        set_auto_clear(False)
-        console.print("[dim]Auto-clear disabled.[/dim]")
-        return True
-    if ui in ("verbose", "debug", "verbose on", "debug on", "verbose off", "debug off"):
-        want = get_verbose() if ui in ("verbose", "debug") else ui.endswith("on")  # bare word = toggle
-        if ui in ("verbose", "debug"):
-            want = not want
-        set_verbose(want)
-        console.print(f"[dim]Verbose/debug view {'ENABLED' if want else 'disabled'} "
-                      f"— per tool call: risk weights, scrutiny tier, reward-cost knobs.[/dim]")
-        return True
-    ll_matched = next((s for s in _SHORTCUTS["loop_limit"] if ui == s or ui.startswith(s + " ")), None)
-    if ll_matched is not None:
-        ll_inline = ui[len(ll_matched):].strip()
-        if ll_inline:
-            ll_input = ll_inline
-        else:
-            console.print(f"[dim]Current tool loop limit: [bold]{_LOOP_MAX}[/bold] (default: {_CFG['chat']['tool_loop_max']})[/dim]")
-            console.print("[dim]Enter a number to set a new limit, or press Enter to clear the override.[/dim]")
-            try:
-                ll_input = console.input("[bold cyan]New limit:[/bold cyan] ").strip()
-            except (KeyboardInterrupt, EOFError):
-                return True
-        if ll_input == "":
-            set_loop_max(None)
-            _LOOP_MAX = _CFG["chat"]["tool_loop_max"]
-            console.print(f"[dim]Loop limit reset to default ({_LOOP_MAX}).[/dim]")
-        elif ll_input.isdigit() and int(ll_input) > 0:
-            _LOOP_MAX = int(ll_input)
-            set_loop_max(_LOOP_MAX)
-            console.print(f"[dim]Loop limit set to {_LOOP_MAX}.[/dim]")
-        else:
-            console.print("[dim]Invalid input — loop limit unchanged.[/dim]")
-        return True
-    return False
 
 
 def chat_loop(verbose: bool = False) -> None:
@@ -305,7 +182,7 @@ def chat_loop(verbose: bool = False) -> None:
             console.print("[dim]Goodbye.[/dim]")
             break
 
-        if _handle_command(_ui, messages, _runtime_drift_count, verbose):
+        if handle_command(_ui, messages, _runtime_drift_count, verbose):
             continue
 
         if _maybe_forge_contract(_ui):

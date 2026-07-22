@@ -34,11 +34,15 @@ from orchestrator.ai.chat.gates import (
     safety as _g_safety, manual_config as _g_manual, debug as _g_debug,
     config as _g_config,
 )
+# The REPL shortcuts (list/system/clear-session/…) bind execute_tool/clear_session
+# in their context module, so seams must reach it too.
+from orchestrator.ai.chat.shortcuts import context as _sc_context
 import shared.display as _display
 
-# Every module a _seam name might be bound into (gate pipeline + REPL shell + base).
+# Every module a _seam name might be bound into (gate pipeline + REPL shell +
+# shortcut context + base).
 _SEAM_MODULES = (cli, chat_turn, chat_types, _g_dispatch, _g_preflight,
-                 _g_context, _g_safety, _g_manual, _g_debug, _g_config)
+                 _g_context, _g_safety, _g_manual, _g_debug, _g_config, _sc_context)
 
 
 @dataclass
