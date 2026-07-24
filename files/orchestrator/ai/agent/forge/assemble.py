@@ -116,6 +116,11 @@ def review(grgn: Dict[str, Any]) -> List[str]:
         issues.append("no persona name")
     if c.get("tool_mode") == "whitelist" and not c.get("toolkit"):
         issues.append("empty toolkit — the agent can do nothing")
+    # Weighted-rule coherence: a signed rule set must not silently contradict itself
+    # (a rule at two weights, a duplicate, an out-of-range weight). resolve() gives the
+    # deterministic precedence order; conflicts() are un-signable.
+    from ..contract.rules import conflicts as _rule_conflicts
+    issues += _rule_conflicts(c.get("rules"))
     return issues
 
 
@@ -129,6 +134,63 @@ def sign(grgn: Dict[str, Any], safeword: str) -> Dict[str, Any]:
         raise ValueError("a safeword is required to sign (the kill-switch)")
     grgn["contract"]["safeword"] = safeword
     grgn["contract"]["signed"] = True
+    return grgn
+
+
+def _safeword_sig(word: Any) -> str:
+    """A hash of a (normalized) safeword — so the amendment log proves WHICH safeword was
+    in force without storing it in cleartext, and re-auth compares in constant time."""
+    import hashlib
+    norm = str(word or "").strip().lower()
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest() if norm else ""
+
+
+def amend(grgn: Dict[str, Any], changes: Dict[str, Any], safeword: str, *,
+          prior_safeword: str, at: Any = None) -> Dict[str, Any]:
+    """Amend a SIGNED contract — the controlled re-sign lifecycle (NOT a raw overwrite, NOT
+    a full re-forge). This is the safe re-open the old sign()-locks-forever design lacked:
+
+      1. CONSENT / re-auth — the operator must present the CURRENT safeword (you can't amend
+         what you can't stop). A wrong word is refused. This is the amendment's referendum.
+      2. Apply the change delta (a shallow merge of contract-level fields — rules, toolkit,
+         forbidden, expiry, …).
+      3. RE-REVIEW — the amended contract must still be coherent (rules included, via E1),
+         or the amendment is refused before it can be signed.
+      4. Re-sign under `safeword` (may be the same), BUMP the version, and append a
+         tamper-evident amendment-log entry (the prior safeword's HASH + what changed) — so
+         a watchdog alert or a denied consent re-opens a human amendment that re-signs,
+         instead of forcing a full re-forge.
+
+    Refuses an unsigned contract (forge→sign a new one), a wrong prior safeword, or a change
+    that makes the contract incoherent."""
+    import copy
+    import hmac
+    c = grgn.get("contract", {})
+    if not c.get("signed"):
+        raise ValueError("amend applies to a SIGNED contract; forge→sign a new one instead")
+    if not prior_safeword or not hmac.compare_digest(_safeword_sig(prior_safeword), _safeword_sig(c.get("safeword"))):
+        raise ValueError("the current safeword is required to amend (operator re-auth)")
+    if not safeword:
+        raise ValueError("a safeword is required to re-sign the amendment")
+    # Build the amendment on a CANDIDATE so a rejected change never leaves the live
+    # contract half-mutated — grgn is replaced only once the result is coherent.
+    candidate = copy.deepcopy(c)
+    for k, v in (changes or {}).items():           # apply the delta over the contract fields
+        candidate[k] = v
+    issues = review({**grgn, "contract": candidate})   # coherence gate BEFORE the new signature
+    if issues:
+        raise ValueError("cannot amend into an incoherent contract: " + "; ".join(issues))
+    prior_version = int(c.get("version", 1))
+    entry: Dict[str, Any] = {"version": prior_version + 1,
+                             "prior_safeword_sha": _safeword_sig(prior_safeword),
+                             "changed": sorted((changes or {}).keys())}
+    if at is not None:
+        entry["at"] = at
+    candidate["amendments"] = list(c.get("amendments", [])) + [entry]
+    candidate["version"]  = prior_version + 1
+    candidate["safeword"] = safeword
+    candidate["signed"]   = True
+    grgn["contract"] = candidate                   # commit atomically
     return grgn
 
 
@@ -165,10 +227,14 @@ def render(grgn: Dict[str, Any], width: int = 68) -> str:
 
     rules = c.get("rules", [])
     if rules or c.get("caveats"):
+        from ..contract.rules import resolve as _resolve_rules
         L.append(bar)
         L.append("  RULES  (weight: 0 = wildcard/void-if-broken · 1 = default · higher = weaker)")
-        for r in rules:
-            L.append(f"    [{r.get('weight', 1)}] {r.get('text','')}")
+        # Render in resolved PRECEDENCE order (strongest first), not declaration order —
+        # so the reviewer reads the rules the way they actually rank.
+        for r in _resolve_rules(rules):
+            tag = " ⚑ inviolable" if r["inviolable"] else ""
+            L.append(f"    [{r['weight']:g}] {r['text']}{tag}")
         for cav in c.get("caveats", []):
             L.append(f"    [·] {cav}")
 

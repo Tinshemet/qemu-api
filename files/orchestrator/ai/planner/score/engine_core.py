@@ -28,6 +28,7 @@ def run_score(
     select_tools:   Optional[Callable[[str, List[Dict]], List[Dict]]] = None,
     max_retries:    int = 2,
     max_depth:      int = 3,
+    max_steps:      int = 0,
     ledger:         Optional[List[Dict[str, Any]]] = None,
     **_legacy,
 ) -> Dict[str, Any]:
@@ -109,12 +110,46 @@ def run_score(
     estimate        = engine.estimate
     ce_floor        = engine.ce_floor
     retry_penalty   = engine.retry_penalty
+    whole_goal_gate = engine.whole_goal_gate
+    max_revisions   = engine.max_revisions
+    commit_gate     = engine.commit_gate
+    reason_gate     = engine.reason_gate
+    on_node         = engine.on_node
+    expand_collective = engine.expand_collective
+    ground_steps    = engine.ground_steps
+    complete_steps  = engine.complete_steps
+
+    def _refine_steps(parent_goal: str, steps: list) -> list:
+        """Apply the harness's step-refinement passes to a model decomposition: bind bare
+        references (1.2), then inject missing prerequisites (1.4) — so a plausible-but-
+        incomplete plan is grounded and made whole before it runs."""
+        if ground_steps:
+            steps = ground_steps(parent_goal, steps)
+        if complete_steps:
+            steps = complete_steps(parent_goal, steps)
+        return steps
+
+    def _emit(kind: str, node_goal: str, depth: int, path: List[str], **extra) -> None:
+        """Fire a live node-lifecycle event (enter/plan/leaf/close) for a streaming tree
+        view. A no-op with zero overhead when no observer is attached. Never lets a
+        renderer error break the run."""
+        if on_node is None:
+            return
+        try:
+            on_node({"kind": kind, "goal": node_goal, "depth": depth, "path": list(path), **extra})
+        except Exception:
+            pass
 
     # Caller may pass its own ledger list (so it can read verified verdicts LIVE
     # as the run proceeds — see autonomous.run_autonomous's p_of); default owns one.
     if ledger is None:
         ledger = []
     _RETRY_STATUS = {"failed", "unverified"}   # soft failures worth a different approach
+    # THRASHING BOUND (Track 1.5): a broken decomposition can send backtrack × revision ×
+    # re-decompose into a call explosion that never converges. `max_steps` caps the total
+    # node attempts; once spent, planning stops and the offending node closes `blocked
+    # (step_budget)` — the run fails FAST and honestly instead of burning the model. 0 = off.
+    _budget = {"n": 0}
 
     def _approach_desc(node: Dict[str, Any]) -> str:
         """One-line summary of the attempt that just failed — for the retry prompt."""
@@ -123,6 +158,32 @@ def run_score(
         if node.get("children"):
             return "decompose into [" + "; ".join(c["goal"] for c in node["children"]) + f"] → {node['status']}"
         return node.get("status", "?")
+
+    def _fail_detail(node: Dict[str, Any]) -> str:
+        """The CONCRETE reason a step failed — its status reason PLUS the executor's own
+        error message (Track 1.3/1.4). Surfacing "no such network lab" (not just "failed")
+        is what lets the model's re-plan actually FIX the plan (create the missing
+        prerequisite) instead of re-emitting the same broken steps."""
+        bits = []
+        if node.get("reason"):
+            bits.append(str(node["reason"]))
+        res = node.get("result")
+        if isinstance(res, dict) and res.get("error"):
+            bits.append(str(res["error"]))
+        return f" ({'; '.join(bits)})" if bits else ""
+
+    def _plan_desc(node: Dict[str, Any]) -> str:
+        """One-line post-mortem of a composite plan that came up short — for the REVISION
+        prompt. Marks each step done (✓) or failed (✗ + CONCRETE error) so the model re-plans
+        the CORRECTIVE remainder — creating a missing prerequisite, grounding a reference —
+        instead of repeating the decomposition that fell short."""
+        parts = []
+        for c in node.get("children") or []:
+            if c.get("status") == "done":
+                parts.append(f"✓ {c['goal']}")
+            else:
+                parts.append(f"✗ {c['goal']}{_fail_detail(c)}")
+        return "plan [" + "; ".join(parts) + f"] → {node.get('status')}"
 
     def _root_gate(node_goal: str, depth: int, children: List[Dict[str, Any]],
                    extra: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,6 +235,29 @@ def run_score(
 
     def _resolve(node_goal: str, depth: int, path: List[str],
                  best_alt: float = 0.0) -> Dict[str, Any]:
+        _emit("enter", node_goal, depth, path)
+        node = _resolve_inner(node_goal, depth, path, best_alt)
+        _emit("close", node_goal, depth, path, status=node.get("status"),
+              reason=node.get("reason"), revised=node.get("revised"))
+        return node
+
+    def _resolve_inner(node_goal: str, depth: int, path: List[str],
+                       best_alt: float = 0.0) -> Dict[str, Any]:
+        # WHOLE-GOAL WORTH-IT GATE (gauntlet F, top level): before touching the ROOT
+        # goal, price it and refuse up-front if it isn't worth doing — the go/no-go the
+        # OR gate already applies to alternatives, lifted to the whole goal. ROOT only
+        # (depth 0): AND sub-steps are REQUIRED (you can't skip one and still claim the
+        # goal), so only the whole goal and OR-alternatives carry a worth-it gate.
+        # Unpriceable (no estimator, or a compound route the estimator won't cost at
+        # α=0) → proceed, the act-observe-correct default. Books no reward and executes
+        # nothing — the gate legitimately choosing inaction, surfaced not silently done.
+        # Opt-in (whole_goal_gate): the autonomous driver turns it on; run_score's OR /
+        # backtrack unit tests leave it off so their stub estimators aren't pre-empted.
+        if whole_goal_gate and depth == 0 and estimate is not None:
+            root_ce = estimate(node_goal, depth)
+            if root_ce is not None and root_ce <= ce_floor:
+                return _node(node_goal, "skipped", mode="whole_goal",
+                             reason="not_worth_it", ce_est=round(root_ce, 4))
         # BACKTRACK: attempt the goal; on a SOFT failure (failed / unverified),
         # re-attempt with a DIFFERENT approach, feeding the model the approaches that
         # already failed HERE so it can't repeat them. Hard stops (done / skipped /
@@ -216,7 +300,10 @@ def run_score(
                 break
             failed.append(_approach_desc(node))
             tries += 1
-            node = _attempt(node_goal, depth, path, True, failed)
+            # A re-attempt SKIPS the method cache: the cached decomposition is exactly the
+            # one that just failed (the root-replan landmine), so re-planning must reach the
+            # model, not re-hit the same short-circuit.
+            node = _attempt(node_goal, depth, path, True, failed, use_cache=False)
         if tries:
             node["retries"] = tries
             node["tried"]   = list(failed)
@@ -224,15 +311,53 @@ def run_score(
                 node["rolled_back"] = rolled
             if node.get("status") == "done":
                 node["recovered"] = True
+
+        # PLAN-LEVEL REVISION (self-correction): an AND plan that came up `partial` — a
+        # REQUIRED step failed for good — is not a dead branch. Re-PLAN the goal: the
+        # model sees what's already done (progress summary, injected in _attempt) plus a
+        # post-mortem of which steps failed, so it produces the CORRECTIVE remainder
+        # rather than repeating the decomposition that fell short. Distinct from the leaf
+        # backtrack above (same sub-goal, new approach) — this regenerates the PLAN. OR
+        # nodes already re-plan via backtrack (a failed OR is a soft failure); leaves
+        # can't be re-planned. Re-attempts skip the cache (same landmine). Off unless
+        # max_revisions > 0 (the autonomous driver turns it on; run_score defaults off).
+        revisions = 0
+        while (max_revisions and revisions < max_revisions
+               and node.get("children") and node.get("status") == "partial"):
+            failed.append(_plan_desc(node))
+            revisions += 1
+            node = _attempt(node_goal, depth, path, True, failed, use_cache=False)
+        if revisions:
+            node["revisions"] = revisions
+            if node.get("status") == "done":
+                node["revised"] = True
         return node
 
     def _attempt(node_goal: str, depth: int, path: List[str],
-                 allow_decompose: bool, failed: List[str]) -> Dict[str, Any]:
+                 allow_decompose: bool, failed: List[str],
+                 use_cache: bool = True) -> Dict[str, Any]:
         # SAFEWORD KILL-SWITCH (infrastructural): if the operator tripped it, stop the
         # tree HERE — no planning, no execution. The agent gets no say; the ledger so
         # far is preserved (suspend, not delete).
         if killswitch is not None and killswitch.tripped:
             return _node(node_goal, "aborted", reason=killswitch.reason)
+        _budget["n"] += 1                 # count every node attempt (Track 1.5 thrashing bound)
+        if max_steps and _budget["n"] > max_steps:
+            return _node(node_goal, "blocked", reason="step_budget")
+        if killswitch is not None:
+            killswitch.checkin()          # a sign of life — resets any armed dead-man's timer
+        # COLLECTIVE DECOMPOSITION (Track 1.1): a DISTRIBUTIVE "do X to all/them/each" over a
+        # live set is expanded deterministically into one atomic sub-goal per member — the
+        # HARNESS does the loop the weak model can't (the benchmark cliff). Runs FIRST, at any
+        # depth, taking precedence over attach-steer/decompose-first so a collective goal is
+        # never collapsed to a single action or left to the model to loop. No model call, no
+        # variance; per-member sub-goals are atomic, so they never re-expand.
+        if expand_collective is not None and allow_decompose and depth < max_depth:
+            csteps = expand_collective(node_goal, path)
+            if csteps and len(csteps) >= 2:
+                _emit("plan", node_goal, depth, path, children=list(csteps), mode="and", method="collective")
+                children = [_resolve(s, depth + 1, path + [node_goal]) for s in csteps]
+                return _close_and(node_goal, depth, children, method="collective")
         system = _NODE_SYSTEM
         if build_context:
             ctx = build_context(node_goal, path)
@@ -267,8 +392,9 @@ def run_score(
             # METHOD CACHE first: a known goal shape decomposes DETERMINISTICALLY (no
             # model, no variance). Only a novel goal reaches the model, and a good
             # model decomposition is LEARNED back into the cache ("un-reasons over time").
-            cached = method_cache.lookup(node_goal) if method_cache else None
+            cached = method_cache.lookup(node_goal) if (method_cache and use_cache) else None
             if cached and len(cached) >= 2:
+                _emit("plan", node_goal, depth, path, children=list(cached), mode="and", method="cache")
                 children = [_resolve(s, depth + 1, path + [node_goal]) for s in cached]
                 return _close_and(node_goal, depth, children, method="cache")
             plan_msgs = messages + [{"role": "user", "content": (
@@ -278,9 +404,11 @@ def run_score(
             pname, pargs = _first_tool_call(call_model(plan_msgs, [DECOMPOSE_TOOL]))
             if pname == "decompose":
                 steps = [s for s in (pargs.get("steps") or []) if _norm(s) != _norm(node_goal)]
+                steps = _refine_steps(node_goal, steps)           # Track 1.2 ground + 1.4 complete
                 if len(steps) >= 2:
                     if method_cache:
                         method_cache.remember(node_goal, steps)   # learn this decomposition
+                    _emit("plan", node_goal, depth, path, children=list(steps), mode="and", method="model")
                     children = [_resolve(s, depth + 1, path + [node_goal]) for s in steps]
                     return _close_and(node_goal, depth, children, method="model")
             offer_decompose = False   # atomic (or the model refused) → let it pick a primitive
@@ -298,10 +426,12 @@ def run_score(
             # goal into itself. If nothing progresses (or we're too deep), re-ask WITHOUT
             # the meta-tools so the model MUST pick a primitive (the progress guard).
             steps = [s for s in (args.get("steps") or []) if _norm(s) != _norm(node_goal)]
+            steps = _refine_steps(node_goal, steps)               # Track 1.2 ground + 1.4 complete
             if not steps or depth >= max_depth:
                 if allow_decompose:
-                    return _attempt(node_goal, depth, path, False, failed)
+                    return _attempt(node_goal, depth, path, False, failed, use_cache)
                 return _node(node_goal, "blocked", reason="no_progress")
+            _emit("plan", node_goal, depth, path, children=list(steps), mode="and")
             children = [_resolve(s, depth + 1, path + [node_goal]) for s in steps]
             return _close_and(node_goal, depth, children)
 
@@ -313,7 +443,7 @@ def run_score(
             opts = [o for o in (args.get("options") or []) if _norm(o) != _norm(node_goal)]
             if len(opts) < 2 or depth >= max_depth:   # not real alternatives → force a primitive
                 if allow_decompose:
-                    return _attempt(node_goal, depth, path, False, failed)
+                    return _attempt(node_goal, depth, path, False, failed, use_cache)
                 return _node(node_goal, "blocked", reason="no_alternatives")
             # WORTH-IT: rank by CE, try best first, and prune the alternatives not worth trying.
             to_try, pruned = _rank_alternatives(opts, depth + 1)
@@ -324,6 +454,8 @@ def run_score(
                 # (the gate legitimately choosing inaction; surfaced, not silently done).
                 return _node(node_goal, "skipped", children=pruned_nodes, mode="or",
                              reason="not_worth_it")
+            _emit("plan", node_goal, depth, path, mode="or",
+                  children=[o for o, _ in to_try] + [o for o, _ in pruned])
             children: List[Dict[str, Any]] = []
             satisfied = False
             for i, (opt, est) in enumerate(to_try):
@@ -366,6 +498,32 @@ def run_score(
             return _node(node_goal, "done", tool=name, args=args, cached_finding=fact,
                          result={"finding": fact, "value": findings.get(fact), "cached": True})
 
+        # SIMULATED ĈE COMMIT GATE (deliberation scales with irreversibility): a
+        # REVERSIBLE leaf just acts — reality is a free act-observe-correct oracle, no
+        # simulation. An IRREVERSIBLE leaf commits only if its SIMULATED certainty-
+        # equivalent clears the worth-it bar; otherwise it's blocked here, before any
+        # savepoint or execution. Distinct from the whole-goal gate (prices the GOAL) and
+        # the checkpoint path (revertibility): this is the per-leaf irreversible go/no-go.
+        # commit_gate returns True for reversible/unknown risk (the default when unset).
+        if commit_gate is not None and not commit_gate(name, args):
+            return _node(node_goal, "blocked", tool=name, args=args, reason="not_worth_committing")
+
+        # REASON-VALIDATION GATE (two-stage, opt-in): capture the model's stated REASON for
+        # this action, then check the ACTION against it as a spec — STRUCTURAL, not a
+        # model-judge (the p_self firewall). Flags clear divergence (no reason; the target
+        # absent from the justification; or — grounded — a reason that CONTRADICTS the live
+        # state). The stated reason is RECORDED on the leaf (rationale) and streamed to the
+        # live tree, so even a passed lie stays auditable after the run.
+        rationale = None
+        if reason_gate is not None:
+            rg = reason_gate(node_goal, name, args)
+            problem   = rg.get("problem") if isinstance(rg, dict) else rg
+            rationale = rg.get("reason")  if isinstance(rg, dict) else None
+            if problem:
+                return _node(node_goal, "blocked", tool=name, args=args, rationale=rationale,
+                             reason=f"reason_mismatch:{problem}")
+        _rat = {"rationale": rationale} if rationale else {}
+
         act = gate(name, args) if gate else "proceed"
         checkpoint_label = None
         if act == "halt":
@@ -397,6 +555,7 @@ def run_score(
         if killswitch is not None and killswitch.tripped:
             return _node(node_goal, "aborted", tool=name, args=args, reason=killswitch.reason)
 
+        _emit("leaf", node_goal, depth, path, tool=name, args=args, rationale=rationale)
         result = execute(name, args)
         ok = not (isinstance(result, dict) and (result.get("success") is False or result.get("error")))
 
@@ -450,7 +609,7 @@ def run_score(
                 ledger.append({"goal": node_goal, "tool": name, "args": args,
                                "ok": False, "verified": False, "result": result})
                 return _node(node_goal, "unverified", tool=name, args=args,
-                             result=result, reason=f"criterion_unmet:{crit}", **_cp)
+                             result=result, reason=f"criterion_unmet:{crit}", **_cp, **_rat)
 
         # Honesty rule (foreign-command grounding): an OPAQUE command with no declared
         # post-condition can't be trusted on its exit flag — surface it as UNVERIFIABLE,
@@ -461,10 +620,10 @@ def run_score(
             ledger.append({"goal": node_goal, "tool": name, "args": args,
                            "ok": False, "verified": False, "result": result})
             return _node(node_goal, "unverified", tool=name, args=args,
-                         result=result, reason="unverifiable", **_cp)
+                         result=result, reason="unverifiable", **_cp, **_rat)
 
         ledger.append({"goal": node_goal, "tool": name, "args": args, "ok": ok, "result": result})
-        return _node(node_goal, "done" if ok else "failed", tool=name, args=args, result=result, **_cp)
+        return _node(node_goal, "done" if ok else "failed", tool=name, args=args, result=result, **_cp, **_rat)
 
     root = _resolve(goal, 0, [])
     return {"root": root, "ledger": ledger, "ok": root.get("status") == "done"}

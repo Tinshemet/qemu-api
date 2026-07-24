@@ -35,8 +35,20 @@ class MissionCommand(Command):
                 console.print("[bold red]Autonomous runner unavailable.[/bold red]")
                 return
             console.print(f"[bold cyan]▶ Mission:[/bold cyan] {goal}")
+            # Attended runs get a LIVE plan tree — watch the goal decompose, branch, act,
+            # and close in real time. Headless/piped runs skip it (no TTY to animate).
+            live_tree = console.is_terminal
             try:
-                result = run_autonomous_live(goal, mission=mission_obj)
+                if live_tree:
+                    from rich.live import Live
+                    from client.cli.live_tree import LivePlanTree
+                    tree = LivePlanTree(goal)
+                    with Live(tree.render(), console=console, auto_refresh=False,
+                              transient=False) as live:
+                        tree.on_update = lambda: live.update(tree.render(), refresh=True)
+                        result = run_autonomous_live(goal, mission=mission_obj, on_node=tree.handle)
+                else:
+                    result = run_autonomous_live(goal, mission=mission_obj)
             except Exception as e:
                 console.print(f"[bold red]Mission failed: {e}[/bold red]  "
                               "[dim](is Ollama + the executor running?)[/dim]")

@@ -163,6 +163,18 @@ class Contract:
         its KillSwitch with this."""
         return self.fields["safeword"].read(self.contract)
 
+    def deadman_timeout(self) -> Optional[float]:
+        """The UNATTENDED dead-man's timeout (seconds): the longest the run may go without
+        a sign of life before it auto-aborts. None (default) = off — the safeword is the
+        attended stop; this is the unattended backstop. Read from campaign.deadman; the
+        harness arms a DeadMansSwitch with it. A non-positive / unparseable value = off."""
+        v = (self.contract.get("campaign") or {}).get("deadman")
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f > 0 else None
+
     def goal_predicate(self) -> Optional[list]:
         """The campaign's structured ROOT predicate — the checkable twin of the prose
         success_criteria, as {criterion, target} clauses. None for an agent with no
@@ -335,6 +347,7 @@ def gate_action(tool: str, args: Optional[Dict[str, Any]] = None) -> str:
 
 
 def safeword() -> Optional[str]: return ACTIVE.safeword()
+def deadman_timeout() -> Optional[float]: return ACTIVE.deadman_timeout()
 def goal_predicate() -> Optional[list]: return ACTIVE.goal_predicate()
 def _defaults() -> Dict[str, Any]: return ACTIVE._defaults()
 def default_reward() -> float: return ACTIVE.default_reward()

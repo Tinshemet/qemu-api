@@ -57,6 +57,10 @@ class Bundle:
         return os.path.join(self.path, "toolstats.json")
 
     @property
+    def reliability_path(self) -> str:
+        return os.path.join(self.path, "reliability.json")
+
+    @property
     def skin_path(self) -> str:
         return os.path.join(self.path, "skin.json")
 

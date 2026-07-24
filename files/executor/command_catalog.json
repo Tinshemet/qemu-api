@@ -198,7 +198,15 @@
         "group",
         "run on all",
         "act on all",
-        "whole fleet"
+        "whole fleet",
+        "ping",
+        "ping each other",
+        "ping all",
+        "reachable",
+        "reach each other",
+        "connectivity",
+        "mesh",
+        "all connected"
       ],
       "ai_example": "run 'uptime' on all my redteam VMs",
       "category": "Fleet"

@@ -120,7 +120,7 @@
         "theta": 0.0,
         "lambda": 0.5,
         "H": 0.05,
-        "kappa": 0.2,
+        "kappa": 1.0,
         "w_resource": 1.0,
         "w_time": 0.3,
         "time": 1.0,

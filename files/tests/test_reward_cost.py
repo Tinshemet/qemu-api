@@ -41,9 +41,17 @@ def main():
 
     print("leaf cost from risk facts")
     check("reversible cheap leaf", approx(leaf_cost({"commitment": 1.0, "reversible": True}, c), 1.0 + 0.3))
-    check("irreversibility adds a route-bias", approx(leaf_cost({"commitment": 1.0, "reversible": False}, c), 1.0 + 0.3 + 0.2))
-    check("destructiveness is NOT in cost", leaf_cost({"destructiveness": 1.0, "commitment": 0.0, "reversible": True}, c)
+    check("irreversibility is an epistemic cost (κ=1, act-observe-correct forfeited)",
+          approx(leaf_cost({"commitment": 1.0, "reversible": False}, c), 1.0 + 0.3 + 1.0))
+    check("destructiveness is NOT in cost (stays the consent gate)",
+          leaf_cost({"destructiveness": 1.0, "commitment": 0.0, "reversible": True}, c)
           == leaf_cost({"destructiveness": 0.0, "commitment": 0.0, "reversible": True}, c))
+    # The fixed inversion: a destructive IRREVERSIBLE act (delete_vm: commitment 0.3, ¬rev)
+    # must not price BELOW the reversible allocation it undoes (create_vm: commitment 1.0).
+    _delete = leaf_cost({"commitment": 0.3, "reversible": False, "destructiveness": 1.0}, c)
+    _create = leaf_cost({"commitment": 1.0, "reversible": True, "destructiveness": 0.15}, c)
+    check("delete_vm no longer prices cheaper than create_vm", _delete > _create
+          and approx(_delete, 0.3 + 0.3 + 1.0) and approx(_create, 1.0 + 0.3))
 
     print("\npassivity is killed: reward-less skip, rewarded act")
     passive = backup({"kind": "leaf", "cost": 1.0, "p": 0.9, "reward": 0.0}, c)

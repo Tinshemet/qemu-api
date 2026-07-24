@@ -124,6 +124,53 @@ class ContractCommand(Command):
                         os.remove(tmp)                  # never leave decrypted content around
                     except OSError:
                         pass
+        elif sub == "amend" and len(rest) >= 2:
+            # AMEND a signed contract (the controlled re-sign, not a raw edit): re-auth
+            # with the CURRENT safeword, edit the fields, re-review, then re-sign — bumping
+            # the version and appending a tamper-evident amendment-log entry.
+            if not _require_operator_password("amend a contract"):
+                return
+            import subprocess, tempfile, getpass
+            from shared.grgn_sign import read as _read_grgn
+            path = _bundle.resolve_grgn(rest[1], _agent_dir)
+            g, st = _read_grgn(path)
+            if g is None:
+                console.print(f"[bold red]Cannot read {rest[1]} ({st}).[/bold red]")
+            elif not g.get("contract", {}).get("signed"):
+                console.print("[bold red]Not signed — use 'sign', not 'amend'.[/bold red]")
+            else:
+                prior = getpass.getpass("Current safeword (re-auth to amend): ")
+                editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+                # Present only the amendable fields — the signature/version/log are managed.
+                _managed = ("safeword", "signed", "version", "amendments")
+                editable = {k: v for k, v in g["contract"].items() if k not in _managed}
+                fd, tmp = tempfile.mkstemp(suffix=".grgn.json")
+                os.close(fd); os.chmod(tmp, 0o600)
+                try:
+                    with open(tmp, "w") as f:
+                        json.dump(editable, f, indent=2, ensure_ascii=False)
+                    subprocess.call([editor, tmp])
+                    with open(tmp) as f:
+                        try:
+                            changes = json.load(f)
+                        except Exception as e:
+                            console.print(f"[bold red]Invalid JSON — not amended: {e}[/bold red]")
+                            changes = None
+                    if changes is not None:
+                        new_sw = getpass.getpass("New safeword (blank = keep current): ") or prior
+                        try:
+                            _forge.amend(g, changes, new_sw, prior_safeword=prior)
+                            _forge.write_grgn(g, path)
+                            v = g["contract"]["version"]
+                            console.print(f"[green]✔ Amended → v{v}, re-signed and re-encrypted → {path}[/green]")
+                            _audit.record("contract.amend", f"{os.path.basename(path)} v{v}", _op)
+                        except ValueError as e:
+                            console.print(f"[bold red]{e}[/bold red]")
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
         elif sub == "void" and len(rest) >= 2:
             # Voiding an agent revokes its existence — it AND all its missions are
             # disabled (the void cascade). High-impact → operator-gated.
@@ -151,4 +198,4 @@ class ContractCommand(Command):
         else:
             console.print("[yellow]Usage: gorgon contract "
                           "forge [--full] | show [file] | list | sign <file> <safeword> "
-                          "| edit <file> | void <agent> | restore <agent> | audit[/yellow]")
+                          "| edit <file> | amend <file> | void <agent> | restore <agent> | audit[/yellow]")

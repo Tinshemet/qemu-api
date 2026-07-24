@@ -92,6 +92,25 @@ def main():
           store.clear_tool_counts("barenboim") is True and store.load_tool_counts("barenboim") == {})
     check("clearing an empty store is False (nothing to remove)", store.clear_tool_counts("barenboim") is False)
 
+    print("\nreliability store: p_self dials survive restarts (the forward-feed loop)")
+    check("empty reliability store → {}", store.load_reliability("barenboim") == {})
+    store.save_reliability("barenboim",
+                           {"p_self": 0.6, "theta": 0.4, "lambda": 0.9, "D_max": 2,
+                            "tool_counts": {"scan": {"ok": 1, "n": 2}}})
+    rel = store.load_reliability("barenboim")
+    check("dial scalars persist", rel == {"p_self": 0.6, "theta": 0.4, "lambda": 0.9, "D_max": 2})
+    check("tool_counts are NOT stored here (toolstats is their SSOT)", "tool_counts" not in rel)
+    check("dials don't leak into the toolstats store", store.load_tool_counts("barenboim") == {})
+    check("dials are per-agent isolated", store.load_reliability("doorman") == {})
+    check("a dial dict with no dial keys is a no-op (nothing written)",
+          (store.save_reliability("nihil", {"tool_counts": {"x": {"ok": 1, "n": 1}}}),
+           store.load_reliability("nihil"))[1] == {})
+    check("a path-traversal agent name is sanitized",
+          os.path.dirname(os.path.dirname(store.reliability_path("../../etc/passwd"))) == _bundle.AGENTS_ROOT)
+    check("clear wipes the persisted dials",
+          store.clear_reliability("barenboim") is True and store.load_reliability("barenboim") == {})
+    check("clearing an empty dial store is False", store.clear_reliability("barenboim") is False)
+
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)
 

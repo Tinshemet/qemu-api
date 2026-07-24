@@ -21,13 +21,16 @@ class ReliabilityCommand(Command):
         from orchestrator.ai.planner.reward_cost import p_world_estimate as _pwe, cfg_with as _cfgw
         if rest and rest[0] == "reset":                # gorgon reliability reset [agent]
             agent = rest[1] if len(rest) >= 2 else _contract.active_agent_key()
-            ok = _store.clear_tool_counts(agent)
-            ctx.console.print(f"[success]Cleared learned tool reliability for '{agent}'.[/success]" if ok
+            # Reset BOTH learned memories: per-tool p_world AND the p_self dials, so a
+            # stale-after-reset stance can't linger (e.g. after a range change).
+            ok = _store.clear_tool_counts(agent) | _store.clear_reliability(agent)
+            ctx.console.print(f"[success]Cleared learned reliability (p_world + p_self dials) for '{agent}'.[/success]" if ok
                               else f"[dim]No reliability data to clear for '{agent}'.[/dim]")
             return
         agent  = rest[0] if rest else _contract.active_agent_key()
         cfg    = _cfgw(_contract.reward_cost_cfg())
         counts = _store.load_tool_counts(agent)
+        dials  = _store.load_reliability(agent)
         pw     = _pwe(counts, cfg)
         if not counts:
             ctx.console.print(
@@ -52,4 +55,11 @@ class ReliabilityCommand(Command):
             ctx.console.print(
                 f"[dim]Beta-smoothed toward the contract default p_world={cfg['p_world']:.2f} "
                 f"(prior strength k={cfg['p_world_k']:.0f}); tools never run yet use that default.[/dim]")
-        ctx.pp({"agent": agent, "counts": counts, "p_world": pw}, verbose)
+        # The p_self dials — the GLOBAL model-reliability stance carried forward from the
+        # last run (θ/λ/depth budget). Persisted alongside p_world; feeds the NEXT run.
+        if dials:
+            ctx.console.print(
+                f"[dim]p_self stance carried forward: p̂={dials.get('p_self', '?')} · "
+                f"θ={dials.get('theta', '?')} · λ={dials.get('lambda', '?')} · "
+                f"D_max={dials.get('D_max', '?')} (a shakier last run → higher bar, shallower plans).[/dim]")
+        ctx.pp({"agent": agent, "counts": counts, "p_world": pw, "dials": dials}, verbose)

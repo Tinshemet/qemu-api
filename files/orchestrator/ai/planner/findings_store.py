@@ -131,6 +131,61 @@ def clear_tool_counts(agent: Optional[str]) -> bool:
         return False
 
 
+# The p_self reliability dials — the GLOBAL model-reliability control (θ/λ/D_max)
+# derived from a run's success rate. Persisted apart from the per-tool toolstats store
+# (which stays the SSOT for per-tool counts) so the two never mix: this file holds ONLY
+# the dial scalars, so loading it can never double-count tool tallies.
+_DIAL_KEYS = ("p_self", "theta", "lambda", "D_max")
+
+
+def reliability_path(agent: Optional[str]) -> str:
+    """Sibling store to toolstats — the durable p_self dials (θ/λ/D_max), so the p_self
+    forward-feed loop survives restarts the way p_world already does, instead of only
+    chaining via an in-memory `prior=` the live drivers never pass."""
+    return Bundle(_safe(agent)).reliability_path
+
+
+def load_reliability(agent: Optional[str]) -> Dict[str, Any]:
+    """The stored p_self dials `{p_self, theta, lambda, D_max}` for an agent ({} if none /
+    unreadable — never raises). Dial scalars ONLY; per-tool counts live in the separate
+    toolstats store and are never read from here."""
+    try:
+        with open(reliability_path(agent)) as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: data[k] for k in _DIAL_KEYS if k in data}
+
+
+def save_reliability(agent: Optional[str], dials: Dict[str, Any]) -> None:
+    """Atomically persist THIS run's p_self dials so the next run inherits a shakier/steadier
+    stance without hand-fed `prior=`. Stores the dial scalars ONLY — any `tool_counts` on the
+    dict are dropped (the toolstats store is their SSOT). No-op if no dial keys are present."""
+    out = {k: dials[k] for k in _DIAL_KEYS if k in (dials or {})}
+    if not out:
+        return
+    path = reliability_path(agent)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(out, f, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def clear_reliability(agent: Optional[str]) -> bool:
+    """Wipe an agent's persisted p_self dials (paired with clear_tool_counts on a reset, so
+    the forward-fed stance resets too). Returns True if a store existed and was removed."""
+    try:
+        os.remove(reliability_path(agent))
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
 def confirm(agent: Optional[str], fact: str) -> bool:
     """Mark a pending claim TRUE. Returns False if the fact isn't a pending claim."""
     data = load(agent)

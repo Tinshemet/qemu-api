@@ -83,6 +83,33 @@ def main():
     print("\ncontract arms it")
     from orchestrator.ai.agent import contract as C
     check("contract.safeword() exposes the campaign safeword (None for the Doorman)", C.safeword() is None)
+    check("contract.deadman_timeout() is off by default (None for the Doorman)", C.deadman_timeout() is None)
+
+    print("\ndead-man's switch: unattended silence trips it")
+    import time
+    from orchestrator.ai.planner.killswitch import DeadMansSwitch
+    ks = KillSwitch()
+    dm = DeadMansSwitch(ks, timeout=0.08).start()
+    check("not tripped immediately", ks.tripped is False)
+    time.sleep(0.20)                                   # no check-in for > timeout
+    check("trips on silence with reason 'deadman'", ks.tripped is True and ks.reason == "deadman")
+    dm.stop()
+
+    print("\ncheck-ins keep it alive; stop() disarms")
+    ks = KillSwitch()
+    dm = DeadMansSwitch(ks, timeout=0.12).start()
+    for _ in range(4):                                 # keep checking in inside the window
+        time.sleep(0.05)
+        ks.checkin()                                   # the harness signals a sign of life
+    check("still alive while checking in", ks.tripped is False)
+    dm.stop()
+    time.sleep(0.20)                                   # past the timeout, but disarmed
+    check("stop() prevents a later fire", ks.tripped is False)
+
+    print("\ncheckin() on a bare kill-switch is a harmless no-op")
+    ks = KillSwitch()
+    ks.checkin()                                        # nothing observing → no error, no trip
+    check("no observer → no-op", ks.tripped is False)
 
     print(f"\n{_PASS}/{_PASS + _FAIL} passed")
     sys.exit(1 if _FAIL else 0)

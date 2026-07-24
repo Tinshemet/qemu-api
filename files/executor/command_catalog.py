@@ -94,11 +94,24 @@ def tool_trigger_words() -> Dict[str, list]:
     return out
 
 
-# Per-tool intent-detection triggers (context-assistant scan_tool_hints). Authored
-# in command_catalog.json so trigger words live with the rest of the tool data (one
-# source). Gapped ('~') triggers match words in order with a small gap (see
-# _trigger_in), e.g. 'put~on~network' for "put PROBE on the new network".
-TOOL_TRIGGERS: Dict[str, List[str]] = _DATA["tool_triggers"]
+# Per-tool intent-detection triggers (context-assistant scan_tool_hints). Two sources,
+# MERGED so a tool is tagged if EITHER knows it: the curated static list in
+# command_catalog.json (hand-authored richness — 'spin up', 'provision', …) UNION the
+# words DERIVED from each command's `related` aliases (tool_trigger_words). The static
+# map had silently DRIFTED — add_label / delete_vm / the fleet-ping vocabulary lost
+# their triggers — so a static-only source left whole tools un-hintable. Deriving from
+# the command catalog closes that: adding a command alias now auto-tags its tools.
+# Gapped ('~') triggers match words in order with a small gap (see _trigger_in).
+_static_triggers:  Dict[str, List[str]] = _DATA["tool_triggers"]
+_derived_triggers: Dict[str, List[str]] = tool_trigger_words()
+TOOL_TRIGGERS: Dict[str, List[str]] = {}
+for _t in set(_static_triggers) | set(_derived_triggers):
+    _merged = list(_static_triggers.get(_t) or [])
+    for _w in (_derived_triggers.get(_t) or []):
+        if _w not in _merged:
+            _merged.append(_w)          # static first (richness), derived fills gaps
+    if _merged:
+        TOOL_TRIGGERS[_t] = _merged
 _bad_trig = [t for t in TOOL_TRIGGERS if t not in TOOL_SPECS]
 assert not _bad_trig, f"TOOL_TRIGGERS references non-registry tools: {_bad_trig}"
 

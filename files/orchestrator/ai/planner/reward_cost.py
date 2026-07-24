@@ -19,8 +19,10 @@ Key invariants the math enforces:
   so "solve branches beats spawn leaves" is a theorem, not a rule, and reward-hacking a
   tool for points is impossible.
 - Destructiveness is NOT in this scalar (that would make the tree passive / afraid to do
-  necessary irreversible work) — it is the CONSENT gate (step 3). Only a small
-  reversibility route-bias κ lives in cost.
+  necessary irreversible work) — it is the CONSENT gate (step 3). What DOES live in cost
+  is irreversibility, priced by κ as an EPISTEMIC cost: a permanent act forfeits the free
+  act-observe-correct oracle, so it's costed at ≈ one entity-unit — enough that a
+  destructive irreversible act never prices below the reversible allocation it undoes.
 - Value BACKUP fixes the horizon effect: a locally-costly leaf under a high-reward parent
   has positive BACKED-UP CE, so it isn't greedily pruned.
 
@@ -60,8 +62,16 @@ def cfg_with(overrides: Optional[Dict[str, float]]) -> Dict[str, float]:
 
 def leaf_cost(risk: Optional[Dict[str, Any]], cfg: Dict[str, float]) -> float:
     """cost(ℓ) = w_r·resource + w_t·time + κ·¬rev. From the tool's risk facts
-    (resource ≈ commitment; reversibility = a small route-bias). Destructiveness is
-    deliberately NOT here — it's the consent gate, not a cost."""
+    (resource ≈ commitment; ¬reversible = an EPISTEMIC cost). Destructiveness is
+    deliberately NOT here — it's the consent gate, not a cost.
+
+    κ prices IRREVERSIBILITY as the loss of the free act-observe-correct oracle: a
+    permanent act can't be re-planned away, so it's costed at ≈ one entity-unit (κ≈w_r),
+    NOT a token route-bias. This is what keeps a destructive irreversible act (delete_vm:
+    commitment 0.3, ¬rev) from pricing CHEAPER than the reversible allocation it undoes
+    (create_vm: commitment 1.0) — the old inversion. It stays consistent with the consent
+    split: the MORAL weight of destruction gates via the risk tier; the DECISION-THEORETIC
+    weight of permanence (you forfeit course-correction) is a real cost here."""
     r = risk or {}
     resource = float(r.get("commitment", 0.0))
     irr = 0.0 if r.get("reversible", True) else 1.0
